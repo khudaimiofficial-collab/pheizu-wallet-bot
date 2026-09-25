@@ -35,6 +35,23 @@
     }
     .balance-title { font-size: 12px; color: var(--muted); text-transform: uppercase; }
     .balance-amount { font-size: 34px; font-weight: bold; color: var(--button); margin: 6px 0; }
+    .address-badge {
+      background: #090d16;
+      border: 1px solid var(--border);
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 10px;
+    }
+    .address-text {
+      color: var(--button);
+      font-family: monospace;
+      font-weight: bold;
+      word-break: break-all;
+    }
     .tabs {
       display: flex;
       background: var(--card);
@@ -98,8 +115,6 @@
       color: var(--muted);
     }
     .hidden { display: none !important; }
-
-    /* Success Popup Modal */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -124,22 +139,30 @@
 </head>
 <body>
 
-  <!-- Personal Balance Card -->
   <div class="card">
     <div class="balance-title">⚡ Available Balance</div>
     <div id="balanceDisplay" class="balance-amount">0 sats</div>
-    <button onclick="loadBalance()" style="background:transparent; border:none; color:var(--muted); font-size:12px; cursor:pointer;">
+    
+    <div class="address-badge">
+      <div>
+        <span style="font-size:10px; color:var(--muted); display:block;">YOUR LIGHTNING ADDRESS:</span>
+        <span id="userLnAddress" class="address-text">loading...</span>
+      </div>
+      <button onclick="copyAddress()" style="background:var(--border); border:none; color:var(--text); padding:6px 10px; border-radius:6px; font-size:11px; cursor:pointer;">
+        Copy
+      </button>
+    </div>
+
+    <button onclick="loadBalance()" style="background:transparent; border:none; color:var(--muted); font-size:12px; cursor:pointer; margin-top:10px;">
       🔄 Sync Balance
     </button>
   </div>
 
-  <!-- Tabs -->
   <div class="tabs">
     <button id="tabReceive" class="tab-btn active" onclick="switchTab('receive')">Receive</button>
     <button id="tabSend" class="tab-btn" onclick="switchTab('send')">Send</button>
   </div>
 
-  <!-- RECEIVE PANEL -->
   <div id="receivePanel" class="card">
     <label style="font-size:12px; color:var(--muted);">Amount in Satoshis (sats):</label>
     <input type="number" id="receiveAmount" placeholder="e.g. 100" value="10" />
@@ -147,23 +170,21 @@
 
     <div id="qrResult" class="qr-box hidden">
       <div id="qrcode"></div>
-      <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment (Auto-verifying)...</p>
+      <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment...</p>
       <div id="invoiceString" class="invoice-text"></div>
       <button class="btn-action" style="margin-top:10px; font-size:12px; padding:8px;" onclick="copyInvoice()">Copy Invoice</button>
     </div>
   </div>
 
-  <!-- SEND PANEL -->
   <div id="sendPanel" class="card hidden">
     <label style="font-size:12px; color:var(--muted);">Destination (Address or Invoice):</label>
-    <input type="text" id="sendDest" placeholder="user@speed.app or lnbc..." />
+    <input type="text" id="sendDest" placeholder="name@speed.app, or lnbc..." />
     <label style="font-size:12px; color:var(--muted);">Amount (sats):</label>
     <input type="number" id="sendAmount" placeholder="e.g. 5" />
     <button id="btnSend" class="btn-action" onclick="sendSats()">Send From Balance</button>
     <div id="sendFeedback" style="font-size:12px; margin-top:10px; text-align:center;"></div>
   </div>
 
-  <!-- POPUP MODAL (Triggers once per payment) -->
   <div id="successModal" class="modal-overlay hidden">
     <div class="modal-card">
       <div style="font-size:42px; margin-bottom:10px;">🎉</div>
@@ -175,9 +196,17 @@
   </div>
 
 <script>
+  const DOMAIN = "pheizu-wallet-bot.vercel.app";
   const tg = window.Telegram?.WebApp;
-  const currentUserId = String(tg?.initDataUnsafe?.user?.id || localStorage.getItem("saved_uid") || "user_guest");
-  localStorage.setItem("saved_uid", currentUserId);
+  
+  const tgUser = tg?.initDataUnsafe?.user;
+  const username = tgUser?.username || (tgUser?.id ? `user${tgUser.id}` : localStorage.getItem("saved_user") || "guest");
+  localStorage.setItem("saved_user", username);
+
+  const currentUserId = String(tgUser?.id || username);
+  const myLightningAddress = `${username.toLowerCase()}@${DOMAIN}`;
+
+  document.getElementById("userLnAddress").innerText = myLightningAddress;
 
   let activeCheckTimer = null;
 
@@ -196,15 +225,13 @@
   async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
-    
-    const cached = localStorage.getItem(`bal_${currentUserId}`);
-    if (cached) el.innerText = `${Number(cached).toLocaleString()} sats`;
+    const cachedBal = localStorage.getItem(`bal_${currentUserId}`);
+    if (cachedBal) el.innerText = `${Number(cachedBal).toLocaleString()} sats`;
 
     try {
       const res = await fetch(`/api/wallet?action=balance&user_id=${currentUserId}`);
       const data = await res.json();
-      const finalBal = Number(data.balance || 0);
-
+      const finalBal = Number(data.balance || cachedBal || 0);
       el.innerText = `${finalBal.toLocaleString()} sats`;
       localStorage.setItem(`bal_${currentUserId}`, finalBal);
     } catch (e) {}
@@ -251,7 +278,6 @@
       document.getElementById("qrResult").classList.remove("hidden");
       document.getElementById("listenNotice").innerText = "⏳ Waiting for payment (Auto-verifying)...";
 
-      // Automatically listen and verify
       startAutoVerification(payment.id, Number(amount));
     } catch(err) {
       alert("Error: " + err.message);
@@ -261,12 +287,11 @@
     }
   }
 
-  // Automatic Verification Polling
   function startAutoVerification(paymentId, amount) {
     let attempts = 0;
     activeCheckTimer = setInterval(async () => {
       attempts++;
-      if (attempts > 80) return clearInterval(activeCheckTimer); // 4 mins timeout
+      if (attempts > 80) return clearInterval(activeCheckTimer);
 
       try {
         const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${currentUserId}`);
@@ -276,7 +301,6 @@
           clearInterval(activeCheckTimer);
           document.getElementById("listenNotice").innerText = "✅ Paid!";
 
-          // Trigger popup ONLY if newly credited
           if (data.credited_now || !localStorage.getItem(`seen_${paymentId}`)) {
             localStorage.setItem(`seen_${paymentId}`, "1");
             localStorage.setItem(`bal_${currentUserId}`, data.balance);
@@ -291,7 +315,6 @@
 
   function triggerSuccessPopup(amount, newBalance) {
     hapticNotification("success");
-
     if (tg && tg.showPopup) {
       tg.showPopup({
         title: "⚡ Payment Received!",
@@ -370,6 +393,12 @@
     navigator.clipboard.writeText(document.getElementById("invoiceString").innerText);
     haptic("light");
     alert("Invoice copied!");
+  }
+
+  function copyAddress() {
+    navigator.clipboard.writeText(myLightningAddress);
+    haptic("light");
+    alert("Lightning Address copied!\n" + myLightningAddress);
   }
 
   loadBalance();
