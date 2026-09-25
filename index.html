@@ -157,7 +157,7 @@
     </div>
 
     <button onclick="loadBalance()" style="background:transparent; border:none; color:var(--muted); font-size:12px; cursor:pointer; margin-top:10px;">
-      🔄 Sync Balance
+      🔄 Refresh Balance
     </button>
   </div>
 
@@ -217,6 +217,7 @@
 
   let activeCheckTimer = null;
   let currentActiveInvoice = "";
+  let currentExpectedAmount = 0;
 
   if (tg) {
     tg.ready();
@@ -230,28 +231,18 @@
     try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
   }
 
-  // Load Balance
-  async function loadBalance() {
+  // Load Balance directly from phone storage (never resets to 0)
+  function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
-    const cachedBal = localStorage.getItem(`bal_${currentUserId}`);
-    if (cachedBal) el.innerText = `${Number(cachedBal).toLocaleString()} sats`;
-
-    try {
-      const res = await fetch(`/api/wallet?action=balance&user_id=${currentUserId}`);
-      const data = await res.json();
-      if (data.success) {
-        const finalBal = Number(data.balance || cachedBal || 0);
-        el.innerText = `${finalBal.toLocaleString()} sats`;
-        localStorage.setItem(`bal_${currentUserId}`, finalBal);
-      }
-    } catch (e) {}
+    const myBalance = Number(localStorage.getItem(`user_sats_${currentUserId}`) || 0);
+    el.innerText = `${myBalance.toLocaleString()} sats`;
   }
 
-  // Generate Invoice (Guaranteed to NEVER be undefined)
+  // Generate Invoice
   async function createReceiveInvoice() {
     haptic("medium");
-    const amount = document.getElementById("receiveAmount").value;
+    const amount = Number(document.getElementById("receiveAmount").value);
     const btn = document.getElementById("btnReceive");
     if (!amount || amount <= 0) return alert("Enter amount");
 
@@ -268,12 +259,12 @@
       const data = await res.json();
 
       if (!data.success || !data.invoice) {
-        throw new Error(data.error || "Speed did not return an invoice. Check your API key.");
+        throw new Error(data.error || "Speed did not return an invoice.");
       }
 
       currentActiveInvoice = data.invoice;
+      currentExpectedAmount = amount;
 
-      // Draw QR code with valid lightning string
       const qrTarget = currentActiveInvoice.toLowerCase().startsWith("lightning:") 
         ? currentActiveInvoice 
         : `lightning:${currentActiveInvoice}`;
@@ -286,8 +277,8 @@
       document.getElementById("qrResult").classList.remove("hidden");
       document.getElementById("listenNotice").innerText = "⏳ Waiting for payment...";
 
-      // Auto-listen
-      startAutoVerification(data.id, Number(amount));
+      // Start Auto-verification
+      startAutoVerification(data.id, currentExpectedAmount);
     } catch(err) {
       alert("Error: " + err.message);
     } finally {
@@ -296,6 +287,7 @@
     }
   }
 
+  // Auto-verify and directly update the balance on your phone
   function startAutoVerification(paymentId, amount) {
     let attempts = 0;
     activeCheckTimer = setInterval(async () => {
@@ -310,12 +302,20 @@
           clearInterval(activeCheckTimer);
           document.getElementById("listenNotice").innerText = "✅ Paid!";
 
-          if (data.credited_now || !localStorage.getItem(`seen_${paymentId}`)) {
-            localStorage.setItem(`seen_${paymentId}`, "1");
-            localStorage.setItem(`bal_${currentUserId}`, data.balance);
-            triggerSuccessPopup(amount, data.balance);
-          } else {
-            loadBalance();
+          // Add to personal balance if not already added
+          const alreadyClaimed = localStorage.getItem(`claimed_${paymentId}`);
+          if (!alreadyClaimed) {
+            localStorage.setItem(`claimed_${paymentId}`, "1");
+
+            // DIRECT ACCUMULATION: adds the sats to your balance
+            const paidSats = Number(data.amount || amount);
+            let currentBalance = Number(localStorage.getItem(`user_sats_${currentUserId}`) || 0);
+            currentBalance += paidSats;
+            localStorage.setItem(`user_sats_${currentUserId}`, currentBalance);
+
+            // Update Screen & Show Success Popup
+            document.getElementById("balanceDisplay").innerText = `${currentBalance.toLocaleString()} sats`;
+            triggerSuccessPopup(paidSats, currentBalance);
           }
         }
       } catch (e) {}
@@ -327,7 +327,7 @@
     if (tg && tg.showPopup) {
       tg.showPopup({
         title: "⚡ Payment Received!",
-        message: `+${amount} sats added to your balance!\nNew Balance: ${newBalance} sats`,
+        message: `+${amount} sats have been added to your balance!\nNew Balance: ${newBalance} sats`,
         buttons: [{ type: "ok", text: "Awesome!" }]
       });
     }
@@ -335,8 +335,6 @@
     document.getElementById("modalAmountText").innerText = `+${amount} Satoshis Added!`;
     document.getElementById("modalBalanceText").innerText = `Your New Balance: ${newBalance} sats`;
     document.getElementById("successModal").classList.remove("hidden");
-
-    loadBalance();
   }
 
   function closeSuccessModal() {
@@ -344,7 +342,7 @@
     document.getElementById("qrResult").classList.add("hidden");
   }
 
-  // Send Sats
+  // Send Sats (Directly deducts from your phone's balance)
   async function sendSats() {
     haptic("medium");
     const destination = document.getElementById("sendDest").value.trim();
@@ -352,9 +350,9 @@
     const feedback = document.getElementById("sendFeedback");
     const btn = document.getElementById("btnSend");
 
-    const currentBal = Number(localStorage.getItem(`bal_${currentUserId}`) || 0);
+    let myBalance = Number(localStorage.getItem(`user_sats_${currentUserId}`) || 0);
     if (!destination || !amount) return alert("Fill in destination and amount");
-    if (currentBal < amount) return alert(`Insufficient balance! You have ${currentBal} sats.`);
+    if (myBalance < amount) return alert(`Insufficient balance! You have ${myBalance} sats.`);
 
     btn.disabled = true;
     btn.innerText = "Sending...";
@@ -370,11 +368,14 @@
       if (!data.success) throw new Error(data.error);
 
       hapticNotification("success");
-      localStorage.setItem(`bal_${currentUserId}`, data.balance);
+
+      // Deduct from balance
+      myBalance -= amount;
+      localStorage.setItem(`user_sats_${currentUserId}`, myBalance);
+      document.getElementById("balanceDisplay").innerText = `${myBalance.toLocaleString()} sats`;
 
       feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully!</span>`;
       document.getElementById("sendDest").value = "";
-      loadBalance();
     } catch (err) {
       hapticNotification("error");
       feedback.innerHTML = `<span style="color:#ef4444">Failed: ${err.message}</span>`;
