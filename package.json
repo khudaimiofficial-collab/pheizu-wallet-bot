@@ -4,6 +4,6 @@
   "main": "api/bot.js",
   "dependencies": {
     "telegraf": "^4.16.3",
-    "@upstash/redis": "^1.28.4"
+    "firebase-admin": "^12.0.0"
   }
 }
