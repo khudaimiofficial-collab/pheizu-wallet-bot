@@ -34,7 +34,7 @@
       border: 1px solid var(--border);
     }
     .balance-title { font-size: 12px; color: var(--muted); text-transform: uppercase; }
-    .balance-amount { font-size: 32px; font-weight: bold; color: var(--button); margin: 6px 0; }
+    .balance-amount { font-size: 34px; font-weight: bold; color: var(--button); margin: 6px 0; }
     .tabs {
       display: flex;
       background: var(--card);
@@ -99,7 +99,7 @@
     }
     .hidden { display: none !important; }
 
-    /* Modal Overlay */
+    /* Success Popup Modal */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -124,9 +124,9 @@
 </head>
 <body>
 
-  <!-- Balance Card -->
+  <!-- Personal Balance Card -->
   <div class="card">
-    <div class="balance-title">⚡ Your Personal Balance</div>
+    <div class="balance-title">⚡ Available Balance</div>
     <div id="balanceDisplay" class="balance-amount">0 sats</div>
     <button onclick="loadBalance()" style="background:transparent; border:none; color:var(--muted); font-size:12px; cursor:pointer;">
       🔄 Sync Balance
@@ -147,10 +147,9 @@
 
     <div id="qrResult" class="qr-box hidden">
       <div id="qrcode"></div>
-      <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment...</p>
+      <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment (Auto-verifying)...</p>
       <div id="invoiceString" class="invoice-text"></div>
       <button class="btn-action" style="margin-top:10px; font-size:12px; padding:8px;" onclick="copyInvoice()">Copy Invoice</button>
-      <button class="btn-action" style="margin-top:6px; font-size:12px; padding:8px; background:#1e293b; color:white;" onclick="checkPaymentManual()">Check Payment Now</button>
     </div>
   </div>
 
@@ -164,7 +163,7 @@
     <div id="sendFeedback" style="font-size:12px; margin-top:10px; text-align:center;"></div>
   </div>
 
-  <!-- POPUP MODAL -->
+  <!-- POPUP MODAL (Triggers once per payment) -->
   <div id="successModal" class="modal-overlay hidden">
     <div class="modal-card">
       <div style="font-size:42px; margin-bottom:10px;">🎉</div>
@@ -181,8 +180,6 @@
   localStorage.setItem("saved_uid", currentUserId);
 
   let activeCheckTimer = null;
-  let currentActivePaymentId = null;
-  let currentExpectedAmount = 0;
 
   if (tg) {
     tg.ready();
@@ -196,26 +193,23 @@
     try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
   }
 
-  // Load Balance from Server and Local Storage Cache
   async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
     
-    // Read from cache first so it never flickers to 0
-    const cachedBal = localStorage.getItem(`bal_${currentUserId}`);
-    if (cachedBal) el.innerText = `${Number(cachedBal).toLocaleString()} sats`;
+    const cached = localStorage.getItem(`bal_${currentUserId}`);
+    if (cached) el.innerText = `${Number(cached).toLocaleString()} sats`;
 
     try {
       const res = await fetch(`/api/wallet?action=balance&user_id=${currentUserId}`);
       const data = await res.json();
-      const finalBal = Math.max(Number(data.balance || 0), Number(cachedBal || 0));
-      
+      const finalBal = Number(data.balance || 0);
+
       el.innerText = `${finalBal.toLocaleString()} sats`;
       localStorage.setItem(`bal_${currentUserId}`, finalBal);
     } catch (e) {}
   }
 
-  // Generate Invoice
   async function createReceiveInvoice() {
     haptic("medium");
     const amount = document.getElementById("receiveAmount").value;
@@ -234,9 +228,6 @@
       });
       const payment = await res.json();
       if (payment.error) throw new Error(payment.error);
-
-      currentActivePaymentId = payment.id;
-      currentExpectedAmount = Number(amount);
 
       let invoice = "";
       function scan(o) {
@@ -258,9 +249,10 @@
 
       document.getElementById("invoiceString").innerText = invoice || payment.id;
       document.getElementById("qrResult").classList.remove("hidden");
-      document.getElementById("listenNotice").innerText = "⏳ Waiting for payment...";
+      document.getElementById("listenNotice").innerText = "⏳ Waiting for payment (Auto-verifying)...";
 
-      startListeningPayment(payment.id, currentExpectedAmount);
+      // Automatically listen and verify
+      startAutoVerification(payment.id, Number(amount));
     } catch(err) {
       alert("Error: " + err.message);
     } finally {
@@ -269,49 +261,41 @@
     }
   }
 
-  // Polling for confirmation
-  function startListeningPayment(paymentId, amount) {
+  // Automatic Verification Polling
+  function startAutoVerification(paymentId, amount) {
     let attempts = 0;
     activeCheckTimer = setInterval(async () => {
       attempts++;
-      if (attempts > 80) return clearInterval(activeCheckTimer);
-      await checkPaymentStatus(paymentId, amount);
-    }, 3000);
+      if (attempts > 80) return clearInterval(activeCheckTimer); // 4 mins timeout
+
+      try {
+        const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${currentUserId}`);
+        const data = await res.json();
+
+        if (data.is_paid) {
+          clearInterval(activeCheckTimer);
+          document.getElementById("listenNotice").innerText = "✅ Paid!";
+
+          // Trigger popup ONLY if newly credited
+          if (data.credited_now || !localStorage.getItem(`seen_${paymentId}`)) {
+            localStorage.setItem(`seen_${paymentId}`, "1");
+            localStorage.setItem(`bal_${currentUserId}`, data.balance);
+            triggerSuccessPopup(amount, data.balance);
+          } else {
+            loadBalance();
+          }
+        }
+      } catch (e) {}
+    }, 2500);
   }
 
-  async function checkPaymentManual() {
-    if (!currentActivePaymentId) return alert("No active payment");
-    haptic("light");
-    document.getElementById("listenNotice").innerText = "Checking Speed servers...";
-    await checkPaymentStatus(currentActivePaymentId, currentExpectedAmount);
-  }
-
-  async function checkPaymentStatus(paymentId, amount) {
-    try {
-      const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${currentUserId}`);
-      const data = await res.json();
-
-      if (data.is_paid) {
-        if (activeCheckTimer) clearInterval(activeCheckTimer);
-        document.getElementById("listenNotice").innerText = "✅ Paid!";
-        
-        // Save to persistent storage
-        const newBalance = Number(data.new_balance || (Number(localStorage.getItem(`bal_${currentUserId}`) || 0) + amount));
-        localStorage.setItem(`bal_${currentUserId}`, newBalance);
-
-        triggerSuccessPopup(amount, newBalance);
-      }
-    } catch (e) {}
-  }
-
-  // Trigger Success Popup
   function triggerSuccessPopup(amount, newBalance) {
     hapticNotification("success");
 
     if (tg && tg.showPopup) {
       tg.showPopup({
         title: "⚡ Payment Received!",
-        message: `+${amount} sats have been added to your balance!\nNew Balance: ${newBalance} sats`,
+        message: `+${amount} sats added to your balance!\nNew Balance: ${newBalance} sats`,
         buttons: [{ type: "ok", text: "Awesome!" }]
       });
     }
@@ -328,7 +312,6 @@
     document.getElementById("qrResult").classList.add("hidden");
   }
 
-  // Send Sats
   async function sendSats() {
     haptic("medium");
     const destination = document.getElementById("sendDest").value.trim();
@@ -354,8 +337,7 @@
       if (data.error) throw new Error(data.error);
 
       hapticNotification("success");
-      const updated = currentBal - amount;
-      localStorage.setItem(`bal_${currentUserId}`, updated);
+      localStorage.setItem(`bal_${currentUserId}`, data.balance);
 
       feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully!</span>`;
       document.getElementById("sendDest").value = "";
