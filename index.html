@@ -64,6 +64,7 @@
       border-radius: 8px;
       margin: 8px 0 14px;
       font-size: 14px;
+      font-family: monospace;
     }
     .btn-action {
       width: 100%;
@@ -110,13 +111,15 @@
     </button>
   </div>
 
-  <!-- Tabs -->
+  <!-- Navigation Tabs -->
   <div class="tabs">
-    <button id="tabReceive" class="tab-btn active" onclick="switchTab('receive')">Receive Sats</button>
-    <button id="tabSend" class="tab-btn" onclick="switchTab('send')">Send Sats</button>
+    <button id="tabReceive" class="tab-btn active" onclick="switchTab('receive')">Receive</button>
+    <button id="tabSend" class="tab-btn" onclick="switchTab('send')">Send</button>
+    <!-- Admin Tab: Shown ONLY for ID 8960497898 -->
+    <button id="tabAdmin" class="tab-btn hidden" onclick="switchTab('admin')" style="color:#f59e0b;">👑 Admin</button>
   </div>
 
-  <!-- Receive Panel -->
+  <!-- RECEIVE PANEL -->
   <div id="receivePanel" class="card">
     <label style="font-size:12px; color:var(--muted);">Amount in Satoshis (sats):</label>
     <input type="number" id="receiveAmount" placeholder="e.g. 100" value="100" />
@@ -129,7 +132,7 @@
     </div>
   </div>
 
-  <!-- Send Panel -->
+  <!-- SEND PANEL -->
   <div id="sendPanel" class="card hidden">
     <label style="font-size:12px; color:var(--muted);">Destination (Address or Invoice):</label>
     <input type="text" id="sendDest" placeholder="user@speed.app or lnbc..." />
@@ -139,11 +142,31 @@
     <div id="sendFeedback" style="font-size:12px; margin-top:10px; text-align:center;"></div>
   </div>
 
+  <!-- ADMIN PANEL (EXCLUSIVE TO 8960497898) -->
+  <div id="adminPanel" class="card hidden">
+    <h3 style="color:#f59e0b; font-size:14px; margin-bottom:8px;">👑 Admin Configuration</h3>
+    <p style="font-size:11px; color:var(--muted); margin-bottom:10px;">Authenticated Admin ID: 8960497898</p>
+    
+    <label style="font-size:12px; color:var(--muted);">Speed Secret Key (Visible):</label>
+    <input type="text" id="adminSecretKeyInput" placeholder="sk_live_... or sk_test_..." />
+    
+    <button class="btn-action" style="background:#f59e0b; color:black;" onclick="saveAdminKey()">Save & Activate Key</button>
+    <div id="adminFeedback" style="font-size:12px; margin-top:10px; word-break:break-all;"></div>
+  </div>
+
 <script>
+  const ADMIN_ID = 8960497898;
   const tg = window.Telegram?.WebApp;
+  const currentUserId = tg?.initDataUnsafe?.user?.id;
+
   if (tg) {
     tg.ready();
     tg.expand();
+  }
+
+  // Show Admin Tab ONLY if user is 8960497898
+  if (currentUserId === ADMIN_ID) {
+    document.getElementById("tabAdmin").classList.remove("hidden");
   }
 
   function haptic(type = "light") {
@@ -180,6 +203,8 @@
         body: JSON.stringify({ amount })
       });
       const payment = await res.json();
+      if (payment.error) throw new Error(payment.error);
+
       const invoice = payment.payment_method_details?.lightning?.payment_request || payment.payment_request || payment.url;
 
       const qrDiv = document.getElementById("qrcode");
@@ -217,7 +242,6 @@
         body: JSON.stringify({ destination, amount })
       });
       const data = await res.json();
-
       if (data.error) throw new Error(data.error);
 
       feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully!</span>`;
@@ -232,20 +256,40 @@
     }
   }
 
-  function switchTab(t) {
-    haptic("light");
-    if (t === 'receive') {
-      document.getElementById("tabReceive").classList.add("active");
-      document.getElementById("tabSend").classList.remove("active");
-      document.getElementById("receivePanel").classList.remove("hidden");
-      document.getElementById("sendPanel").classList.add("hidden");
-    } else {
-      document.getElementById("tabSend").classList.add("active");
-      document.getElementById("tabReceive").classList.remove("active");
-      document.getElementById("sendPanel").classList.remove("hidden");
-      document.getElementById("receivePanel").classList.add("hidden");
+  async function saveAdminKey() {
+    const key = document.getElementById("adminSecretKeyInput").value.trim();
+    const feedback = document.getElementById("adminFeedback");
+    if (!key) return alert("Enter key");
+
+    feedback.innerText = "Verifying with Speed...";
+
+    try {
+      const res = await fetch("/api/wallet?action=admin-set-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ admin_id: currentUserId, new_key: key })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      feedback.innerHTML = "<span style='color:#00d084'>✓ Key verified & activated!</span>";
+      loadBalance();
+    } catch (e) {
+      feedback.innerHTML = `<span style='color:#ef4444'>Error: ${e.message}</span>`;
     }
   }
+
+  function switchTab(t) {
+    haptic("light");
+    ["receive", "send", "admin"].forEach(id => {
+      document.getElementById("tab" + capitalize(id)).classList.remove("active");
+      document.getElementById(id + "Panel").classList.add("hidden");
+    });
+    document.getElementById("tab" + capitalize(t)).classList.add("active");
+    document.getElementById(t + "Panel").classList.remove("hidden");
+  }
+
+  function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
   function copyInvoice() {
     navigator.clipboard.writeText(document.getElementById("invoiceString").innerText);
