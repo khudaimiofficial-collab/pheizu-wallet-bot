@@ -9,6 +9,20 @@ const store = global._pheizuStore = global._pheizuStore || {
   creditedPayments: {}
 };
 
+async function getUserBalance(userId) {
+  const key = `user_bal_${userId}`;
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (redisUrl && redisToken) {
+    try {
+      const res = await fetch(`${redisUrl}/get/${key}`, { headers: { Authorization: `Bearer ${redisToken}` } });
+      const d = await res.json();
+      return Number(d.result || 0);
+    } catch (e) {}
+  }
+  return Number(store.balances[userId] || 0);
+}
+
 async function adjustUserBalance(userId, delta) {
   const key = `user_bal_${userId}`;
   const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
@@ -51,40 +65,55 @@ async function markPaymentCredited(paymentId) {
 }
 
 module.exports = async (req, res) => {
-  if (req.method !== "POST") return res.status(200).send("Webhook active");
+  if (req.method !== "POST") return res.status(200).send("Webhook endpoint is active!");
 
   try {
     let body = req.body;
     if (typeof body === "string") body = JSON.parse(body);
 
-    const event = body?.event;
-    const payment = body?.data;
+    console.log("INCOMING SPEED WEBHOOK:", JSON.stringify(body));
 
-    // Check for successful payment
-    if (event === "payment.succeeded" || payment?.status === "paid" || payment?.status === "succeeded") {
+    // Support both Speed/Stripe formats (body.type or body.event)
+    const eventType = String(body?.type || body?.event || "").toLowerCase();
+    
+    // Support data.object or data
+    const payment = body?.data?.object || body?.data || body;
+    const paymentStatus = String(payment?.status || "").toLowerCase();
+
+    const isPaid = 
+      eventType.includes("payment.succeeded") ||
+      eventType.includes("paid") ||
+      paymentStatus === "paid" ||
+      paymentStatus === "succeeded";
+
+    if (isPaid) {
       const paymentId = payment.id;
       const amount = Number(payment.amount || 0);
       const metadata = payment.metadata || {};
 
-      // Determine recipient chat ID
+      // Identify the Telegram user
       let targetChatId = metadata.telegram_user_id || ADMIN_ID;
-      const type = metadata.type === "lightning_address" ? "Lightning Address" : "Lightning Invoice";
+      const type = metadata.type === "lightning_address" ? "Lightning Address" : "Invoice";
 
-      const alreadyDone = await isPaymentCredited(paymentId);
-      if (!alreadyDone) {
+      const alreadyCredited = await isPaymentCredited(paymentId);
+      if (!alreadyCredited) {
         await markPaymentCredited(paymentId);
         const newBal = await adjustUserBalance(targetChatId, amount);
 
-        // Send Success Message in Telegram Chat
+        // Send instant notification to Telegram Chat
         if (bot && targetChatId) {
-          await bot.telegram.sendMessage(
-            targetChatId,
-            `🎉 *Payment Received!*\n\n` +
-            `⚡ *+${amount.toLocaleString()} sats* credited to your balance.\n` +
-            `📬 *Method:* ${type}\n` +
-            `💰 *Your New Balance:* *${newBal.toLocaleString()} sats*`,
-            { parse_mode: "Markdown" }
-          );
+          try {
+            await bot.telegram.sendMessage(
+              targetChatId,
+              `🎉 <b>Payment Received!</b>\n\n` +
+              `⚡ <b>+${amount.toLocaleString()} sats</b> credited to your balance.\n` +
+              `📬 <b>Method:</b> ${type}\n` +
+              `💰 <b>Your New Balance:</b> <b>${newBal.toLocaleString()} sats</b>`,
+              { parse_mode: "HTML" }
+            );
+          } catch (tgErr) {
+            console.error("Failed to send Telegram message:", tgErr.message);
+          }
         }
       }
     }
