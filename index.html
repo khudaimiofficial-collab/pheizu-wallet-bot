@@ -45,6 +45,7 @@
       justify-content: space-between;
       align-items: center;
       margin-top: 10px;
+      gap: 8px;
     }
     .address-text {
       color: var(--button);
@@ -206,7 +207,7 @@
     </div>
 
     <label style="font-size:12px; color:var(--muted);">Destination (Address or Invoice):</label>
-    <input type="text" id="sendDest" placeholder="name@speed.app or lnbc..." />
+    <input type="text" id="sendDest" placeholder="name@domain or lnbc..." />
     
     <label style="font-size:12px; color:var(--muted);">Amount (sats):</label>
     <input type="number" id="sendAmount" placeholder="e.g. 5" />
@@ -227,21 +228,22 @@
   </div>
 
 <script>
-  const DOMAIN = "pheizu-wallet-bot.vercel.app";
+  const DOMAIN = window.location.host || "pheizu-wallet-bot.vercel.app";
   const tg = window.Telegram?.WebApp;
   
   const tgUser = tg?.initDataUnsafe?.user;
-  const username = tgUser?.username || (tgUser?.id ? `user${tgUser.id}` : localStorage.getItem("saved_user") || "guest");
-  localStorage.setItem("saved_user", username);
-
+  const username = (tgUser?.username || localStorage.getItem("saved_username") || (tgUser?.id ? `user${tgUser.id}` : "guest")).toLowerCase();
   const currentUserId = String(tgUser?.id || username);
-  const myLightningAddress = `${username.toLowerCase()}@${DOMAIN}`;
 
+  localStorage.setItem("saved_username", username);
+  localStorage.setItem("saved_user_id", currentUserId);
+
+  const myLightningAddress = `${username}@${DOMAIN}`;
   document.getElementById("userLnAddress").innerText = myLightningAddress;
 
   let activeCheckTimer = null;
   let currentActiveInvoice = "";
-  let currentLiveBalance = 0; // Tracks live balance
+  let currentLiveBalance = 0;
 
   if (tg) {
     tg.ready();
@@ -255,13 +257,13 @@
     try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
   }
 
-  // Load Balance & Update Zero-Balance Protection
+  // Load individual user balance
   async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
 
     try {
-      const res = await fetch(`/api/wallet?action=balance&user_id=${currentUserId}`);
+      const res = await fetch(`/api/wallet?action=balance&user_id=${encodeURIComponent(currentUserId)}&username=${encodeURIComponent(username)}`);
       const data = await res.json();
       if (data.success) {
         currentLiveBalance = Number(data.balance || 0);
@@ -279,7 +281,6 @@
     }
   }
 
-  // Enforce Zero Balance Protection
   function updateSendButtonState() {
     const sendBtn = document.getElementById("btnSend");
     const zeroNotice = document.getElementById("zeroBalanceNotice");
@@ -293,12 +294,12 @@
     }
   }
 
-  // Generate Invoice
+  // Generate Deposit Invoice
   async function createReceiveInvoice() {
     haptic("medium");
     const amount = Number(document.getElementById("receiveAmount").value);
     const btn = document.getElementById("btnReceive");
-    if (!amount || amount <= 0) return alert("Enter amount");
+    if (!amount || amount <= 0) return alert("Enter amount in satoshis");
 
     btn.disabled = true;
     btn.innerText = "Generating...";
@@ -308,12 +309,12 @@
       const res = await fetch("/api/wallet?action=create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount, user_id: currentUserId })
+        body: JSON.stringify({ amount, user_id: currentUserId, username })
       });
       const data = await res.json();
 
       if (!data.success || !data.invoice) {
-        throw new Error(data.error || "Speed did not return an invoice.");
+        throw new Error(data.error || "Failed to generate invoice.");
       }
 
       currentActiveInvoice = data.invoice;
@@ -339,7 +340,7 @@
     }
   }
 
-  // Auto-verify and immediately sync balance
+  // Poll until invoice is paid
   function startAutoVerification(paymentId, amount) {
     let attempts = 0;
     activeCheckTimer = setInterval(async () => {
@@ -347,7 +348,7 @@
       if (attempts > 80) return clearInterval(activeCheckTimer);
 
       try {
-        const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${currentUserId}`);
+        const res = await fetch(`/api/wallet?action=check-status&payment_id=${encodeURIComponent(paymentId)}`);
         const data = await res.json();
 
         if (data.is_paid) {
@@ -355,7 +356,10 @@
           document.getElementById("listenNotice").innerText = "✅ Paid!";
 
           triggerSuccessPopup(amount);
-          loadBalance();
+          
+          // Poll twice to ensure Speed has reflected the new balance
+          setTimeout(loadBalance, 1200);
+          setTimeout(loadBalance, 3000);
         }
       } catch (e) {}
     }, 2500);
@@ -363,10 +367,10 @@
 
   function triggerSuccessPopup(amount) {
     hapticNotification("success");
-    if (tg && tg.showPopup) {
+    if (tg?.showPopup) {
       tg.showPopup({
         title: "⚡ Payment Received!",
-        message: `+${amount} sats have been credited to your balance!`,
+        message: `+${amount} sats credited to your wallet!`,
         buttons: [{ type: "ok", text: "Awesome!" }]
       });
     }
@@ -382,14 +386,13 @@
     loadBalance();
   }
 
-  // Send Sats (Blocked if balance is 0 or insufficient)
+  // Send Sats (Restricted to individual balance)
   async function sendSats() {
     haptic("medium");
 
-    // Zero balance guard
     if (currentLiveBalance <= 0) {
       hapticNotification("error");
-      return alert("⚠️ You cannot send: Your balance is 0 sats. Please receive sats first!");
+      return alert("⚠️ Your balance is 0 sats. Deposit first!");
     }
 
     const destination = document.getElementById("sendDest").value.trim();
@@ -397,7 +400,7 @@
     const feedback = document.getElementById("sendFeedback");
     const btn = document.getElementById("btnSend");
 
-    if (!destination || !amount) return alert("Fill in destination and amount");
+    if (!destination || !amount || amount <= 0) return alert("Fill in destination and a valid amount");
 
     if (amount > currentLiveBalance) {
       hapticNotification("error");
@@ -412,7 +415,7 @@
       const res = await fetch("/api/wallet?action=send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ destination, amount, user_id: currentUserId })
+        body: JSON.stringify({ destination, amount, user_id: currentUserId, username })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -421,7 +424,8 @@
       feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully!</span>`;
       document.getElementById("sendDest").value = "";
       document.getElementById("sendAmount").value = "";
-      loadBalance();
+
+      setTimeout(loadBalance, 1500);
     } catch (err) {
       hapticNotification("error");
       feedback.innerHTML = `<span style="color:#ef4444">Failed: ${err.message}</span>`;
@@ -460,7 +464,7 @@
     alert("Lightning Address copied!\n" + myLightningAddress);
   }
 
-  // Load balance immediately on start
+  // Load user balance on launch
   loadBalance();
 </script>
 </body>
