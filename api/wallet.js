@@ -1,9 +1,10 @@
 const ADMIN_ID = 8960497898;
 let DYNAMIC_KEY = global.DYNAMIC_SPEED_KEY || process.env.SPEED_SECRET_KEY || "";
 
+// Storage with duplicate prevention
 const store = global._pheizuStore = global._pheizuStore || {
   balances: {},
-  pendingInvoices: {}
+  creditedPayments: {} // Tracks payment IDs so they can NEVER credit twice
 };
 
 async function getUserBalance(userId) {
@@ -33,6 +34,32 @@ async function adjustUserBalance(userId, delta) {
   }
   store.balances[userId] = Math.max(0, Number(store.balances[userId] || 0) + delta);
   return store.balances[userId];
+}
+
+async function isPaymentCredited(paymentId) {
+  const key = `credited_pmt_${paymentId}`;
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (redisUrl && redisToken) {
+    try {
+      const res = await fetch(`${redisUrl}/get/${key}`, { headers: { Authorization: `Bearer ${redisToken}` } });
+      const d = await res.json();
+      return Boolean(d.result);
+    } catch (e) {}
+  }
+  return Boolean(store.creditedPayments[paymentId]);
+}
+
+async function markPaymentCredited(paymentId) {
+  const key = `credited_pmt_${paymentId}`;
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (redisUrl && redisToken) {
+    try {
+      await fetch(`${redisUrl}/set/${key}/1`, { headers: { Authorization: `Bearer ${redisToken}` } });
+    } catch (e) {}
+  }
+  store.creditedPayments[paymentId] = true;
 }
 
 async function callSpeed(endpoint, method = "POST", body = null, overrideKey = null) {
@@ -76,7 +103,7 @@ module.exports = async (req, res) => {
       return res.status(200).json({ user_id: uid, balance });
     }
 
-    // 2. Create Payment
+    // 2. Create Payment Invoice
     if (action === "create-payment") {
       const { amount, user_id } = req.body;
       const uid = String(user_id || "guest");
@@ -92,7 +119,7 @@ module.exports = async (req, res) => {
       return res.status(200).json(payment);
     }
 
-    // 3. Check Status & Settle
+    // 3. Check Payment Status (CREDITS EXACTLY ONCE)
     if (action === "check-status") {
       if (!payment_id) return res.status(400).json({ error: "Missing payment_id" });
 
@@ -101,23 +128,30 @@ module.exports = async (req, res) => {
       const st = (payment.status || "").toLowerCase();
       const isPaid = st === "succeeded" || st === "paid";
 
-      let newBalance = await getUserBalance(uid);
+      let creditedNow = false;
+      let balance = await getUserBalance(uid);
 
       if (isPaid) {
-        // Auto-credit the amount into the user's ledger
-        const sats = Number(payment.amount || 0);
-        newBalance = await adjustUserBalance(uid, sats);
+        const alreadyCredited = await isPaymentCredited(payment_id);
+        if (!alreadyCredited) {
+          // Mark credited immediately before adjusting balance (prevents race conditions)
+          await markPaymentCredited(payment_id);
+          const sats = Number(payment.amount || 0);
+          balance = await adjustUserBalance(uid, sats);
+          creditedNow = true;
+        }
       }
 
       return res.status(200).json({
         id: payment.id,
         status: payment.status,
         is_paid: isPaid,
-        new_balance: newBalance
+        credited_now: creditedNow,
+        balance
       });
     }
 
-    // 4. Send
+    // 4. Send Sats
     if (action === "send") {
       const { amount, destination, user_id } = req.body;
       const uid = String(user_id || "guest");
@@ -143,9 +177,9 @@ module.exports = async (req, res) => {
         });
 
         const updatedBalance = await getUserBalance(uid);
-        return res.status(200).json({ success: true, result, new_balance: updatedBalance });
+        return res.status(200).json({ success: true, result, balance: updatedBalance });
       } catch (sendErr) {
-        await adjustUserBalance(uid, sats);
+        await adjustUserBalance(uid, sats); // Refund on failure
         throw sendErr;
       }
     }
