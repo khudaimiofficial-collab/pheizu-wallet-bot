@@ -93,8 +93,14 @@
       font-weight: bold;
       font-size: 15px;
       cursor: pointer;
+      transition: opacity 0.2s;
     }
-    .btn-action:disabled { opacity: 0.5; }
+    .btn-action:disabled {
+      opacity: 0.4 !important;
+      cursor: not-allowed !important;
+      background: #475569 !important;
+      color: #94a3b8 !important;
+    }
     .qr-box {
       text-align: center;
       background: var(--bg);
@@ -115,6 +121,17 @@
       color: #38bdf8;
       max-height: 110px;
       overflow-y: auto;
+    }
+    .warning-banner {
+      background: #450a0a;
+      border: 1px solid #dc2626;
+      color: #fca5a5;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      margin-bottom: 14px;
+      text-align: center;
+      line-height: 1.4;
     }
     .hidden { display: none !important; }
     .modal-overlay {
@@ -183,10 +200,17 @@
 
   <!-- SEND PANEL -->
   <div id="sendPanel" class="card hidden">
+    <!-- Zero Balance Warning Banner -->
+    <div id="zeroBalanceNotice" class="warning-banner hidden">
+      ⚠️ <b>Balance is 0 sats.</b><br/>You cannot send funds. Go to the "Receive" tab to deposit satoshis first.
+    </div>
+
     <label style="font-size:12px; color:var(--muted);">Destination (Address or Invoice):</label>
     <input type="text" id="sendDest" placeholder="name@speed.app or lnbc..." />
+    
     <label style="font-size:12px; color:var(--muted);">Amount (sats):</label>
     <input type="number" id="sendAmount" placeholder="e.g. 5" />
+    
     <button id="btnSend" class="btn-action" onclick="sendSats()">Send From Balance</button>
     <div id="sendFeedback" style="font-size:12px; margin-top:10px; text-align:center;"></div>
   </div>
@@ -217,6 +241,7 @@
 
   let activeCheckTimer = null;
   let currentActiveInvoice = "";
+  let currentLiveBalance = 0; // Tracks live balance
 
   if (tg) {
     tg.ready();
@@ -230,7 +255,7 @@
     try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
   }
 
-  // Load Balance: Directly synchronizes with the server
+  // Load Balance & Update Zero-Balance Protection
   async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
@@ -239,13 +264,32 @@
       const res = await fetch(`/api/wallet?action=balance&user_id=${currentUserId}`);
       const data = await res.json();
       if (data.success) {
-        const liveBal = Number(data.balance || 0);
-        el.innerText = `${liveBal.toLocaleString()} sats`;
-        localStorage.setItem(`live_bal_${currentUserId}`, liveBal);
+        currentLiveBalance = Number(data.balance || 0);
+        el.innerText = `${currentLiveBalance.toLocaleString()} sats`;
+        localStorage.setItem(`live_bal_${currentUserId}`, currentLiveBalance);
+        updateSendButtonState();
       }
     } catch (e) {
       const cached = localStorage.getItem(`live_bal_${currentUserId}`);
-      if (cached) el.innerText = `${Number(cached).toLocaleString()} sats`;
+      if (cached) {
+        currentLiveBalance = Number(cached);
+        el.innerText = `${currentLiveBalance.toLocaleString()} sats`;
+        updateSendButtonState();
+      }
+    }
+  }
+
+  // Enforce Zero Balance Protection
+  function updateSendButtonState() {
+    const sendBtn = document.getElementById("btnSend");
+    const zeroNotice = document.getElementById("zeroBalanceNotice");
+
+    if (currentLiveBalance <= 0) {
+      sendBtn.disabled = true;
+      zeroNotice.classList.remove("hidden");
+    } else {
+      sendBtn.disabled = false;
+      zeroNotice.classList.add("hidden");
     }
   }
 
@@ -310,7 +354,6 @@
           clearInterval(activeCheckTimer);
           document.getElementById("listenNotice").innerText = "✅ Paid!";
 
-          // Trigger Success Popup & Refresh Balance immediately from server
           triggerSuccessPopup(amount);
           loadBalance();
         }
@@ -339,15 +382,27 @@
     loadBalance();
   }
 
-  // Send Sats
+  // Send Sats (Blocked if balance is 0 or insufficient)
   async function sendSats() {
     haptic("medium");
+
+    // Zero balance guard
+    if (currentLiveBalance <= 0) {
+      hapticNotification("error");
+      return alert("⚠️ You cannot send: Your balance is 0 sats. Please receive sats first!");
+    }
+
     const destination = document.getElementById("sendDest").value.trim();
     const amount = Number(document.getElementById("sendAmount").value);
     const feedback = document.getElementById("sendFeedback");
     const btn = document.getElementById("btnSend");
 
     if (!destination || !amount) return alert("Fill in destination and amount");
+
+    if (amount > currentLiveBalance) {
+      hapticNotification("error");
+      return alert(`⚠️ Insufficient balance! You only have ${currentLiveBalance} sats.`);
+    }
 
     btn.disabled = true;
     btn.innerText = "Sending...";
@@ -365,6 +420,7 @@
       hapticNotification("success");
       feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully!</span>`;
       document.getElementById("sendDest").value = "";
+      document.getElementById("sendAmount").value = "";
       loadBalance();
     } catch (err) {
       hapticNotification("error");
@@ -387,6 +443,7 @@
       document.getElementById("tabReceive").classList.remove("active");
       document.getElementById("sendPanel").classList.remove("hidden");
       document.getElementById("receivePanel").classList.add("hidden");
+      updateSendButtonState();
     }
   }
 
@@ -403,7 +460,7 @@
     alert("Lightning Address copied!\n" + myLightningAddress);
   }
 
-  // Load balance immediately on startup
+  // Load balance immediately on start
   loadBalance();
 </script>
 </body>
