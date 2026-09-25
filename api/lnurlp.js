@@ -1,5 +1,8 @@
 // api/lnurlp.js
-const { normalizeUserKey } = require('../lib/db');
+const { 
+  normalizeUserKey, 
+  savePendingDeposit 
+} = require('../lib/db');
 
 const DOMAIN = process.env.DOMAIN || "pheizu-wallet-bot.vercel.app";
 const SPEED_BASE_URL = "https://api.tryspeed.com";
@@ -63,7 +66,7 @@ module.exports = async function handler(req, res) {
 
     const userKey = normalizeUserKey(username);
 
-    // STEP 2: GENERATE INVOICE WHEN SENDER ENTERS AN AMOUNT
+    // STEP 2: CALLBACK (Sender entered amount, creating invoice)
     if (callback === "1" || amount) {
       const msats = Number(amount);
       const sats = Math.floor(msats / 1000);
@@ -72,7 +75,6 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ status: "ERROR", reason: "Amount must be at least 1 satoshi." });
       }
 
-      // Create payment on Speed with user metadata so the webhook knows who to credit
       const payment = await speedRequest("payments", "POST", {
         amount: sats,
         currency: "SATS",
@@ -87,8 +89,11 @@ module.exports = async function handler(req, res) {
 
       const bolt11 = extractInvoice(payment);
       if (!bolt11) {
-        return res.status(500).json({ status: "ERROR", reason: "Speed did not return a valid Lightning invoice." });
+        return res.status(500).json({ status: "ERROR", reason: "Failed to generate Lightning invoice from Speed." });
       }
+
+      // Save pending deposit in Firestore so it can be settled and notified
+      await savePendingDeposit(payment.id, userKey, sats);
 
       return res.status(200).json({
         pr: bolt11,
@@ -101,7 +106,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // STEP 1: INITIAL LNURLP METADATA (LUD-06 / LUD-16)
+    // STEP 1: METADATA
     const metadata = JSON.stringify([
       ["text/plain", `Pay to ${userKey}@${DOMAIN}`],
       ["text/identifier", `${userKey}@${DOMAIN}`]
@@ -112,8 +117,8 @@ module.exports = async function handler(req, res) {
       tag: "payRequest",
       commentAllowed: 0,
       callback: `https://${DOMAIN}/api/lnurlp?username=${encodeURIComponent(userKey)}&callback=1`,
-      minSendable: 1000,          // 1 sat minimum
-      maxSendable: 100000000000,  // 100,000,000 sats maximum
+      minSendable: 1000,
+      maxSendable: 100000000000,
       metadata: metadata
     });
 
