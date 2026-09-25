@@ -59,7 +59,42 @@ module.exports = async (req, res) => {
   const { action, user_id, payment_id } = req.query;
 
   try {
-    // 1. Create Payment Invoice
+    // 1. Balance - Reads the real live balance directly from Speed
+    if (action === "balance") {
+      const data = await callSpeed("balances", "GET");
+
+      const getSats = (target) => {
+        if (!target) return 0;
+        if (Array.isArray(target)) return target.find(b => (b.currency || "").toUpperCase() === "SATS")?.amount || 0;
+        if (typeof target === "object") return target.SATS ?? target.sats ?? 0;
+        if (typeof target === "number") return target;
+        return 0;
+      };
+
+      let avail = 0;
+      let pending = 0;
+
+      if (Array.isArray(data)) {
+        avail = getSats(data);
+      } else if (typeof data === "object") {
+        avail = getSats(data.available);
+        pending = getSats(data.pending);
+        if (avail === 0 && pending === 0 && data.amount !== undefined) {
+          if ((data.currency || "").toUpperCase() === "SATS") avail = Number(data.amount);
+        }
+      }
+
+      const totalBalance = avail + pending;
+
+      return res.status(200).json({
+        success: true,
+        balance: totalBalance,
+        available: avail,
+        pending: pending
+      });
+    }
+
+    // 2. Create Payment Invoice
     if (action === "create-payment") {
       const { amount, user_id } = req.body;
       const uid = String(user_id || "guest");
@@ -82,7 +117,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    // 2. Check Payment Status (Returns the exact verified amount)
+    // 3. Check Payment Status
     if (action === "check-status") {
       if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
 
@@ -100,9 +135,9 @@ module.exports = async (req, res) => {
       });
     }
 
-    // 3. Send Sats (Push payout)
+    // 4. Send Sats
     if (action === "send") {
-      const { amount, destination, user_id } = req.body;
+      const { amount, destination } = req.body;
       const sats = Number(amount);
 
       const result = await callSpeed("send", "POST", {
@@ -111,7 +146,7 @@ module.exports = async (req, res) => {
         target_currency: "SATS",
         withdraw_method: "lightning",
         withdraw_request: destination,
-        note: `Pheizu Mini App send`
+        note: "Pheizu Mini App send"
       });
 
       return res.status(200).json({ success: true, result });
