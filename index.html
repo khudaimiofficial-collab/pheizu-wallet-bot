@@ -98,16 +98,43 @@
       color: var(--muted);
     }
     .hidden { display: none; }
+    
+    /* Native Popup / Modal Overlay */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.75);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+      padding: 20px;
+    }
+    .modal-card {
+      background: var(--card);
+      border: 1px solid var(--button);
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+      max-width: 320px;
+      width: 100%;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+      animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+    @keyframes popIn {
+      from { transform: scale(0.8); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
   </style>
 </head>
 <body>
 
-  <!-- Balance Card -->
+  <!-- Personal Balance Card -->
   <div class="card">
-    <div class="balance-title">⚡ Available Balance</div>
-    <div id="balanceDisplay" class="balance-amount">Loading...</div>
+    <div class="balance-title">⚡ Your Personal Balance</div>
+    <div id="balanceDisplay" class="balance-amount">0 sats</div>
     <button onclick="loadBalance()" style="background:transparent; border:none; color:var(--muted); font-size:12px; cursor:pointer;">
-      🔄 Tap to Refresh
+      🔄 Refresh
     </button>
   </div>
 
@@ -115,8 +142,6 @@
   <div class="tabs">
     <button id="tabReceive" class="tab-btn active" onclick="switchTab('receive')">Receive</button>
     <button id="tabSend" class="tab-btn" onclick="switchTab('send')">Send</button>
-    <!-- Admin Tab: Shown ONLY for ID 8960497898 -->
-    <button id="tabAdmin" class="tab-btn hidden" onclick="switchTab('admin')" style="color:#f59e0b;">👑 Admin</button>
   </div>
 
   <!-- RECEIVE PANEL -->
@@ -127,6 +152,7 @@
 
     <div id="qrResult" class="qr-box hidden">
       <div id="qrcode"></div>
+      <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment...</p>
       <div id="invoiceString" class="invoice-text"></div>
       <button class="btn-action" style="margin-top:10px; font-size:12px; padding:8px;" onclick="copyInvoice()">Copy Invoice</button>
     </div>
@@ -138,55 +164,54 @@
     <input type="text" id="sendDest" placeholder="user@speed.app or lnbc..." />
     <label style="font-size:12px; color:var(--muted);">Amount (sats):</label>
     <input type="number" id="sendAmount" placeholder="e.g. 50" />
-    <button id="btnSend" class="btn-action" onclick="sendSats()">Send Instantly</button>
+    <button id="btnSend" class="btn-action" onclick="sendSats()">Send From Balance</button>
     <div id="sendFeedback" style="font-size:12px; margin-top:10px; text-align:center;"></div>
   </div>
 
-  <!-- ADMIN PANEL (EXCLUSIVE TO 8960497898) -->
-  <div id="adminPanel" class="card hidden">
-    <h3 style="color:#f59e0b; font-size:14px; margin-bottom:8px;">👑 Admin Configuration</h3>
-    <p style="font-size:11px; color:var(--muted); margin-bottom:10px;">Authenticated Admin ID: 8960497898</p>
-    
-    <label style="font-size:12px; color:var(--muted);">Speed Secret Key (Visible):</label>
-    <input type="text" id="adminSecretKeyInput" placeholder="sk_live_... or sk_test_..." />
-    
-    <button class="btn-action" style="background:#f59e0b; color:black;" onclick="saveAdminKey()">Save & Activate Key</button>
-    <div id="adminFeedback" style="font-size:12px; margin-top:10px; word-break:break-all;"></div>
+  <!-- POPUP MODAL (Payment Success) -->
+  <div id="successModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div style="font-size:42px; margin-bottom:10px;">🎉</div>
+      <h3 style="color:var(--button); margin-bottom:6px;">Payment Successful!</h3>
+      <p id="modalAmountText" style="font-size:14px; color:var(--text); margin-bottom:14px;"></p>
+      <p id="modalBalanceText" style="font-size:12px; color:var(--muted); margin-bottom:20px;"></p>
+      <button class="btn-action" onclick="closeSuccessModal()">Awesome!</button>
+    </div>
   </div>
 
 <script>
-  const ADMIN_ID = 8960497898;
   const tg = window.Telegram?.WebApp;
-  const currentUserId = tg?.initDataUnsafe?.user?.id;
+  const currentUserId = String(tg?.initDataUnsafe?.user?.id || "guest_user");
+  let activeCheckTimer = null;
 
   if (tg) {
     tg.ready();
     tg.expand();
   }
 
-  // Show Admin Tab ONLY if user is 8960497898
-  if (currentUserId === ADMIN_ID) {
-    document.getElementById("tabAdmin").classList.remove("hidden");
-  }
-
   function haptic(type = "light") {
     try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){}
   }
 
+  function hapticNotification(type = "success") {
+    try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
+  }
+
+  // 1. Fetch THIS USER'S Balance only
   async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
     el.innerText = "...";
     try {
-      const res = await fetch("/api/wallet?action=balance");
+      const res = await fetch(`/api/wallet?action=balance&user_id=${currentUserId}`);
       const data = await res.json();
-      const avail = data.available?.find(b => b.currency === "SATS")?.amount || 0;
-      el.innerText = `${Number(avail).toLocaleString()} sats`;
+      el.innerText = `${Number(data.balance || 0).toLocaleString()} sats`;
     } catch (e) {
-      el.innerText = "Active";
+      el.innerText = "0 sats";
     }
   }
 
+  // 2. Receive (Generates invoice & listens for payment)
   async function createReceiveInvoice() {
     haptic("medium");
     const amount = document.getElementById("receiveAmount").value;
@@ -194,26 +219,45 @@
     if (!amount || amount <= 0) return alert("Enter amount");
 
     btn.disabled = true;
-    btn.innerText = "Creating...";
+    btn.innerText = "Generating...";
+
+    if (activeCheckTimer) clearInterval(activeCheckTimer);
 
     try {
       const res = await fetch("/api/wallet?action=create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount })
+        body: JSON.stringify({ amount, user_id: currentUserId })
       });
       const payment = await res.json();
       if (payment.error) throw new Error(payment.error);
 
-      const invoice = payment.payment_method_details?.lightning?.payment_request || payment.payment_request || payment.url;
+      // Recursive scan for invoice
+      let invoice = "";
+      function scan(o) {
+        if (!o || typeof o !== "object") return;
+        for (const [k, v] of Object.entries(o)) {
+          if (typeof v === "string") {
+            const str = v.trim();
+            if (/^(lnbc|lntb|lightning:)/i.test(str)) { if (!invoice) invoice = str; }
+            else if ((k.toLowerCase().includes("url") || k === "link") && /^https?:\/\//i.test(str)) { if (!invoice) invoice = str; }
+          } else if (typeof v === "object") scan(v);
+        }
+      }
+      scan(payment);
 
+      const qrTarget = invoice || payment.id;
       const qrDiv = document.getElementById("qrcode");
       qrDiv.innerHTML = "";
-      new QRCode(qrDiv, { text: invoice, width: 170, height: 170 });
+      new QRCode(qrDiv, { text: qrTarget, width: 170, height: 170 });
 
-      document.getElementById("invoiceString").innerText = invoice;
+      document.getElementById("invoiceString").innerText = invoice || payment.id;
       document.getElementById("qrResult").classList.remove("hidden");
-      haptic("heavy");
+      document.getElementById("listenNotice").innerText = "⏳ Waiting for payment...";
+
+      // Start Auto-polling to detect payment and trigger SUCCESS POPUP
+      startListeningPayment(payment.id, Number(amount));
+
     } catch(err) {
       alert("Error: " + err.message);
     } finally {
@@ -222,6 +266,53 @@
     }
   }
 
+  // 3. Auto-Listening for Payment Completion
+  function startListeningPayment(paymentId, amount) {
+    let attempts = 0;
+    activeCheckTimer = setInterval(async () => {
+      attempts++;
+      if (attempts > 80) return clearInterval(activeCheckTimer); // 4 minutes
+
+      try {
+        const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${currentUserId}`);
+        const data = await res.json();
+
+        if (data.is_paid) {
+          clearInterval(activeCheckTimer);
+          document.getElementById("listenNotice").innerText = "✅ Paid!";
+          triggerSuccessPopup(amount, data.new_balance);
+        }
+      } catch (e) {}
+    }, 3000);
+  }
+
+  // 4. Trigger Native & In-App Success Popup
+  function triggerSuccessPopup(amount, newBalance) {
+    hapticNotification("success");
+
+    // Native Telegram Popup
+    if (tg && tg.showPopup) {
+      tg.showPopup({
+        title: "⚡ Payment Received!",
+        message: `+${amount} sats have been credited to your personal balance!\nNew Balance: ${newBalance} sats`,
+        buttons: [{ type: "ok", text: "Awesome!" }]
+      });
+    }
+
+    // Modal Display
+    document.getElementById("modalAmountText").innerText = `+${amount} Satoshis Credited!`;
+    document.getElementById("modalBalanceText").innerText = `Your New Balance: ${newBalance} sats`;
+    document.getElementById("successModal").classList.remove("hidden");
+
+    loadBalance();
+  }
+
+  function closeSuccessModal() {
+    document.getElementById("successModal").classList.add("hidden");
+    document.getElementById("qrResult").classList.add("hidden");
+  }
+
+  // 5. Send Sats (Checked against user balance)
   async function sendSats() {
     haptic("medium");
     const destination = document.getElementById("sendDest").value.trim();
@@ -233,63 +324,44 @@
 
     btn.disabled = true;
     btn.innerText = "Sending...";
-    feedback.innerText = "Broadcasting across Lightning Network...";
+    feedback.innerText = "Verifying balance and broadcasting...";
 
     try {
       const res = await fetch("/api/wallet?action=send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ destination, amount })
+        body: JSON.stringify({ destination, amount, user_id: currentUserId })
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
+      hapticNotification("success");
       feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully!</span>`;
-      haptic("heavy");
       document.getElementById("sendDest").value = "";
       loadBalance();
     } catch (err) {
+      hapticNotification("error");
       feedback.innerHTML = `<span style="color:#ef4444">Failed: ${err.message}</span>`;
     } finally {
       btn.disabled = false;
-      btn.innerText = "Send Instantly";
-    }
-  }
-
-  async function saveAdminKey() {
-    const key = document.getElementById("adminSecretKeyInput").value.trim();
-    const feedback = document.getElementById("adminFeedback");
-    if (!key) return alert("Enter key");
-
-    feedback.innerText = "Verifying with Speed...";
-
-    try {
-      const res = await fetch("/api/wallet?action=admin-set-key", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ admin_id: currentUserId, new_key: key })
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-
-      feedback.innerHTML = "<span style='color:#00d084'>✓ Key verified & activated!</span>";
-      loadBalance();
-    } catch (e) {
-      feedback.innerHTML = `<span style='color:#ef4444'>Error: ${e.message}</span>`;
+      btn.innerText = "Send From Balance";
     }
   }
 
   function switchTab(t) {
     haptic("light");
-    ["receive", "send", "admin"].forEach(id => {
-      document.getElementById("tab" + capitalize(id)).classList.remove("active");
-      document.getElementById(id + "Panel").classList.add("hidden");
-    });
-    document.getElementById("tab" + capitalize(t)).classList.add("active");
-    document.getElementById(t + "Panel").classList.remove("hidden");
+    if (t === 'receive') {
+      document.getElementById("tabReceive").classList.add("active");
+      document.getElementById("tabSend").classList.remove("active");
+      document.getElementById("receivePanel").classList.remove("hidden");
+      document.getElementById("sendPanel").classList.add("hidden");
+    } else {
+      document.getElementById("tabSend").classList.add("active");
+      document.getElementById("tabReceive").classList.remove("active");
+      document.getElementById("sendPanel").classList.remove("hidden");
+      document.getElementById("receivePanel").classList.add("hidden");
+    }
   }
-
-  function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
   function copyInvoice() {
     navigator.clipboard.writeText(document.getElementById("invoiceString").innerText);
