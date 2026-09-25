@@ -97,13 +97,15 @@
       margin-top: 10px;
       color: var(--muted);
     }
-    .hidden { display: none; }
     
-    /* Native Popup / Modal Overlay */
+    /* Fixed: !important guarantees it stays hidden until explicitly triggered */
+    .hidden { display: none !important; }
+
+    /* Success Popup Modal */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.75);
+      background: rgba(0,0,0,0.8);
       display: flex;
       justify-content: center;
       align-items: center;
@@ -168,7 +170,7 @@
     <div id="sendFeedback" style="font-size:12px; margin-top:10px; text-align:center;"></div>
   </div>
 
-  <!-- POPUP MODAL (Payment Success) -->
+  <!-- POPUP MODAL (Hidden by default) -->
   <div id="successModal" class="modal-overlay hidden">
     <div class="modal-card">
       <div style="font-size:42px; margin-bottom:10px;">🎉</div>
@@ -197,7 +199,7 @@
     try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
   }
 
-  // 1. Fetch THIS USER'S Balance only
+  // 1. Fetch User Balance
   async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
@@ -211,7 +213,7 @@
     }
   }
 
-  // 2. Receive (Generates invoice & listens for payment)
+  // 2. Generate Invoice
   async function createReceiveInvoice() {
     haptic("medium");
     const amount = document.getElementById("receiveAmount").value;
@@ -232,7 +234,6 @@
       const payment = await res.json();
       if (payment.error) throw new Error(payment.error);
 
-      // Recursive scan for invoice
       let invoice = "";
       function scan(o) {
         if (!o || typeof o !== "object") return;
@@ -255,7 +256,7 @@
       document.getElementById("qrResult").classList.remove("hidden");
       document.getElementById("listenNotice").innerText = "⏳ Waiting for payment...";
 
-      // Start Auto-polling to detect payment and trigger SUCCESS POPUP
+      // Auto-listen for payment completion
       startListeningPayment(payment.id, Number(amount));
 
     } catch(err) {
@@ -266,12 +267,12 @@
     }
   }
 
-  // 3. Auto-Listening for Payment Completion
+  // 3. Listen for Payment
   function startListeningPayment(paymentId, amount) {
     let attempts = 0;
     activeCheckTimer = setInterval(async () => {
       attempts++;
-      if (attempts > 80) return clearInterval(activeCheckTimer); // 4 minutes
+      if (attempts > 80) return clearInterval(activeCheckTimer);
 
       try {
         const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${currentUserId}`);
@@ -286,20 +287,18 @@
     }, 3000);
   }
 
-  // 4. Trigger Native & In-App Success Popup
+  // 4. Trigger Success Popup
   function triggerSuccessPopup(amount, newBalance) {
     hapticNotification("success");
 
-    // Native Telegram Popup
     if (tg && tg.showPopup) {
       tg.showPopup({
         title: "⚡ Payment Received!",
-        message: `+${amount} sats have been credited to your personal balance!\nNew Balance: ${newBalance} sats`,
+        message: `+${amount} sats have been credited to your balance!\nNew Balance: ${newBalance} sats`,
         buttons: [{ type: "ok", text: "Awesome!" }]
       });
     }
 
-    // Modal Display
     document.getElementById("modalAmountText").innerText = `+${amount} Satoshis Credited!`;
     document.getElementById("modalBalanceText").innerText = `Your New Balance: ${newBalance} sats`;
     document.getElementById("successModal").classList.remove("hidden");
@@ -312,7 +311,7 @@
     document.getElementById("qrResult").classList.add("hidden");
   }
 
-  // 5. Send Sats (Checked against user balance)
+  // 5. Send Sats
   async function sendSats() {
     haptic("medium");
     const destination = document.getElementById("sendDest").value.trim();
