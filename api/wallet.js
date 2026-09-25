@@ -10,89 +10,78 @@ const {
 
 const SPEED_BASE_URL = "https://api.tryspeed.com";
 
-// Helper: Sanitize and validate Speed Secret Key
-function getSanitizedSpeedKey() {
-  let key = process.env.SPEED_SECRET_KEY || "";
-  key = key.trim().replace(/^["']|["']$/g, ""); // Remove accidental quotes or whitespace
+// Recursive extractor for bolt11 invoice and hosted checkout URL
+function extractPaymentDetails(data) {
+  let invoice = "";
+  let url = "";
+  function scan(obj) {
+    if (!obj || typeof obj !== "object") return;
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === "string") {
+        const str = v.trim();
+        if (/^(lnbc|lntb|lightning:)/i.test(str)) {
+          if (!invoice) invoice = str;
+        } else if ((k.toLowerCase().includes("url") || k === "link") && /^https?:\/\//i.test(str)) {
+          if (!url) url = str;
+        }
+      } else if (typeof v === "object") {
+        scan(v);
+      }
+    }
+  }
+  scan(data);
+  return { invoice, url };
+}
 
-  if (!key) {
+// Universal Speed API client with required version header
+async function speedRequest(endpoint, method = "GET", body = null) {
+  const rawKey = (process.env.SPEED_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
+
+  if (!rawKey) {
     throw new Error("SPEED_SECRET_KEY is missing in your Vercel Environment Variables.");
   }
 
-  if (key.startsWith("pk_")) {
-    throw new Error(
-      "Speed API Error 403: You configured a Publishable Key (pk_...). " +
-      "You MUST use a Secret Key starting with 'sk_test_' or 'sk_live_' from the Speed Dashboard."
-    );
-  }
+  const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
+  const authHeader = "Basic " + Buffer.from(rawKey + ":").toString("base64");
 
-  return key;
-}
-
-// Speed API client helper
-async function speedRequest(endpoint, method = "GET", body = null) {
-  const secretKey = getSanitizedSpeedKey();
-
-  // Speed supports HTTP Basic Auth: base64(secretKey + ":")
-  const authHeader = "Basic " + Buffer.from(secretKey + ":").toString("base64");
+  const headers = {
+    "accept": "application/json",
+    "authorization": authHeader,
+    "content-type": "application/json",
+    "speed-version": "2022-10-15" // Required by Speed API
+  };
 
   const options = {
     method,
-    headers: {
-      "Authorization": authHeader,
-      "Content-Type": "application/json",
-      "Accept": "application/json"
-    }
+    headers
   };
 
   if (body && (method === "POST" || method === "PUT")) {
     options.body = JSON.stringify(body);
   }
 
-  const res = await fetch(`${SPEED_BASE_URL}${endpoint}`, options);
+  const res = await fetch(`${SPEED_BASE_URL}/${cleanEndpoint}`, options);
+  const text = await res.text();
 
-  let responseData;
-  const rawText = await res.text();
+  let json = {};
   try {
-    responseData = JSON.parse(rawText);
-  } catch (err) {
-    responseData = null;
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`Speed error (${res.status}): ${text}`);
   }
 
   if (!res.ok) {
-    // Extract exact nested error message from Speed's response
-    const detailedMessage = 
-      responseData?.errors?.[0]?.message || 
-      responseData?.message || 
-      responseData?.error?.message || 
-      responseData?.error || 
-      rawText || 
-      `HTTP status ${res.status}`;
-
-    console.error(`[Speed Error ${res.status}]:`, detailedMessage);
-
-    if (res.status === 403) {
-      throw new Error(
-        `Speed API 403 Forbidden: ${detailedMessage}. ` +
-        `Ensure your Secret Key (sk_...) has write permissions for Charges and that Live Mode account compliance is approved.`
-      );
-    }
-
-    if (res.status === 401) {
-      throw new Error(`Speed API 401 Unauthorized: Invalid Secret Key. Check your SPEED_SECRET_KEY in Vercel.`);
-    }
-
-    throw new Error(`Speed API [${res.status}]: ${detailedMessage}`);
+    const errMsg = json?.message || json?.error?.message || json?.errors?.[0]?.message || text;
+    throw new Error(`[Speed ${res.status}] ${errMsg}`);
   }
 
-  return responseData;
+  return json;
 }
 
 module.exports = async function handler(req, res) {
-  // CORS configuration for Telegram Mini App
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, speed-version');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -101,9 +90,7 @@ module.exports = async function handler(req, res) {
   const action = req.query.action;
 
   try {
-    // =========================================================================
     // 1. GET BALANCE
-    // =========================================================================
     if (action === 'balance') {
       const userParam = req.query.user_id || req.query.username;
       const tgId = req.query.telegram_id;
@@ -113,59 +100,46 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, balance, user: userKey });
     }
 
-    // =========================================================================
-    // 2. CREATE PAYMENT INVOICE (Receive Tab)
-    // =========================================================================
+    // 2. CREATE PAYMENT INVOICE (Receive tab)
     if (action === 'create-payment' && req.method === 'POST') {
       const { amount, user_id, username, telegram_id } = req.body || {};
       const userKey = normalizeUserKey(username || user_id, telegram_id);
       const sats = Math.floor(Number(amount));
 
       if (!sats || isNaN(sats) || sats <= 0) {
-        return res.status(400).json({ success: false, error: "Please enter a valid amount greater than 0 sats." });
+        return res.status(400).json({ success: false, error: "Please enter a valid amount in sats." });
       }
 
-      // Create Lightning charge payload for Speed
-      const chargePayload = {
+      // Calls /payments with exact required fields
+      const payment = await speedRequest("payments", "POST", {
         amount: sats,
         currency: "SATS",
+        target_currency: "SATS",
+        payment_methods: ["lightning"],
         description: `Deposit to ${userKey}`,
-        metadata: {
-          user_key: userKey,
-          source: "telegram_mini_app"
-        }
-      };
+        metadata: { user_key: userKey }
+      });
 
-      const charge = await speedRequest("/v1/charges", "POST", chargePayload);
+      const { invoice, url } = extractPaymentDetails(payment);
 
-      // Extract Bolt11 Lightning invoice string across Speed response variants
-      const bolt11 = 
-        charge?.lightning_payment_request || 
-        charge?.payment_request || 
-        charge?.invoice ||
-        charge?.payment_method_details?.lightning?.payment_request ||
-        charge?.payment_method_options?.lightning?.payment_request;
-
-      if (!bolt11) {
-        console.error("Speed charge created without bolt11:", charge);
+      if (!invoice && !url) {
         return res.status(500).json({
           success: false,
-          error: "Speed created the charge but returned no Lightning payment request. Check if Lightning is enabled in Speed dashboard."
+          error: "Speed created payment but did not return a Lightning invoice."
         });
       }
 
       return res.status(200).json({
         success: true,
-        id: charge.id,
-        invoice: bolt11,
+        id: payment.id,
+        invoice: invoice || url,
+        url: url,
         amount: sats,
         user: userKey
       });
     }
 
-    // =========================================================================
-    // 3. CHECK PAYMENT STATUS (Polling from Mini App)
-    // =========================================================================
+    // 3. CHECK PAYMENT STATUS (Polling)
     if (action === 'check-status') {
       const paymentId = req.query.payment_id;
       const userParam = req.query.user_id || req.query.username;
@@ -176,14 +150,14 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ success: false, error: "Missing payment_id." });
       }
 
-      const charge = await speedRequest(`/v1/charges/${paymentId}`, "GET");
-      const isPaid = charge.status === "paid" || charge.status === "succeeded";
+      const payment = await speedRequest(`payments/${paymentId}`, "GET");
+      const st = (payment.status || "").toLowerCase();
+      const isPaid = st === "succeeded" || st === "paid";
 
       if (isPaid) {
-        // Prevent crediting the same payment multiple times
         const alreadyCredited = await isPaymentProcessed(paymentId);
         if (!alreadyCredited) {
-          const satsPaid = Math.floor(Number(charge.amount || 0));
+          const satsPaid = Math.floor(Number(payment.amount || 0));
           await addBalance(userKey, satsPaid);
           await markPaymentProcessed(paymentId);
         }
@@ -192,13 +166,11 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({
         success: true,
         is_paid: isPaid,
-        status: charge.status
+        status: payment.status
       });
     }
 
-    // =========================================================================
-    // 4. SEND SATS FROM BALANCE (Send Tab)
-    // =========================================================================
+    // 4. SEND SATS FROM BALANCE (Send tab)
     if (action === 'send' && req.method === 'POST') {
       const { destination, amount, user_id, username, telegram_id } = req.body || {};
       const userKey = normalizeUserKey(username || user_id, telegram_id);
@@ -208,19 +180,17 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ success: false, error: "Missing destination Lightning Address or Invoice." });
       }
       if (!sats || isNaN(sats) || sats <= 0) {
-        return res.status(400).json({ success: false, error: "Invalid satoshi amount." });
+        return res.status(400).json({ success: false, error: "Invalid amount." });
       }
 
-      // Check current user balance
       const currentBal = await getBalance(userKey);
       if (currentBal < sats) {
         return res.status(400).json({ 
           success: false, 
-          error: `Insufficient balance: You have ${currentBal.toLocaleString()} sats, needed ${sats.toLocaleString()} sats.` 
+          error: `Insufficient balance. You have ${currentBal.toLocaleString()} sats, needed ${sats.toLocaleString()} sats.` 
         });
       }
 
-      // Escrow / deduct balance first to prevent double-spending
       await deductBalance(userKey, sats);
 
       try {
@@ -231,14 +201,12 @@ module.exports = async function handler(req, res) {
         };
 
         if (cleanDestination.includes("@")) {
-          // Lightning Address (e.g. name@domain.com)
           payoutPayload.lnurl = cleanDestination;
         } else {
-          // Raw Bolt11 invoice (strip 'lightning:' protocol if present)
           payoutPayload.payment_request = cleanDestination.replace(/^lightning:/i, "");
         }
 
-        const payout = await speedRequest("/v1/payouts", "POST", payoutPayload);
+        const payout = await speedRequest("payouts", "POST", payoutPayload);
 
         return res.status(200).json({
           success: true,
@@ -247,22 +215,17 @@ module.exports = async function handler(req, res) {
           remaining_balance: await getBalance(userKey)
         });
       } catch (sendError) {
-        // Refund satoshis to the user if the Lightning broadcast failed
-        await addBalance(userKey, sats);
-        console.error("Payout broadcast failed, refunded user:", sendError);
+        await addBalance(userKey, sats); // Refund on failure
         return res.status(500).json({
           success: false,
-          error: sendError.message || "Failed to route payment across the Lightning Network."
+          error: sendError.message || "Failed to broadcast payment over Lightning."
         });
       }
     }
 
-    return res.status(404).json({ success: false, error: `Invalid action '${action}' requested.` });
+    return res.status(404).json({ success: false, error: `Invalid action '${action}'` });
   } catch (err) {
     console.error("Wallet API Error:", err);
-    return res.status(500).json({ 
-      success: false, 
-      error: err.message || "An unexpected internal server error occurred." 
-    });
+    return res.status(500).json({ success: false, error: err.message || "Internal server error" });
   }
 };
