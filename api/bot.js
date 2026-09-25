@@ -1,19 +1,42 @@
 const { Telegraf, Markup } = require("telegraf");
 
-const ADMIN_ID = 8960497898; // Admin Telegram Chat ID
+const ADMIN_ID = 8960497898; // Your Admin Telegram Chat ID
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 let DYNAMIC_SPEED_KEY = process.env.SPEED_SECRET_KEY || "";
-const MINI_APP_URL = process.env.VERCEL_PROJECT_URL;
 
-// Initialize Telegraf safely
+// Fixed: Hardcoded fallback so the button NEVER crashes
+const MINI_APP_URL = process.env.VERCEL_PROJECT_URL || "https://pheizu-wallet-bot.vercel.app";
+
 let bot = null;
 if (BOT_TOKEN) {
   bot = new Telegraf(BOT_TOKEN);
 } else {
-  console.error("CRITICAL: TELEGRAM_BOT_TOKEN is missing in Vercel Environment Variables!");
+  console.error("CRITICAL: TELEGRAM_BOT_TOKEN is missing!");
 }
 
-// Helper function to call Speed API
+// Universal deep search for Lightning invoices (lnbc...) or checkout URLs
+function extractInvoice(obj) {
+  let invoice = null;
+  function scan(o) {
+    if (!o || typeof o !== "object") return;
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === "string") {
+        const str = v.trim();
+        if (/^(lnbc|lntb|lightning:)/i.test(str)) {
+          if (!invoice) invoice = str;
+        } else if ((k.toLowerCase().includes("url") || k === "link") && /^https?:\/\//i.test(str)) {
+          if (!invoice) invoice = str;
+        }
+      } else if (typeof v === "object") {
+        scan(v);
+      }
+    }
+  }
+  scan(obj);
+  return invoice;
+}
+
+// Helper to call Speed API
 async function callSpeed(endpoint, method = "POST", body = null, overrideKey = null) {
   const keyToUse = overrideKey || DYNAMIC_SPEED_KEY;
   if (!keyToUse) throw new Error("Speed API Key is not set. Admin must configure it using /setkey.");
@@ -72,7 +95,7 @@ if (bot) {
     });
   });
 
-  // /setkey (ADMIN ONLY - Updates Speed API Key)
+  // /setkey (ADMIN ONLY)
   bot.command("setkey", async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) {
       return ctx.reply("⛔ *Unauthorized:* This command is restricted to the bot admin.", { parse_mode: "Markdown" });
@@ -88,7 +111,6 @@ if (bot) {
     ctx.reply("🔍 *Verifying key with Speed.app...*", { parse_mode: "Markdown" });
 
     try {
-      // Test key validity against Speed API
       await callSpeed("payments", "POST", {
         amount: 10,
         currency: "SATS",
@@ -102,7 +124,7 @@ if (bot) {
       ctx.reply(
         `✅ *Speed Secret Key Verified & Saved!*\n\n` +
         `🔑 *Active Key:* \`${newKey}\`\n` +
-        `The wallet is now ready to send, receive, and check balances.`,
+        `The wallet is ready to send, receive, and check balances.`,
         { parse_mode: "Markdown" }
       );
     } catch (err) {
@@ -124,7 +146,7 @@ if (bot) {
       `👑 *Pheizu Admin Console*\n\n` +
       `👤 *Admin ID:* \`${ADMIN_ID}\`\n` +
       `🔑 *Active Speed Key:* ${keyStatus}\n` +
-      `🌐 *Mini App URL:* ${MINI_APP_URL || "_Not configured_"}\n\n` +
+      `🌐 *Mini App URL:* ${MINI_APP_URL}\n\n` +
       `To update your Speed key, send: \`/setkey <your_key>\``,
       { parse_mode: "Markdown" }
     );
@@ -134,8 +156,23 @@ if (bot) {
   bot.command("balance", async (ctx) => {
     try {
       const data = await callSpeed("balances", "GET");
-      const avail = data.available?.find((b) => b.currency === "SATS")?.amount || 0;
-      const pending = data.pending?.find((b) => b.currency === "SATS")?.amount || 0;
+      
+      let avail = 0;
+      let pending = 0;
+
+      const getSats = (target) => {
+        if (!target) return 0;
+        if (Array.isArray(target)) return target.find(b => (b.currency || "").toUpperCase() === "SATS")?.amount || 0;
+        if (typeof target === "object") return target.SATS ?? target.sats ?? 0;
+        return 0;
+      };
+
+      if (Array.isArray(data)) {
+        avail = getSats(data);
+      } else if (typeof data === "object") {
+        avail = getSats(data.available);
+        pending = getSats(data.pending);
+      }
 
       let msg = `💰 *Pheizu Wallet Balance:*\n\n⚡ Available: *${Number(avail).toLocaleString()} sats*`;
       if (pending > 0) msg += `\n⏳ Pending: *${Number(pending).toLocaleString()} sats*`;
@@ -151,12 +188,16 @@ if (bot) {
 
   bot.action("cmd_balance", async (ctx) => {
     await ctx.answerCbQuery();
-    const data = await callSpeed("balances", "GET").catch(() => ({}));
-    const avail = data.available?.find((b) => b.currency === "SATS")?.amount || 0;
-    ctx.reply(`💰 Balance: *${Number(avail).toLocaleString()} sats*`, { parse_mode: "Markdown" });
+    try {
+      const data = await callSpeed("balances", "GET");
+      const avail = data.available?.find?.((b) => b.currency === "SATS")?.amount || 0;
+      ctx.reply(`💰 Balance: *${Number(avail).toLocaleString()} sats*`, { parse_mode: "Markdown" });
+    } catch(e) {
+      ctx.reply(`❌ Error checking balance`);
+    }
   });
 
-  // /receive <sats>
+  // /receive <sats> (Fixed: Uses deep extractor so it NEVER returns undefined)
   bot.command("receive", async (ctx) => {
     const args = ctx.message.text.split(" ");
     const sats = parseInt(args[1]);
@@ -173,8 +214,13 @@ if (bot) {
         payment_methods: ["lightning"]
       });
 
-      const invoice = pmt.payment_method_details?.lightning?.payment_request || pmt.payment_request || pmt.url;
-      ctx.reply(`⚡ *Invoice for ${sats} sats:*\n\n\`${invoice}\`\n\n_Tap to copy & pay._`, { parse_mode: "Markdown" });
+      const invoice = extractInvoice(pmt);
+
+      if (!invoice) {
+        return ctx.reply(`⚠️ Invoice created (ID: \`${pmt.id}\`), but no raw bolt11 string was returned. Check your Speed dashboard.`, { parse_mode: "Markdown" });
+      }
+
+      ctx.reply(`⚡ *Invoice for ${sats} sats:*\n\n\`${invoice}\`\n\n_Tap to copy & pay with any Lightning wallet._`, { parse_mode: "Markdown" });
     } catch (err) {
       ctx.reply(`❌ Invoice creation failed: ${err.message}`);
     }
@@ -189,7 +235,7 @@ if (bot) {
         target_currency: "SATS",
         payment_methods: ["lightning"]
       });
-      const invoice = pmt.payment_method_details?.lightning?.payment_request || pmt.payment_request || pmt.url;
+      const invoice = extractInvoice(pmt) || pmt.id;
       ctx.reply(`⚡ *Invoice (100 sats):*\n\n\`${invoice}\``, { parse_mode: "Markdown" });
     } catch (err) {
       ctx.reply(`❌ ${err.message}`);
@@ -225,11 +271,18 @@ if (bot) {
 // Vercel Serverless Webhook Handler
 module.exports = async (req, res) => {
   if (!bot) {
-    return res.status(500).send("TELEGRAM_BOT_TOKEN is not configured in Vercel.");
+    return res.status(500).send("TELEGRAM_BOT_TOKEN is not configured.");
   }
   if (req.method === "POST") {
-    await bot.handleUpdate(req.body);
-    return res.status(200).send("OK");
+    try {
+      let body = req.body;
+      if (typeof body === "string") body = JSON.parse(body);
+      if (body) await bot.handleUpdate(body);
+      return res.status(200).send("OK");
+    } catch (e) {
+      console.error("Telegram update error:", e);
+      return res.status(200).send("OK");
+    }
   }
   return res.status(200).send("Pheizu Wallet Bot is active and running!");
 };
