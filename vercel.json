@@ -1,7 +1,7 @@
 {
   "cleanUrls": true,
   "rewrites": [
-    { "source": "/.well-known/lnurlp/:username", "destination": "/api/lnurlp?username=:username" },
-    { "source": "/api/lnurlp/cb/:username", "destination": "/api/lnurlp?username=:username&callback=1" }
+    { "source": "/.well-known/lnurlp/(.*)", "destination": "/api/lnurlp?username=$1" },
+    { "source": "/api/lnurlp/cb/(.*)", "destination": "/api/lnurlp?username=$1&callback=1" }
   ]
 }
