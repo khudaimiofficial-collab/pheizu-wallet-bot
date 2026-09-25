@@ -54,11 +54,28 @@ async function callSpeed(endpoint, method = "POST", body = null) {
 }
 
 if (bot) {
+  // /start (Now fetches and displays live balance directly)
   bot.start(async (ctx) => {
     const userId = ctx.from.id;
     const name = ctx.from.first_name || "User";
     const username = ctx.from.username || `user${userId}`;
     const lnAddress = `${username.toLowerCase()}@${DOMAIN}`;
+
+    // Fetch live balance from Speed
+    let liveBal = 0;
+    try {
+      const data = await callSpeed("balances", "GET");
+      const getSats = (target) => {
+        if (!target) return 0;
+        if (Array.isArray(target)) return target.find(b => (b.currency || "").toUpperCase() === "SATS")?.amount || 0;
+        if (typeof target === "object") return target.SATS ?? target.sats ?? 0;
+        if (typeof target === "number") return target;
+        return 0;
+      };
+      let avail = Array.isArray(data) ? getSats(data) : getSats(data.available);
+      let pending = Array.isArray(data) ? 0 : getSats(data.pending);
+      liveBal = avail + pending;
+    } catch (e) {}
 
     try {
       await ctx.setChatMenuButton({
@@ -68,17 +85,45 @@ if (bot) {
       });
     } catch (e) {}
 
-    ctx.reply(
+    let welcome =
       `⚡ *Welcome to Pheizu Wallet, ${name}!*\n\n` +
+      `💰 *Available Balance:* \`${Number(liveBal).toLocaleString()} sats\`\n` +
       `📬 *Your Lightning Address:*\n\`${lnAddress}\`\n\n` +
-      `Tap below to open your wallet:`,
-      {
+      `Tap below to launch your wallet:`;
+
+    if (userId === ADMIN_ID) {
+      welcome += `\n\n👑 *Admin:* \`/setkey <key>\` to update Speed key.`;
+    }
+
+    ctx.reply(welcome, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.webApp("⚡ Launch Pheizu Wallet", MINI_APP_URL)]
+      ])
+    });
+  });
+
+  bot.command("balance", async (ctx) => {
+    try {
+      const data = await callSpeed("balances", "GET");
+      const getSats = (target) => {
+        if (!target) return 0;
+        if (Array.isArray(target)) return target.find(b => (b.currency || "").toUpperCase() === "SATS")?.amount || 0;
+        if (typeof target === "object") return target.SATS ?? target.sats ?? 0;
+        if (typeof target === "number") return target;
+        return 0;
+      };
+      let avail = Array.isArray(data) ? getSats(data) : getSats(data.available);
+      let pending = Array.isArray(data) ? 0 : getSats(data.pending);
+      let total = avail + pending;
+
+      ctx.reply(`💰 *Pheizu Wallet Balance:*\n\n⚡ Available: *${Number(total).toLocaleString()} sats*`, {
         parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.webApp("⚡ Launch Pheizu Wallet", MINI_APP_URL)]
-        ])
-      }
-    );
+        ...Markup.inlineKeyboard([[Markup.button.webApp("⚡ Open Mini App", MINI_APP_URL)]])
+      });
+    } catch (e) {
+      ctx.reply(`❌ Could not fetch balance`);
+    }
   });
 
   bot.command("receive", async (ctx) => {
@@ -94,7 +139,7 @@ if (bot) {
       });
 
       const invoice = findInvoice(pmt);
-      if (!invoice) throw new Error("Speed did not return a Lightning invoice.");
+      if (!invoice) throw new Error("Could not get invoice.");
 
       ctx.reply(`⚡ *Invoice for ${sats} sats:*\n\n\`${invoice}\`\n\n_Tap to copy & pay._`, { parse_mode: "Markdown" });
     } catch (err) {
