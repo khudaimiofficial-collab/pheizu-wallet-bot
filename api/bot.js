@@ -9,16 +9,36 @@ const MINI_APP_URL = `https://${DOMAIN}`;
 let bot = null;
 if (BOT_TOKEN) {
   bot = new Telegraf(BOT_TOKEN);
-} else {
-  console.error("TELEGRAM_BOT_TOKEN is missing!");
 }
 
-async function callSpeed(endpoint, method = "POST", body = null, overrideKey = null) {
-  const keyToUse = overrideKey || DYNAMIC_SPEED_KEY;
-  if (!keyToUse) throw new Error("Speed API Key is missing.");
+// Deep search for invoice
+function findInvoice(obj) {
+  if (!obj) return null;
+  if (obj.payment_method_options?.lightning?.payment_request) return obj.payment_method_options.lightning.payment_request;
+  if (obj.payment_method_details?.lightning?.payment_request) return obj.payment_method_details.lightning.payment_request;
+  if (obj.payment_request) return obj.payment_request;
+  if (obj.next_action?.lightning_display_details?.payment_request) return obj.next_action.lightning_display_details.payment_request;
 
-  const auth = "Basic " + Buffer.from(keyToUse + ":").toString("base64");
-  const options = {
+  let found = null;
+  function scan(o) {
+    if (!o || typeof o !== "object") return;
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === "string") {
+        const s = v.trim();
+        if (/^(lnbc|lntb|lightning:)/i.test(s)) { if (!found) found = s; }
+      } else if (typeof v === "object") scan(v);
+    }
+  }
+  scan(obj);
+  return found || obj.hosted_url || obj.url;
+}
+
+async function callSpeed(endpoint, method = "POST", body = null) {
+  const key = DYNAMIC_SPEED_KEY || global.DYNAMIC_SPEED_KEY || process.env.SPEED_SECRET_KEY;
+  if (!key) throw new Error("Speed API Key is missing.");
+
+  const auth = "Basic " + Buffer.from(key + ":").toString("base64");
+  const res = await fetch(`https://api.tryspeed.com/${endpoint}`, {
     method,
     headers: {
       "accept": "application/json",
@@ -27,9 +47,7 @@ async function callSpeed(endpoint, method = "POST", body = null, overrideKey = n
       "speed-version": "2022-10-15"
     },
     body: body ? JSON.stringify(body) : null
-  };
-
-  const res = await fetch(`https://api.tryspeed.com/${endpoint}`, options);
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
   return data;
@@ -50,45 +68,47 @@ if (bot) {
       });
     } catch (e) {}
 
-    let welcome =
+    ctx.reply(
       `⚡ *Welcome to Pheizu Wallet, ${name}!*\n\n` +
-      `📬 *Your Permanent Lightning Address:*\n` +
-      `\`${lnAddress}\`\n\n` +
-      `Tap the button below to launch your wallet:`;
+      `📬 *Your Lightning Address:*\n\`${lnAddress}\`\n\n` +
+      `Tap below to open your wallet:`,
+      {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([
+          [Markup.button.webApp("⚡ Launch Pheizu Wallet", MINI_APP_URL)]
+        ])
+      }
+    );
+  });
 
-    if (userId === ADMIN_ID) {
-      welcome += `\n\n👑 *Admin:* \`/setkey <key>\` to update Speed key.`;
+  bot.command("receive", async (ctx) => {
+    const sats = parseInt(ctx.message.text.split(" ")[1]);
+    if (!sats || sats <= 0) return ctx.reply("⚠️ Usage: `/receive 100`");
+
+    try {
+      const pmt = await callSpeed("payments", "POST", {
+        amount: sats,
+        currency: "SATS",
+        target_currency: "SATS",
+        payment_methods: ["lightning"]
+      });
+
+      const invoice = findInvoice(pmt);
+      if (!invoice) throw new Error("Speed did not return a Lightning invoice.");
+
+      ctx.reply(`⚡ *Invoice for ${sats} sats:*\n\n\`${invoice}\`\n\n_Tap to copy & pay._`, { parse_mode: "Markdown" });
+    } catch (err) {
+      ctx.reply(`❌ ${err.message}`);
     }
-
-    ctx.reply(welcome, {
-      parse_mode: "Markdown",
-      ...Markup.inlineKeyboard([
-        [Markup.button.webApp("⚡ Launch Pheizu Wallet", MINI_APP_URL)]
-      ])
-    });
   });
 
   bot.command("setkey", async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
     const key = ctx.message.text.split(" ")[1]?.trim();
-    if (!key || (!key.startsWith("sk_test_") && !key.startsWith("sk_live_"))) {
-      return ctx.reply("⚠️ Usage: `/setkey sk_live_...`", { parse_mode: "Markdown" });
-    }
-
-    try {
-      await callSpeed("payments", "POST", {
-        amount: 10,
-        currency: "SATS",
-        target_currency: "SATS",
-        payment_methods: ["lightning"]
-      }, key);
-
-      DYNAMIC_SPEED_KEY = key;
-      global.DYNAMIC_SPEED_KEY = key;
-      ctx.reply("✅ *Speed Secret Key Verified & Saved!*", { parse_mode: "Markdown" });
-    } catch (err) {
-      ctx.reply(`❌ *Verification Failed:* ${err.message}`, { parse_mode: "Markdown" });
-    }
+    if (!key) return ctx.reply("Usage: /setkey sk_...");
+    DYNAMIC_SPEED_KEY = key;
+    global.DYNAMIC_SPEED_KEY = key;
+    ctx.reply("✅ Speed API Key updated!");
   });
 
   bot.on("message", (ctx) => {
