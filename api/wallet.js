@@ -13,6 +13,7 @@ const {
 const DOMAIN = process.env.DOMAIN || "pheizu-wallet-bot.vercel.app";
 const SPEED_BASE_URL = "https://api.tryspeed.com";
 
+// Recursive search for invoice or hosted URL
 function extractPaymentDetails(data) {
   let invoice = "";
   let url = "";
@@ -37,6 +38,7 @@ function extractPaymentDetails(data) {
   return { invoice, url };
 }
 
+// Universal Speed API caller
 async function speedRequest(endpoint, method = "GET", body = null) {
   const rawKey = (process.env.SPEED_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
   if (!rawKey) {
@@ -77,36 +79,6 @@ async function speedRequest(endpoint, method = "GET", body = null) {
   return json;
 }
 
-// Resolves a Lightning Address (name@domain) to a Bolt11 invoice
-async function resolveDestinationToInvoice(destination, sats) {
-  const clean = destination.trim().replace(/^lightning:/i, "");
-  if (!clean.includes("@")) return clean; // Already a BOLT11 invoice
-
-  const [name, host] = clean.split("@");
-  if (!name || !host) throw new Error("Invalid Lightning Address format.");
-
-  const lnurlUrl = `https://${host}/.well-known/lnurlp/${encodeURIComponent(name)}`;
-  const res = await fetch(lnurlUrl);
-  if (!res.ok) throw new Error(`Could not reach provider for ${destination}`);
-  const lnurlData = await res.json();
-
-  const msats = sats * 1000;
-  if (lnurlData.minSendable && msats < lnurlData.minSendable) {
-    throw new Error(`Amount below minimum of ${Math.ceil(lnurlData.minSendable / 1000)} sats.`);
-  }
-  if (lnurlData.maxSendable && msats > lnurlData.maxSendable) {
-    throw new Error(`Amount exceeds maximum of ${Math.floor(lnurlData.maxSendable / 1000)} sats.`);
-  }
-
-  const sep = lnurlData.callback.includes("?") ? "&" : "?";
-  const cbRes = await fetch(`${lnurlData.callback}${sep}amount=${msats}`);
-  const cbData = await cbRes.json();
-
-  const invoice = cbData.pr || cbData.payment_request;
-  if (!invoice) throw new Error(cbData.reason || "Provider did not return a valid invoice.");
-  return invoice;
-}
-
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -125,14 +97,14 @@ module.exports = async function handler(req, res) {
 
       if (tgId) await saveUserTelegramId(userKey, tgId);
 
-      // Check any pending Lightning Address deposits
+      // Auto-check and settle any pending Lightning Address deposits
       await checkPendingDeposits(userKey, speedRequest);
 
       const balance = await getBalance(userKey);
       return res.status(200).json({ success: true, balance, user: userKey });
     }
 
-    // 2. CREATE PAYMENT INVOICE (Receive Tab)
+    // 2. CREATE PAYMENT INVOICE (Receive tab)
     if (action === 'create-payment' && req.method === 'POST') {
       const { amount, user_id, username, telegram_id } = req.body || {};
       const userKey = normalizeUserKey(username || user_id, telegram_id);
@@ -164,7 +136,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 3. CHECK STATUS (Receive Verification)
+    // 3. CHECK STATUS (Polling from Mini App)
     if (action === 'check-status') {
       const paymentId = req.query.payment_id;
       const userParam = req.query.user_id || req.query.username;
@@ -202,7 +174,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 4. SEND SATS FROM BALANCE (Send Tab)
+    // 4. SEND SATS / WITHDRAW
     if (action === 'send' && req.method === 'POST') {
       const { destination, amount, user_id, username, telegram_id } = req.body || {};
       const userKey = normalizeUserKey(username || user_id, telegram_id);
@@ -216,17 +188,15 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ success: false, error: "Invalid amount." });
       }
 
-      const cleanDest = destination.trim().toLowerCase();
+      const cleanDest = destination.trim();
 
-      // =======================================================================
       // CASE A: INTERNAL TRANSFER TO ANOTHER BOT USER (Zero Fee, Instant)
-      // =======================================================================
-      if (cleanDest.endsWith(`@${DOMAIN}`)) {
-        const recipientUser = cleanDest.replace(`@${DOMAIN}`, "").trim();
+      if (cleanDest.toLowerCase().endsWith(`@${DOMAIN}`)) {
+        const recipientUser = cleanDest.toLowerCase().replace(`@${DOMAIN}`, "").trim();
 
         const transferRes = await internalTransfer(userKey, recipientUser, sats);
 
-        // Notify recipient immediately in Telegram
+        // Notify recipient in Telegram
         await notifyPaymentReceived(recipientUser, sats, transferRes.newToBal, userKey);
 
         return res.status(200).json({
@@ -237,9 +207,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // =======================================================================
-      // CASE B: EXTERNAL LIGHTNING WITHDRAWAL VIA SPEED
-      // =======================================================================
+      // CASE B: EXTERNAL SEND VIA SPEED API: POST /send
       const currentBal = await getBalance(userKey);
       if (currentBal < sats) {
         return res.status(400).json({ 
@@ -248,25 +216,25 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Escrow balance
+      // Deduct balance first (escrow)
       await deductBalance(userKey, sats);
 
       try {
-        // Resolve Lightning Address to a Bolt11 invoice
-        const bolt11 = await resolveDestinationToInvoice(cleanDest, sats);
+        const withdrawReq = cleanDest.replace(/^lightning:/i, "");
 
-        // Speed's correct withdrawal endpoint: POST /withdrawals
-        const withdrawal = await speedRequest("withdrawals", "POST", {
+        // Call Speed POST /send with exact documented fields
+        const sendResult = await speedRequest("send", "POST", {
           amount: sats,
           currency: "SATS",
           target_currency: "SATS",
-          payment_method: "lightning",
-          payment_request: bolt11
+          withdraw_method: "lightning",
+          withdraw_request: withdrawReq,
+          note: `Withdrawal by ${userKey}`
         });
 
         return res.status(200).json({
           success: true,
-          withdrawal_id: withdrawal.id,
+          result: sendResult,
           sent: sats,
           remaining_balance: await getBalance(userKey)
         });
@@ -277,12 +245,12 @@ module.exports = async function handler(req, res) {
 
         return res.status(500).json({
           success: false,
-          error: sendError.message || "Failed to broadcast withdrawal."
+          error: sendError.message || "Failed to broadcast payment across Lightning."
         });
       }
     }
 
-    return res.status(404).json({ success: false, error: `Invalid action '${action}' requested.` });
+    return res.status(404).json({ success: false, error: `Invalid action '${action}'` });
   } catch (err) {
     console.error("Wallet API Error:", err);
     return res.status(500).json({ success: false, error: err.message || "Server error occurred." });
