@@ -1,10 +1,5 @@
 // api/lnurlp.js
-const { 
-  normalizeUserKey, 
-  addBalance, 
-  isPaymentProcessed, 
-  markPaymentProcessed 
-} = require('../lib/db');
+const { normalizeUserKey } = require('../lib/db');
 
 const DOMAIN = process.env.DOMAIN || "pheizu-wallet-bot.vercel.app";
 const SPEED_BASE_URL = "https://api.tryspeed.com";
@@ -68,7 +63,7 @@ module.exports = async function handler(req, res) {
 
     const userKey = normalizeUserKey(username);
 
-    // STEP 2: INVOICE GENERATION CALLBACK
+    // STEP 2: GENERATE INVOICE WHEN SENDER ENTERS AN AMOUNT
     if (callback === "1" || amount) {
       const msats = Number(amount);
       const sats = Math.floor(msats / 1000);
@@ -77,39 +72,23 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ status: "ERROR", reason: "Amount must be at least 1 satoshi." });
       }
 
+      // Create payment on Speed with user metadata so the webhook knows who to credit
       const payment = await speedRequest("payments", "POST", {
         amount: sats,
         currency: "SATS",
         target_currency: "SATS",
         payment_methods: ["lightning"],
-        description: `⚡ Satoshis for ${userKey}@${DOMAIN}`
+        description: `⚡ Satoshis for ${userKey}@${DOMAIN}`,
+        metadata: {
+          user_key: userKey,
+          source: "lightning_address"
+        }
       });
 
       const bolt11 = extractInvoice(payment);
       if (!bolt11) {
         return res.status(500).json({ status: "ERROR", reason: "Speed did not return a valid Lightning invoice." });
       }
-
-      // Auto-poll and credit balance when paid
-      (async () => {
-        let count = 0;
-        const interval = setInterval(async () => {
-          count++;
-          if (count > 60) return clearInterval(interval);
-          try {
-            const check = await speedRequest(`payments/${payment.id}`, "GET");
-            const st = (check.status || "").toLowerCase();
-            if (st === "succeeded" || st === "paid") {
-              clearInterval(interval);
-              const alreadyCredited = await isPaymentProcessed(payment.id);
-              if (!alreadyCredited) {
-                await addBalance(userKey, sats);
-                await markPaymentProcessed(payment.id);
-              }
-            }
-          } catch (e) {}
-        }, 3000);
-      })();
 
       return res.status(200).json({
         pr: bolt11,
@@ -122,7 +101,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // STEP 1: METADATA
+    // STEP 1: INITIAL LNURLP METADATA (LUD-06 / LUD-16)
     const metadata = JSON.stringify([
       ["text/plain", `Pay to ${userKey}@${DOMAIN}`],
       ["text/identifier", `${userKey}@${DOMAIN}`]
@@ -133,8 +112,8 @@ module.exports = async function handler(req, res) {
       tag: "payRequest",
       commentAllowed: 0,
       callback: `https://${DOMAIN}/api/lnurlp?username=${encodeURIComponent(userKey)}&callback=1`,
-      minSendable: 1000,
-      maxSendable: 100000000000,
+      minSendable: 1000,          // 1 sat minimum
+      maxSendable: 100000000000,  // 100,000,000 sats maximum
       metadata: metadata
     });
 
