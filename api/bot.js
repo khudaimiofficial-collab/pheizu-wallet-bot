@@ -1,10 +1,8 @@
 const { Telegraf, Markup } = require("telegraf");
 
-const ADMIN_ID = 8960497898; // Your Admin Telegram Chat ID
+const ADMIN_ID = 8960497898;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 let DYNAMIC_SPEED_KEY = process.env.SPEED_SECRET_KEY || "";
-
-// Fixed: Hardcoded fallback so the button NEVER crashes
 const MINI_APP_URL = process.env.VERCEL_PROJECT_URL || "https://pheizu-wallet-bot.vercel.app";
 
 let bot = null;
@@ -14,7 +12,38 @@ if (BOT_TOKEN) {
   console.error("CRITICAL: TELEGRAM_BOT_TOKEN is missing!");
 }
 
-// Universal deep search for Lightning invoices (lnbc...) or checkout URLs
+// User Ledger Helpers
+const memoryDB = global._memDB = global._memDB || { balances: {}, payments: {} };
+
+async function getUserBalance(userId) {
+  const key = `user_bal_${userId}`;
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (redisUrl && redisToken) {
+    try {
+      const res = await fetch(`${redisUrl}/get/${key}`, { headers: { Authorization: `Bearer ${redisToken}` } });
+      const d = await res.json();
+      return Number(d.result || 0);
+    } catch (e) {}
+  }
+  return Number(memoryDB.balances[userId] || 0);
+}
+
+async function adjustUserBalance(userId, delta) {
+  const key = `user_bal_${userId}`;
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (redisUrl && redisToken) {
+    try {
+      const res = await fetch(`${redisUrl}/incrby/${key}/${delta}`, { headers: { Authorization: `Bearer ${redisToken}` } });
+      const d = await res.json();
+      return Number(d.result || 0);
+    } catch (e) {}
+  }
+  memoryDB.balances[userId] = Math.max(0, Number(memoryDB.balances[userId] || 0) + delta);
+  return memoryDB.balances[userId];
+}
+
 function extractInvoice(obj) {
   let invoice = null;
   function scan(o) {
@@ -36,7 +65,6 @@ function extractInvoice(obj) {
   return invoice;
 }
 
-// Helper to call Speed API
 async function callSpeed(endpoint, method = "POST", body = null, overrideKey = null) {
   const keyToUse = overrideKey || DYNAMIC_SPEED_KEY;
   if (!keyToUse) throw new Error("Speed API Key is not set. Admin must configure it using /setkey.");
@@ -63,53 +91,81 @@ async function callSpeed(endpoint, method = "POST", body = null, overrideKey = n
 
 if (bot) {
   // /start
-  bot.start((ctx) => {
+  bot.start(async (ctx) => {
     const userId = ctx.from.id;
     const name = ctx.from.first_name || "User";
+    const userBal = await getUserBalance(userId);
 
     let welcome = `⚡ *Welcome to Pheizu Wallet, ${name}!*\n\n`;
 
     if (userId === ADMIN_ID) {
       welcome +=
         `👑 *ADMIN CONSOLE ACTIVE*\n` +
-        `• \`/setkey <speed_key>\` - Set Speed Secret Key\n` +
-        `• \`/admin\` - View Wallet Status\n\n`;
+        `• \`/setkey <speed_key>\` - Set Speed Key\n` +
+        `• \`/masterbalance\` - View master Speed account\n\n`;
     }
 
     welcome +=
+      `💰 *Your Personal Balance:* \`${userBal.toLocaleString()} sats\`\n\n` +
       `*Commands:*\n` +
-      `💰 /balance - Check balance\n` +
-      `📥 /receive <sats> - Generate invoice\n` +
-      `📤 /send <dest> <sats> - Send satoshis\n\n` +
-      `Or launch the interactive Mini App below:`;
+      `💰 /balance - View your personal balance\n` +
+      `📥 /receive <sats> - Deposit satoshis\n` +
+      `📤 /send <dest> <sats> - Send from your balance\n\n` +
+      `Or open the full interactive Mini App below:`;
 
     ctx.reply(welcome, {
       parse_mode: "Markdown",
       ...Markup.inlineKeyboard([
         [Markup.button.webApp("⚡ Open Pheizu Mini App", MINI_APP_URL)],
         [
-          Markup.button.callback("💰 Balance", "cmd_balance"),
-          Markup.button.callback("📥 Receive 100", "cmd_receive_100")
+          Markup.button.callback("💰 My Balance", "cmd_balance"),
+          Markup.button.callback("📥 Deposit 100", "cmd_receive_100")
         ]
       ])
     });
   });
 
+  // /balance (SHOWS ONLY THIS USER'S BALANCE)
+  bot.command("balance", async (ctx) => {
+    const userId = ctx.from.id;
+    const userBal = await getUserBalance(userId);
+    ctx.reply(
+      `💰 *Your Personal Balance:*\n\n⚡ Available: *${userBal.toLocaleString()} sats*`,
+      {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([[Markup.button.webApp("⚡ Open Mini App", MINI_APP_URL)]])
+      }
+    );
+  });
+
+  bot.action("cmd_balance", async (ctx) => {
+    await ctx.answerCbQuery();
+    const userBal = await getUserBalance(ctx.from.id);
+    ctx.reply(`💰 Your Balance: *${userBal.toLocaleString()} sats*`, { parse_mode: "Markdown" });
+  });
+
+  // /masterbalance (ADMIN ONLY - shows Master Speed API account balance)
+  bot.command("masterbalance", async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
+    try {
+      const data = await callSpeed("balances", "GET");
+      const avail = data.available?.find?.((b) => b.currency === "SATS")?.amount || 0;
+      ctx.reply(`👑 *Master Speed Account Balance:* ${Number(avail).toLocaleString()} sats`, { parse_mode: "Markdown" });
+    } catch (e) {
+      ctx.reply(`❌ ${e.message}`);
+    }
+  });
+
   // /setkey (ADMIN ONLY)
   bot.command("setkey", async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) {
-      return ctx.reply("⛔ *Unauthorized:* This command is restricted to the bot admin.", { parse_mode: "Markdown" });
-    }
-
+    if (ctx.from.id !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
     const args = ctx.message.text.split(" ");
     const newKey = args[1]?.trim();
-
     if (!newKey || (!newKey.startsWith("sk_test_") && !newKey.startsWith("sk_live_"))) {
-      return ctx.reply("⚠️ *Usage:* `/setkey sk_live_...` or `/setkey sk_test_...`", { parse_mode: "Markdown" });
+      return ctx.reply("⚠️ Usage: `/setkey sk_live_...`", { parse_mode: "Markdown" });
     }
 
-    ctx.reply("🔍 *Verifying key with Speed.app...*", { parse_mode: "Markdown" });
-
+    ctx.reply("🔍 Verifying key with Speed...", { parse_mode: "Markdown" });
     try {
       await callSpeed("payments", "POST", {
         amount: 10,
@@ -120,85 +176,15 @@ if (bot) {
 
       DYNAMIC_SPEED_KEY = newKey;
       global.DYNAMIC_SPEED_KEY = newKey;
-
-      ctx.reply(
-        `✅ *Speed Secret Key Verified & Saved!*\n\n` +
-        `🔑 *Active Key:* \`${newKey}\`\n` +
-        `The wallet is ready to send, receive, and check balances.`,
-        { parse_mode: "Markdown" }
-      );
+      ctx.reply(`✅ *Speed Secret Key Verified & Saved!*`, { parse_mode: "Markdown" });
     } catch (err) {
-      ctx.reply(`❌ *Verification Failed:* ${err.message}\nKey was not updated.`, { parse_mode: "Markdown" });
+      ctx.reply(`❌ *Verification Failed:* ${err.message}`, { parse_mode: "Markdown" });
     }
   });
 
-  // /admin (ADMIN ONLY)
-  bot.command("admin", (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) {
-      return ctx.reply("⛔ *Unauthorized:* Admin only.", { parse_mode: "Markdown" });
-    }
-
-    const keyStatus = DYNAMIC_SPEED_KEY
-      ? `\`${DYNAMIC_SPEED_KEY.substring(0, 10)}...${DYNAMIC_SPEED_KEY.slice(-4)}\``
-      : "❌ _Not Set (Use /setkey)_";
-
-    ctx.reply(
-      `👑 *Pheizu Admin Console*\n\n` +
-      `👤 *Admin ID:* \`${ADMIN_ID}\`\n` +
-      `🔑 *Active Speed Key:* ${keyStatus}\n` +
-      `🌐 *Mini App URL:* ${MINI_APP_URL}\n\n` +
-      `To update your Speed key, send: \`/setkey <your_key>\``,
-      { parse_mode: "Markdown" }
-    );
-  });
-
-  // /balance
-  bot.command("balance", async (ctx) => {
-    try {
-      const data = await callSpeed("balances", "GET");
-      
-      let avail = 0;
-      let pending = 0;
-
-      const getSats = (target) => {
-        if (!target) return 0;
-        if (Array.isArray(target)) return target.find(b => (b.currency || "").toUpperCase() === "SATS")?.amount || 0;
-        if (typeof target === "object") return target.SATS ?? target.sats ?? 0;
-        return 0;
-      };
-
-      if (Array.isArray(data)) {
-        avail = getSats(data);
-      } else if (typeof data === "object") {
-        avail = getSats(data.available);
-        pending = getSats(data.pending);
-      }
-
-      let msg = `💰 *Pheizu Wallet Balance:*\n\n⚡ Available: *${Number(avail).toLocaleString()} sats*`;
-      if (pending > 0) msg += `\n⏳ Pending: *${Number(pending).toLocaleString()} sats*`;
-
-      ctx.reply(msg, {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([[Markup.button.webApp("⚡ Open Mini App", MINI_APP_URL)]])
-      });
-    } catch (err) {
-      ctx.reply(`❌ ${err.message}`);
-    }
-  });
-
-  bot.action("cmd_balance", async (ctx) => {
-    await ctx.answerCbQuery();
-    try {
-      const data = await callSpeed("balances", "GET");
-      const avail = data.available?.find?.((b) => b.currency === "SATS")?.amount || 0;
-      ctx.reply(`💰 Balance: *${Number(avail).toLocaleString()} sats*`, { parse_mode: "Markdown" });
-    } catch(e) {
-      ctx.reply(`❌ Error checking balance`);
-    }
-  });
-
-  // /receive <sats> (Fixed: Uses deep extractor so it NEVER returns undefined)
+  // /receive <sats> (Auto-credits user when paid)
   bot.command("receive", async (ctx) => {
+    const userId = ctx.from.id;
     const args = ctx.message.text.split(" ");
     const sats = parseInt(args[1]);
 
@@ -211,39 +197,59 @@ if (bot) {
         amount: sats,
         currency: "SATS",
         target_currency: "SATS",
-        payment_methods: ["lightning"]
+        payment_methods: ["lightning"],
+        metadata: { telegram_user_id: String(userId) }
       });
 
       const invoice = extractInvoice(pmt);
+      if (!invoice) return ctx.reply("⚠️ Could not generate invoice.");
 
-      if (!invoice) {
-        return ctx.reply(`⚠️ Invoice created (ID: \`${pmt.id}\`), but no raw bolt11 string was returned. Check your Speed dashboard.`, { parse_mode: "Markdown" });
-      }
+      memoryDB.payments[pmt.id] = { userId: String(userId), amount: sats, credited: false };
 
-      ctx.reply(`⚡ *Invoice for ${sats} sats:*\n\n\`${invoice}\`\n\n_Tap to copy & pay with any Lightning wallet._`, { parse_mode: "Markdown" });
-    } catch (err) {
-      ctx.reply(`❌ Invoice creation failed: ${err.message}`);
-    }
-  });
+      ctx.reply(
+        `⚡ *Deposit Invoice for ${sats} sats:*\n\n\`${invoice}\`\n\n_Tap to copy & pay. Your balance will be credited automatically once paid._`,
+        { parse_mode: "Markdown" }
+      );
 
-  bot.action("cmd_receive_100", async (ctx) => {
-    await ctx.answerCbQuery();
-    try {
-      const pmt = await callSpeed("payments", "POST", {
-        amount: 100,
-        currency: "SATS",
-        target_currency: "SATS",
-        payment_methods: ["lightning"]
-      });
-      const invoice = extractInvoice(pmt) || pmt.id;
-      ctx.reply(`⚡ *Invoice (100 sats):*\n\n\`${invoice}\``, { parse_mode: "Markdown" });
+      // Auto-poll for 3 minutes to notify user in chat
+      let checks = 0;
+      const timer = setInterval(async () => {
+        checks++;
+        if (checks > 60) return clearInterval(timer);
+        try {
+          const check = await callSpeed(`payments/${pmt.id}`, "GET");
+          const st = (check.status || "").toLowerCase();
+          if (st === "succeeded" || st === "paid") {
+            clearInterval(timer);
+            const record = memoryDB.payments[pmt.id];
+            if (record && !record.credited) {
+              record.credited = true;
+              const newBal = await adjustUserBalance(userId, sats);
+              ctx.reply(
+                `🎉 *Deposit Confirmed!*\n\n` +
+                `⚡ Credited: *+${sats} sats*\n` +
+                `💰 Your New Balance: *${newBal.toLocaleString()} sats*`,
+                { parse_mode: "Markdown" }
+              );
+            }
+          }
+        } catch (e) {}
+      }, 3000);
+
     } catch (err) {
       ctx.reply(`❌ ${err.message}`);
     }
   });
 
-  // /send <destination> <sats>
+  bot.action("cmd_receive_100", async (ctx) => {
+    await ctx.answerCbQuery();
+    ctx.message = { text: "/receive 100" };
+    bot.handleUpdate(ctx.update);
+  });
+
+  // /send <destination> <sats> (Only allows sending from user's personal balance)
   bot.command("send", async (ctx) => {
+    const userId = ctx.from.id;
     const args = ctx.message.text.split(" ");
     const dest = args[1];
     const sats = parseInt(args[2]);
@@ -251,6 +257,14 @@ if (bot) {
     if (!dest || !sats || sats <= 0) {
       return ctx.reply("⚠️ Usage: `/send <address/invoice> <sats>`\nExample: `/send user@speed.app 50`", { parse_mode: "Markdown" });
     }
+
+    const currentBal = await getUserBalance(userId);
+    if (currentBal < sats) {
+      return ctx.reply(`❌ *Insufficient balance!* You have *${currentBal.toLocaleString()} sats*, but tried to send *${sats} sats*.`, { parse_mode: "Markdown" });
+    }
+
+    // Deduct user balance
+    await adjustUserBalance(userId, -sats);
 
     try {
       const res = await callSpeed("send", "POST", {
@@ -261,18 +275,24 @@ if (bot) {
         withdraw_request: dest
       });
 
-      ctx.reply(`✅ *Sent ${sats} sats!*\n\n🎯 Dest: \`${dest}\`\n🆔 TX: \`${res.id || "OK"}\``, { parse_mode: "Markdown" });
+      const updatedBal = await getUserBalance(userId);
+      ctx.reply(
+        `✅ *Payment Sent Successfully!*\n\n` +
+        `💸 Amount: *${sats} sats*\n` +
+        `🎯 Dest: \`${dest}\`\n` +
+        `💰 Remaining Balance: *${updatedBal.toLocaleString()} sats*`,
+        { parse_mode: "Markdown" }
+      );
     } catch (err) {
-      ctx.reply(`❌ Send failed: ${err.message}`);
+      // Refund if broadcast fails
+      await adjustUserBalance(userId, sats);
+      ctx.reply(`❌ Send failed: ${err.message}\nYour sats have been refunded.`, { parse_mode: "Markdown" });
     }
   });
 }
 
-// Vercel Serverless Webhook Handler
 module.exports = async (req, res) => {
-  if (!bot) {
-    return res.status(500).send("TELEGRAM_BOT_TOKEN is not configured.");
-  }
+  if (!bot) return res.status(500).send("TELEGRAM_BOT_TOKEN missing.");
   if (req.method === "POST") {
     try {
       let body = req.body;
@@ -280,9 +300,8 @@ module.exports = async (req, res) => {
       if (body) await bot.handleUpdate(body);
       return res.status(200).send("OK");
     } catch (e) {
-      console.error("Telegram update error:", e);
       return res.status(200).send("OK");
     }
   }
-  return res.status(200).send("Pheizu Wallet Bot is active and running!");
+  return res.status(200).send("Pheizu Wallet Bot is running!");
 };
