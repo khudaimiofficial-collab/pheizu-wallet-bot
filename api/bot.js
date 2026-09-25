@@ -1,180 +1,176 @@
-const { Telegraf, Markup } = require("telegraf");
+// api/bot.js
+const { Telegraf, Markup } = require('telegraf');
+const { 
+  normalizeUserKey, 
+  getBalance, 
+  addBalance, 
+  deductBalance 
+} = require('../lib/db');
 
-const ADMIN_ID = 8960497898;
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-let DYNAMIC_SPEED_KEY = process.env.SPEED_SECRET_KEY || "";
-const DOMAIN = "pheizu-wallet-bot.vercel.app";
-const MINI_APP_URL = `https://${DOMAIN}`;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const WEBAPP_URL = process.env.WEBAPP_URL || "https://pheizu-wallet-bot.vercel.app";
+const SPEED_SECRET_KEY = process.env.SPEED_SECRET_KEY || "";
+const SPEED_BASE_URL = "https://api.tryspeed.com";
 
-let bot = null;
-if (BOT_TOKEN) {
-  bot = new Telegraf(BOT_TOKEN);
-}
+const bot = new Telegraf(BOT_TOKEN);
 
-// Deep search for invoice
-function findInvoice(obj) {
-  if (!obj) return null;
-  if (obj.payment_method_options?.lightning?.payment_request) return obj.payment_method_options.lightning.payment_request;
-  if (obj.payment_method_details?.lightning?.payment_request) return obj.payment_method_details.lightning.payment_request;
-  if (obj.payment_request) return obj.payment_request;
-  if (obj.next_action?.lightning_display_details?.payment_request) return obj.next_action.lightning_display_details.payment_request;
-
-  let found = null;
-  function scan(o) {
-    if (!o || typeof o !== "object") return;
-    for (const [k, v] of Object.entries(o)) {
-      if (typeof v === "string") {
-        const s = v.trim();
-        if (/^(lnbc|lntb|lightning:)/i.test(s)) { if (!found) found = s; }
-      } else if (typeof v === "object") scan(v);
-    }
+// Helper for Speed payouts in chat
+async function speedPay(destination, sats) {
+  const authHeader = "Basic " + Buffer.from(SPEED_SECRET_KEY + ":").toString("base64");
+  const payload = { currency: "SATS", amount: sats };
+  if (destination.includes("@")) {
+    payload.lnurl = destination;
+  } else {
+    payload.payment_request = destination.replace(/^lightning:/i, "");
   }
-  scan(obj);
-  return found || obj.hosted_url || obj.url;
-}
 
-async function callSpeed(endpoint, method = "POST", body = null) {
-  const key = DYNAMIC_SPEED_KEY || global.DYNAMIC_SPEED_KEY || process.env.SPEED_SECRET_KEY;
-  if (!key) throw new Error("Speed API Key is missing.");
-
-  const auth = "Basic " + Buffer.from(key + ":").toString("base64");
-  const res = await fetch(`https://api.tryspeed.com/${endpoint}`, {
-    method,
-    headers: {
-      "accept": "application/json",
-      "authorization": auth,
-      "content-type": "application/json",
-      "speed-version": "2022-10-15"
-    },
-    body: body ? JSON.stringify(body) : null
+  const res = await fetch(`${SPEED_BASE_URL}/v1/payouts`, {
+    method: "POST",
+    headers: { "Authorization": authHeader, "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || "Payment routing failed");
   return data;
 }
 
-if (bot) {
-  // /start (Now fetches and displays live balance directly)
-  bot.start(async (ctx) => {
-    const userId = ctx.from.id;
-    const name = ctx.from.first_name || "User";
-    const username = ctx.from.username || `user${userId}`;
-    const lnAddress = `${username.toLowerCase()}@${DOMAIN}`;
+// /start command
+bot.start(async (ctx) => {
+  const userKey = normalizeUserKey(ctx.from);
+  const balance = await getBalance(userKey);
 
-    // Fetch live balance from Speed
-    let liveBal = 0;
-    try {
-      const data = await callSpeed("balances", "GET");
-      const getSats = (target) => {
-        if (!target) return 0;
-        if (Array.isArray(target)) return target.find(b => (b.currency || "").toUpperCase() === "SATS")?.amount || 0;
-        if (typeof target === "object") return target.SATS ?? target.sats ?? 0;
-        if (typeof target === "number") return target;
-        return 0;
-      };
-      let avail = Array.isArray(data) ? getSats(data) : getSats(data.available);
-      let pending = Array.isArray(data) ? 0 : getSats(data.pending);
-      liveBal = avail + pending;
-    } catch (e) {}
+  const welcomeMessage = 
+    `⚡ *Welcome to Pheizu Wallet, ${ctx.from.first_name || "friend"}!*\n\n` +
+    `💳 *Your Lightning Address:*\n\`${userKey}@pheizu-wallet-bot.vercel.app\`\n\n` +
+    `💰 *Available Balance:* \`${balance.toLocaleString()} sats\`\n\n` +
+    `Use the buttons below to open your Mini App or manage your satoshis directly in chat.`;
 
-    try {
-      await ctx.setChatMenuButton({
-        type: "web_app",
-        text: "⚡ Open Wallet",
-        web_app: { url: MINI_APP_URL }
-      });
-    } catch (e) {}
+  return ctx.replyWithMarkdown(
+    welcomeMessage,
+    Markup.inlineKeyboard([
+      [Markup.button.webApp("🚀 Open Mini App", WEBAPP_URL)],
+      [
+        Markup.button.callback("🔄 Refresh Balance", "cb_balance"),
+        Markup.button.callback("📥 Deposit", "cb_receive")
+      ]
+    ])
+  );
+});
 
-    let welcome =
-      `⚡ *Welcome to Pheizu Wallet, ${name}!*\n\n` +
-      `💰 *Available Balance:* \`${Number(liveBal).toLocaleString()} sats\`\n` +
-      `📬 *Your Lightning Address:*\n\`${lnAddress}\`\n\n` +
-      `Tap below to launch your wallet:`;
+// /balance command
+bot.command('balance', async (ctx) => {
+  const userKey = normalizeUserKey(ctx.from);
+  const balance = await getBalance(userKey);
 
-    if (userId === ADMIN_ID) {
-      welcome += `\n\n👑 *Admin:* \`/setkey <key>\` to update Speed key.`;
-    }
+  return ctx.replyWithMarkdown(
+    `⚡ *Account:* \`${userKey}\`\n💰 *Balance:* \`${balance.toLocaleString()} sats\``,
+    Markup.inlineKeyboard([
+      [Markup.button.webApp("⚡ Open Wallet", WEBAPP_URL)],
+      [Markup.button.callback("🔄 Refresh", "cb_balance")]
+    ])
+  );
+});
 
-    ctx.reply(welcome, {
-      parse_mode: "Markdown",
+// Callback query: cb_balance
+bot.action('cb_balance', async (ctx) => {
+  const userKey = normalizeUserKey(ctx.from);
+  const balance = await getBalance(userKey);
+  await ctx.answerCbQuery("Balance updated!");
+  return ctx.editMessageText(
+    `⚡ *Account:* \`${userKey}\`\n💰 *Current Balance:* \`${balance.toLocaleString()} sats\``,
+    {
+      parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
-        [Markup.button.webApp("⚡ Launch Pheizu Wallet", MINI_APP_URL)]
+        [Markup.button.webApp("🚀 Open Mini App", WEBAPP_URL)],
+        [Markup.button.callback("🔄 Refresh Balance", "cb_balance")]
       ])
-    });
-  });
-
-  bot.command("balance", async (ctx) => {
-    try {
-      const data = await callSpeed("balances", "GET");
-      const getSats = (target) => {
-        if (!target) return 0;
-        if (Array.isArray(target)) return target.find(b => (b.currency || "").toUpperCase() === "SATS")?.amount || 0;
-        if (typeof target === "object") return target.SATS ?? target.sats ?? 0;
-        if (typeof target === "number") return target;
-        return 0;
-      };
-      let avail = Array.isArray(data) ? getSats(data) : getSats(data.available);
-      let pending = Array.isArray(data) ? 0 : getSats(data.pending);
-      let total = avail + pending;
-
-      ctx.reply(`💰 *Pheizu Wallet Balance:*\n\n⚡ Available: *${Number(total).toLocaleString()} sats*`, {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([[Markup.button.webApp("⚡ Open Mini App", MINI_APP_URL)]])
-      });
-    } catch (e) {
-      ctx.reply(`❌ Could not fetch balance`);
     }
-  });
+  );
+});
 
-  bot.command("receive", async (ctx) => {
-    const sats = parseInt(ctx.message.text.split(" ")[1]);
-    if (!sats || sats <= 0) return ctx.reply("⚠️ Usage: `/receive 100`");
+// /receive command
+bot.command('receive', async (ctx) => {
+  const userKey = normalizeUserKey(ctx.from);
+  return ctx.replyWithMarkdown(
+    `📥 *Receive Satoshis:*\n\n` +
+    `Share your Lightning Address:\n\`${userKey}@pheizu-wallet-bot.vercel.app\`\n\n` +
+    `Or open the Mini App to generate an instant QR invoice!`,
+    Markup.inlineKeyboard([
+      [Markup.button.webApp("⚡ Generate Invoice QR", WEBAPP_URL)]
+    ])
+  );
+});
 
-    try {
-      const pmt = await callSpeed("payments", "POST", {
-        amount: sats,
-        currency: "SATS",
-        target_currency: "SATS",
-        payment_methods: ["lightning"]
-      });
+bot.action('cb_receive', async (ctx) => {
+  await ctx.answerCbQuery();
+  const userKey = normalizeUserKey(ctx.from);
+  return ctx.replyWithMarkdown(
+    `📥 *Lightning Address:*\n\`${userKey}@pheizu-wallet-bot.vercel.app\``,
+    Markup.inlineKeyboard([
+      [Markup.button.webApp("⚡ Open Invoice Generator", WEBAPP_URL)]
+    ])
+  );
+});
 
-      const invoice = findInvoice(pmt);
-      if (!invoice) throw new Error("Could not get invoice.");
+// /send <destination> <amount> command in chat
+bot.command('send', async (ctx) => {
+  const userKey = normalizeUserKey(ctx.from);
+  const parts = ctx.message.text.trim().split(/\s+/);
 
-      ctx.reply(`⚡ *Invoice for ${sats} sats:*\n\n\`${invoice}\`\n\n_Tap to copy & pay._`, { parse_mode: "Markdown" });
-    } catch (err) {
-      ctx.reply(`❌ ${err.message}`);
-    }
-  });
-
-  bot.command("setkey", async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return ctx.reply("⛔ Admin only.");
-    const key = ctx.message.text.split(" ")[1]?.trim();
-    if (!key) return ctx.reply("Usage: /setkey sk_...");
-    DYNAMIC_SPEED_KEY = key;
-    global.DYNAMIC_SPEED_KEY = key;
-    ctx.reply("✅ Speed API Key updated!");
-  });
-
-  bot.on("message", (ctx) => {
-    ctx.reply(
-      "⚡ Open your wallet using the button below:",
-      Markup.inlineKeyboard([[Markup.button.webApp("⚡ Open Wallet", MINI_APP_URL)]])
+  if (parts.length < 3) {
+    return ctx.replyWithMarkdown(
+      `⚠️ *Usage:* \`/send <address_or_invoice> <amount_in_sats>\`\n` +
+      `*Example:* \`/send satoshi@speed.app 21\``
     );
-  });
-}
+  }
 
+  const destination = parts[1];
+  const sats = Math.floor(Number(parts[2]));
+
+  if (!sats || sats <= 0) {
+    return ctx.reply("❌ Please enter a valid number of satoshis.");
+  }
+
+  const currentBal = await getBalance(userKey);
+  if (currentBal < sats) {
+    return ctx.reply(`❌ Insufficient balance. You have ${currentBal} sats, tried to send ${sats} sats.`);
+  }
+
+  const statusMsg = await ctx.reply("⏳ Broadcasting payment over Lightning...");
+
+  try {
+    await deductBalance(userKey, sats);
+    await speedPay(destination, sats);
+    const newBal = await getBalance(userKey);
+
+    return ctx.telegram.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      null,
+      `✅ *Sent ${sats.toLocaleString()} sats successfully!*\n💰 *New Balance:* \`${newBal.toLocaleString()} sats\``,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    await addBalance(userKey, sats); // Refund on failure
+    return ctx.telegram.editMessageText(
+      ctx.chat.id,
+      statusMsg.message_id,
+      null,
+      `❌ *Payment Failed:* ${err.message}\nYour balance has been refunded.`
+    );
+  }
+});
+
+// Vercel Serverless Webhook Handler
 module.exports = async (req, res) => {
-  if (!bot) return res.status(500).send("BOT_TOKEN missing.");
-  if (req.method === "POST") {
+  if (req.method === 'POST') {
     try {
-      let body = req.body;
-      if (typeof body === "string") body = JSON.parse(body);
-      if (body) await bot.handleUpdate(body);
+      await bot.handleUpdate(req.body);
       return res.status(200).send("OK");
     } catch (e) {
-      return res.status(200).send("OK");
+      console.error("Bot update error:", e);
+      return res.status(200).send("Error handled");
     }
   }
-  return res.status(200).send("Pheizu Wallet Bot is running!");
+  return res.status(200).send("Bot Webhook is Active");
 };
