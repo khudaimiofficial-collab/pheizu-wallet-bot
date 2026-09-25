@@ -4,8 +4,10 @@ const {
   normalizeUserKey,
   saveUserTelegramId,
   getBalance, 
-  addBalance, 
-  deductBalance 
+  claimPaymentAndCredit,
+  deductBalance,
+  internalTransfer,
+  notifyPaymentReceived
 } = require('../lib/db');
 
 const BOT_TOKEN = (process.env.BOT_TOKEN || "").trim();
@@ -16,7 +18,6 @@ const SPEED_BASE_URL = "https://api.tryspeed.com";
 
 const bot = new Telegraf(BOT_TOKEN || "MISSING_TOKEN");
 
-// Helper: Escape HTML
 function escapeHtml(str = "") {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -24,7 +25,7 @@ function escapeHtml(str = "") {
     .replace(/>/g, "&gt;");
 }
 
-// Middleware: Always save Telegram Chat ID on every single interaction
+// Middleware: Auto-save Telegram chat ID on every interaction
 bot.use(async (ctx, next) => {
   if (ctx.from?.id) {
     const userKey = normalizeUserKey(ctx.from);
@@ -35,68 +36,25 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-// Helper: Automatically resolves a Lightning Address (name@domain) to a Bolt11 invoice
-async function resolveDestinationToInvoice(destination, sats) {
-  const clean = destination.trim().replace(/^lightning:/i, "");
-  
-  // If it's already a BOLT11 invoice (lnbc... or lntb...)
-  if (!clean.includes("@")) {
-    return clean;
-  }
-
-  // It's a Lightning Address (e.g. satoshi@speed.app)
-  const [name, host] = clean.split("@");
-  if (!name || !host) {
-    throw new Error("Invalid Lightning Address format. Example: name@speed.app");
-  }
-
-  const lnurlUrl = `https://${host}/.well-known/lnurlp/${encodeURIComponent(name)}`;
-  const res = await fetch(lnurlUrl);
-  if (!res.ok) {
-    throw new Error(`Could not resolve Lightning Address at ${host}`);
-  }
-  const lnurlData = await res.json();
-
-  const msats = sats * 1000;
-  if (lnurlData.minSendable && msats < lnurlData.minSendable) {
-    throw new Error(`Amount is below minimum of ${Math.ceil(lnurlData.minSendable / 1000)} sats.`);
-  }
-  if (lnurlData.maxSendable && msats > lnurlData.maxSendable) {
-    throw new Error(`Amount exceeds maximum of ${Math.floor(lnurlData.maxSendable / 1000)} sats.`);
-  }
-
-  const separator = lnurlData.callback.includes("?") ? "&" : "?";
-  const cbRes = await fetch(`${lnurlData.callback}${separator}amount=${msats}`);
-  if (!cbRes.ok) {
-    throw new Error("Failed to retrieve invoice from recipient's Lightning provider.");
-  }
-  const cbData = await cbRes.json();
-
-  const invoice = cbData.pr || cbData.payment_request;
-  if (!invoice) {
-    throw new Error(cbData.reason || "Provider did not return a valid Lightning invoice.");
-  }
-
-  return invoice;
-}
-
-// Helper: Speed Payout
-async function speedPay(destination, sats) {
+// Speed Instant Send Helper using POST /send
+async function speedInstantSend(destination, sats, userKey) {
   if (!SPEED_SECRET_KEY) {
-    throw new Error("SPEED_SECRET_KEY is not configured in Vercel.");
+    throw new Error("SPEED_SECRET_KEY is not configured.");
   }
-
-  // 1. Resolve address to Bolt11 invoice first
-  const bolt11Invoice = await resolveDestinationToInvoice(destination, sats);
 
   const authHeader = "Basic " + Buffer.from(SPEED_SECRET_KEY + ":").toString("base64");
+  const withdrawReq = destination.trim().replace(/^lightning:/i, "");
+
   const payload = {
-    currency: "SATS",
     amount: sats,
-    payment_request: bolt11Invoice
+    currency: "SATS",
+    target_currency: "SATS",
+    withdraw_method: "lightning",
+    withdraw_request: withdrawReq,
+    note: `Withdrawal by ${userKey}`
   };
 
-  const res = await fetch(`${SPEED_BASE_URL}/payouts`, {
+  const res = await fetch(`${SPEED_BASE_URL}/send`, {
     method: "POST",
     headers: {
       "Authorization": authHeader,
@@ -113,7 +71,7 @@ async function speedPay(destination, sats) {
 
   if (!res.ok) {
     const msg = json?.message || json?.error?.message || json?.errors?.[0]?.message || text;
-    throw new Error(msg || `Speed Payout failed with status ${res.status}`);
+    throw new Error(msg || `Speed send failed with status ${res.status}`);
   }
 
   return json;
@@ -178,18 +136,7 @@ bot.action('cb_balance', async (ctx) => {
   } catch (err) {}
 });
 
-// /receive command
-bot.command('receive', async (ctx) => {
-  const userKey = normalizeUserKey(ctx.from);
-  return await ctx.replyWithHTML(
-    `📥 <b>Receive Satoshis:</b>\n\n` +
-    `Share your Lightning Address:\n<code>${userKey}@${DOMAIN}</code>\n\n` +
-    `Or open the Mini App to generate an instant QR invoice!`,
-    Markup.inlineKeyboard([[Markup.button.webApp("⚡ Generate Invoice QR", WEBAPP_URL)]])
-  );
-});
-
-// /withdraw, /send, and /pay commands (all supported)
+// /withdraw, /send, /pay commands
 bot.command(['withdraw', 'send', 'pay'], async (ctx) => {
   const userKey = normalizeUserKey(ctx.from);
   const parts = ctx.message.text.trim().split(/\s+/);
@@ -204,13 +151,32 @@ bot.command(['withdraw', 'send', 'pay'], async (ctx) => {
     );
   }
 
-  const destination = parts[1];
+  const destination = parts[1].trim();
   const sats = Math.floor(Number(parts[2]));
 
   if (!sats || isNaN(sats) || sats <= 0) {
     return await ctx.reply("❌ Please enter a valid number of satoshis.");
   }
 
+  // CASE A: INTERNAL TRANSFER
+  if (destination.toLowerCase().endsWith(`@${DOMAIN}`)) {
+    const recipientUser = destination.toLowerCase().replace(`@${DOMAIN}`, "").trim();
+    try {
+      const transferRes = await internalTransfer(userKey, recipientUser, sats);
+      await notifyPaymentReceived(recipientUser, sats, transferRes.newToBal, userKey);
+
+      return await ctx.replyWithHTML(
+        `🎉 <b>Internal Transfer Successful!</b>\n\n` +
+        `⚡ <b>Sent:</b> <code>${sats.toLocaleString()} sats</code>\n` +
+        `📍 <b>To:</b> <code>${escapeHtml(destination)}</code>\n` +
+        `💰 <b>Remaining Balance:</b> <code>${transferRes.newFromBal.toLocaleString()} sats</code>`
+      );
+    } catch (err) {
+      return await ctx.reply(`❌ Transfer failed: ${err.message}`);
+    }
+  }
+
+  // CASE B: EXTERNAL LIGHTNING SEND
   const currentBal = await getBalance(userKey);
   if (currentBal < sats) {
     return await ctx.reply(
@@ -219,20 +185,14 @@ bot.command(['withdraw', 'send', 'pay'], async (ctx) => {
   }
 
   const statusMsg = await ctx.reply("⏳ Broadcasting payment over Lightning Network...");
-
-  // Deduct balance first (escrow)
   await deductBalance(userKey, sats);
 
   try {
-    await speedPay(destination, sats);
+    await speedInstantSend(destination, sats, userKey);
     const newBal = await getBalance(userKey);
 
-    // Try deleting pending message
-    try {
-      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
-    } catch (e) {}
+    try { await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id); } catch (e) {}
 
-    // Send payment success message
     return await ctx.replyWithHTML(
       `🎉 <b>Payment Sent Successfully!</b>\n\n` +
       `⚡ <b>Amount:</b> <code>${sats.toLocaleString()} sats</code>\n` +
@@ -245,11 +205,10 @@ bot.command(['withdraw', 'send', 'pay'], async (ctx) => {
     );
   } catch (payErr) {
     // Refund on failure
-    await addBalance(userKey, sats);
+    const refundKey = `refund_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    await claimPaymentAndCredit(refundKey, userKey, sats);
 
-    try {
-      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
-    } catch (e) {}
+    try { await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id); } catch (e) {}
 
     return await ctx.replyWithHTML(
       `❌ <b>Withdrawal Failed:</b>\n${escapeHtml(payErr.message)}\n\n` +
@@ -269,7 +228,6 @@ bot.action('cb_withdraw', async (ctx) => {
   );
 });
 
-// Vercel Serverless Function Handler
 module.exports = async (req, res) => {
   if (!BOT_TOKEN) return res.status(500).json({ error: "BOT_TOKEN missing." });
 
