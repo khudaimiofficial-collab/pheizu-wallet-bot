@@ -97,11 +97,9 @@
       margin-top: 10px;
       color: var(--muted);
     }
-    
-    /* Fixed: !important guarantees it stays hidden until explicitly triggered */
     .hidden { display: none !important; }
 
-    /* Success Popup Modal */
+    /* Modal Overlay */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -121,26 +119,21 @@
       max-width: 320px;
       width: 100%;
       box-shadow: 0 10px 30px rgba(0,0,0,0.8);
-      animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    }
-    @keyframes popIn {
-      from { transform: scale(0.8); opacity: 0; }
-      to { transform: scale(1); opacity: 1; }
     }
   </style>
 </head>
 <body>
 
-  <!-- Personal Balance Card -->
+  <!-- Balance Card -->
   <div class="card">
     <div class="balance-title">⚡ Your Personal Balance</div>
     <div id="balanceDisplay" class="balance-amount">0 sats</div>
     <button onclick="loadBalance()" style="background:transparent; border:none; color:var(--muted); font-size:12px; cursor:pointer;">
-      🔄 Refresh
+      🔄 Sync Balance
     </button>
   </div>
 
-  <!-- Navigation Tabs -->
+  <!-- Tabs -->
   <div class="tabs">
     <button id="tabReceive" class="tab-btn active" onclick="switchTab('receive')">Receive</button>
     <button id="tabSend" class="tab-btn" onclick="switchTab('send')">Send</button>
@@ -149,7 +142,7 @@
   <!-- RECEIVE PANEL -->
   <div id="receivePanel" class="card">
     <label style="font-size:12px; color:var(--muted);">Amount in Satoshis (sats):</label>
-    <input type="number" id="receiveAmount" placeholder="e.g. 100" value="100" />
+    <input type="number" id="receiveAmount" placeholder="e.g. 100" value="10" />
     <button id="btnReceive" class="btn-action" onclick="createReceiveInvoice()">Generate Invoice QR</button>
 
     <div id="qrResult" class="qr-box hidden">
@@ -157,6 +150,7 @@
       <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment...</p>
       <div id="invoiceString" class="invoice-text"></div>
       <button class="btn-action" style="margin-top:10px; font-size:12px; padding:8px;" onclick="copyInvoice()">Copy Invoice</button>
+      <button class="btn-action" style="margin-top:6px; font-size:12px; padding:8px; background:#1e293b; color:white;" onclick="checkPaymentManual()">Check Payment Now</button>
     </div>
   </div>
 
@@ -165,12 +159,12 @@
     <label style="font-size:12px; color:var(--muted);">Destination (Address or Invoice):</label>
     <input type="text" id="sendDest" placeholder="user@speed.app or lnbc..." />
     <label style="font-size:12px; color:var(--muted);">Amount (sats):</label>
-    <input type="number" id="sendAmount" placeholder="e.g. 50" />
+    <input type="number" id="sendAmount" placeholder="e.g. 5" />
     <button id="btnSend" class="btn-action" onclick="sendSats()">Send From Balance</button>
     <div id="sendFeedback" style="font-size:12px; margin-top:10px; text-align:center;"></div>
   </div>
 
-  <!-- POPUP MODAL (Hidden by default) -->
+  <!-- POPUP MODAL -->
   <div id="successModal" class="modal-overlay hidden">
     <div class="modal-card">
       <div style="font-size:42px; margin-bottom:10px;">🎉</div>
@@ -183,8 +177,12 @@
 
 <script>
   const tg = window.Telegram?.WebApp;
-  const currentUserId = String(tg?.initDataUnsafe?.user?.id || "guest_user");
+  const currentUserId = String(tg?.initDataUnsafe?.user?.id || localStorage.getItem("saved_uid") || "user_guest");
+  localStorage.setItem("saved_uid", currentUserId);
+
   let activeCheckTimer = null;
+  let currentActivePaymentId = null;
+  let currentExpectedAmount = 0;
 
   if (tg) {
     tg.ready();
@@ -194,26 +192,30 @@
   function haptic(type = "light") {
     try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){}
   }
-
   function hapticNotification(type = "success") {
     try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
   }
 
-  // 1. Fetch User Balance
+  // Load Balance from Server and Local Storage Cache
   async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
-    el.innerText = "...";
+    
+    // Read from cache first so it never flickers to 0
+    const cachedBal = localStorage.getItem(`bal_${currentUserId}`);
+    if (cachedBal) el.innerText = `${Number(cachedBal).toLocaleString()} sats`;
+
     try {
       const res = await fetch(`/api/wallet?action=balance&user_id=${currentUserId}`);
       const data = await res.json();
-      el.innerText = `${Number(data.balance || 0).toLocaleString()} sats`;
-    } catch (e) {
-      el.innerText = "0 sats";
-    }
+      const finalBal = Math.max(Number(data.balance || 0), Number(cachedBal || 0));
+      
+      el.innerText = `${finalBal.toLocaleString()} sats`;
+      localStorage.setItem(`bal_${currentUserId}`, finalBal);
+    } catch (e) {}
   }
 
-  // 2. Generate Invoice
+  // Generate Invoice
   async function createReceiveInvoice() {
     haptic("medium");
     const amount = document.getElementById("receiveAmount").value;
@@ -222,7 +224,6 @@
 
     btn.disabled = true;
     btn.innerText = "Generating...";
-
     if (activeCheckTimer) clearInterval(activeCheckTimer);
 
     try {
@@ -233,6 +234,9 @@
       });
       const payment = await res.json();
       if (payment.error) throw new Error(payment.error);
+
+      currentActivePaymentId = payment.id;
+      currentExpectedAmount = Number(amount);
 
       let invoice = "";
       function scan(o) {
@@ -256,9 +260,7 @@
       document.getElementById("qrResult").classList.remove("hidden");
       document.getElementById("listenNotice").innerText = "⏳ Waiting for payment...";
 
-      // Auto-listen for payment completion
-      startListeningPayment(payment.id, Number(amount));
-
+      startListeningPayment(payment.id, currentExpectedAmount);
     } catch(err) {
       alert("Error: " + err.message);
     } finally {
@@ -267,39 +269,54 @@
     }
   }
 
-  // 3. Listen for Payment
+  // Polling for confirmation
   function startListeningPayment(paymentId, amount) {
     let attempts = 0;
     activeCheckTimer = setInterval(async () => {
       attempts++;
       if (attempts > 80) return clearInterval(activeCheckTimer);
-
-      try {
-        const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${currentUserId}`);
-        const data = await res.json();
-
-        if (data.is_paid) {
-          clearInterval(activeCheckTimer);
-          document.getElementById("listenNotice").innerText = "✅ Paid!";
-          triggerSuccessPopup(amount, data.new_balance);
-        }
-      } catch (e) {}
+      await checkPaymentStatus(paymentId, amount);
     }, 3000);
   }
 
-  // 4. Trigger Success Popup
+  async function checkPaymentManual() {
+    if (!currentActivePaymentId) return alert("No active payment");
+    haptic("light");
+    document.getElementById("listenNotice").innerText = "Checking Speed servers...";
+    await checkPaymentStatus(currentActivePaymentId, currentExpectedAmount);
+  }
+
+  async function checkPaymentStatus(paymentId, amount) {
+    try {
+      const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${currentUserId}`);
+      const data = await res.json();
+
+      if (data.is_paid) {
+        if (activeCheckTimer) clearInterval(activeCheckTimer);
+        document.getElementById("listenNotice").innerText = "✅ Paid!";
+        
+        // Save to persistent storage
+        const newBalance = Number(data.new_balance || (Number(localStorage.getItem(`bal_${currentUserId}`) || 0) + amount));
+        localStorage.setItem(`bal_${currentUserId}`, newBalance);
+
+        triggerSuccessPopup(amount, newBalance);
+      }
+    } catch (e) {}
+  }
+
+  // Trigger Success Popup
   function triggerSuccessPopup(amount, newBalance) {
     hapticNotification("success");
 
     if (tg && tg.showPopup) {
       tg.showPopup({
         title: "⚡ Payment Received!",
-        message: `+${amount} sats have been credited to your balance!\nNew Balance: ${newBalance} sats`,
+        message: `+${amount} sats have been added to your balance!\nNew Balance: ${newBalance} sats`,
         buttons: [{ type: "ok", text: "Awesome!" }]
       });
     }
 
-    document.getElementById("modalAmountText").innerText = `+${amount} Satoshis Credited!`;
+    document.getElementById("modalAmountText").innerText = `+${amount} Satoshis Added!`;
     document.getElementById("modalBalanceText").innerText = `Your New Balance: ${newBalance} sats`;
     document.getElementById("successModal").classList.remove("hidden");
 
@@ -311,19 +328,21 @@
     document.getElementById("qrResult").classList.add("hidden");
   }
 
-  // 5. Send Sats
+  // Send Sats
   async function sendSats() {
     haptic("medium");
     const destination = document.getElementById("sendDest").value.trim();
-    const amount = document.getElementById("sendAmount").value;
+    const amount = Number(document.getElementById("sendAmount").value);
     const feedback = document.getElementById("sendFeedback");
     const btn = document.getElementById("btnSend");
 
+    const currentBal = Number(localStorage.getItem(`bal_${currentUserId}`) || 0);
     if (!destination || !amount) return alert("Fill in destination and amount");
+    if (currentBal < amount) return alert(`Insufficient balance! You have ${currentBal} sats.`);
 
     btn.disabled = true;
     btn.innerText = "Sending...";
-    feedback.innerText = "Verifying balance and broadcasting...";
+    feedback.innerText = "Broadcasting across Lightning Network...";
 
     try {
       const res = await fetch("/api/wallet?action=send", {
@@ -335,6 +354,9 @@
       if (data.error) throw new Error(data.error);
 
       hapticNotification("success");
+      const updated = currentBal - amount;
+      localStorage.setItem(`bal_${currentUserId}`, updated);
+
       feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully!</span>`;
       document.getElementById("sendDest").value = "";
       loadBalance();
