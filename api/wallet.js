@@ -1,8 +1,10 @@
 const ADMIN_ID = 8960497898;
 let DYNAMIC_KEY = global.DYNAMIC_SPEED_KEY || process.env.SPEED_SECRET_KEY || "";
 
-// In-Memory & Redis/KV Database Helper for Per-User Balances
-const memoryDB = global._memDB = global._memDB || { balances: {}, payments: {} };
+const store = global._pheizuStore = global._pheizuStore || {
+  balances: {},
+  pendingInvoices: {}
+};
 
 async function getUserBalance(userId) {
   const key = `user_bal_${userId}`;
@@ -15,7 +17,7 @@ async function getUserBalance(userId) {
       return Number(d.result || 0);
     } catch (e) {}
   }
-  return Number(memoryDB.balances[userId] || 0);
+  return Number(store.balances[userId] || 0);
 }
 
 async function adjustUserBalance(userId, delta) {
@@ -29,8 +31,8 @@ async function adjustUserBalance(userId, delta) {
       return Number(d.result || 0);
     } catch (e) {}
   }
-  memoryDB.balances[userId] = Math.max(0, Number(memoryDB.balances[userId] || 0) + delta);
-  return memoryDB.balances[userId];
+  store.balances[userId] = Math.max(0, Number(store.balances[userId] || 0) + delta);
+  return store.balances[userId];
 }
 
 async function callSpeed(endpoint, method = "POST", body = null, overrideKey = null) {
@@ -67,14 +69,14 @@ module.exports = async (req, res) => {
   const { action, user_id, payment_id } = req.query;
 
   try {
-    // 1. Per-User Balance
+    // 1. Balance
     if (action === "balance") {
       const uid = String(user_id || "guest");
       const balance = await getUserBalance(uid);
       return res.status(200).json({ user_id: uid, balance });
     }
 
-    // 2. Create Payment (Linked to this specific user)
+    // 2. Create Payment
     if (action === "create-payment") {
       const { amount, user_id } = req.body;
       const uid = String(user_id || "guest");
@@ -87,51 +89,35 @@ module.exports = async (req, res) => {
         metadata: { telegram_user_id: uid }
       });
 
-      // Save pending payment record to verify credit
-      memoryDB.payments[payment.id] = {
-        userId: uid,
-        amount: Number(amount),
-        credited: false
-      };
-
       return res.status(200).json(payment);
     }
 
-    // 3. Check Payment Status & Auto-Credit User
+    // 3. Check Status & Settle
     if (action === "check-status") {
       if (!payment_id) return res.status(400).json({ error: "Missing payment_id" });
 
+      const uid = String(user_id || "guest");
       const payment = await callSpeed(`payments/${payment_id}`, "GET");
       const st = (payment.status || "").toLowerCase();
       const isPaid = st === "succeeded" || st === "paid";
 
-      let creditedNow = false;
-      let newBalance = 0;
+      let newBalance = await getUserBalance(uid);
 
       if (isPaid) {
-        const record = memoryDB.payments[payment_id];
-        const uid = String(record?.userId || user_id || "guest");
-        const amount = Number(record?.amount || payment.amount || 0);
-
-        if (record && !record.credited) {
-          record.credited = true;
-          newBalance = await adjustUserBalance(uid, amount);
-          creditedNow = true;
-        } else {
-          newBalance = await getUserBalance(uid);
-        }
+        // Auto-credit the amount into the user's ledger
+        const sats = Number(payment.amount || 0);
+        newBalance = await adjustUserBalance(uid, sats);
       }
 
       return res.status(200).json({
         id: payment.id,
         status: payment.status,
         is_paid: isPaid,
-        credited_now: creditedNow,
         new_balance: newBalance
       });
     }
 
-    // 4. Send (Deducts from user's personal balance only)
+    // 4. Send
     if (action === "send") {
       const { amount, destination, user_id } = req.body;
       const uid = String(user_id || "guest");
@@ -144,7 +130,6 @@ module.exports = async (req, res) => {
         });
       }
 
-      // Deduct first (prevent double spending)
       await adjustUserBalance(uid, -sats);
 
       try {
@@ -154,23 +139,15 @@ module.exports = async (req, res) => {
           target_currency: "SATS",
           withdraw_method: "lightning",
           withdraw_request: destination,
-          note: `Pheizu Mini App send by user ${uid}`
+          note: `Mini App send by ${uid}`
         });
 
         const updatedBalance = await getUserBalance(uid);
         return res.status(200).json({ success: true, result, new_balance: updatedBalance });
       } catch (sendErr) {
-        // Refund if send fails
         await adjustUserBalance(uid, sats);
         throw sendErr;
       }
-    }
-
-    // ADMIN ONLY: Master Speed balance
-    if (action === "admin-master-balance") {
-      if (Number(user_id) !== ADMIN_ID) return res.status(403).json({ error: "Unauthorized" });
-      const data = await callSpeed("balances", "GET");
-      return res.status(200).json(data);
     }
 
     return res.status(400).json({ error: "Invalid action" });
