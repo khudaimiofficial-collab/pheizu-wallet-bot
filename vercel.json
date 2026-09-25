@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/bot", "destination": "/api/bot" },
+    { "source": "/api/wallet", "destination": "/api/wallet" },
+    { "source": "/(.*)", "destination": "/public/$1" }
+  ]
+}
