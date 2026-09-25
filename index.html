@@ -106,13 +106,15 @@
     #qrcode { background: white; padding: 10px; border-radius: 8px; display: inline-block; }
     .invoice-text {
       font-family: monospace;
-      font-size: 10px;
+      font-size: 11px;
       word-break: break-all;
       background: var(--card);
-      padding: 8px;
+      padding: 10px;
       border-radius: 6px;
       margin-top: 10px;
-      color: var(--muted);
+      color: #38bdf8;
+      max-height: 110px;
+      overflow-y: auto;
     }
     .hidden { display: none !important; }
     .modal-overlay {
@@ -139,6 +141,7 @@
 </head>
 <body>
 
+  <!-- Balance Card -->
   <div class="card">
     <div class="balance-title">⚡ Available Balance</div>
     <div id="balanceDisplay" class="balance-amount">0 sats</div>
@@ -158,11 +161,13 @@
     </button>
   </div>
 
+  <!-- Tabs -->
   <div class="tabs">
     <button id="tabReceive" class="tab-btn active" onclick="switchTab('receive')">Receive</button>
     <button id="tabSend" class="tab-btn" onclick="switchTab('send')">Send</button>
   </div>
 
+  <!-- RECEIVE PANEL -->
   <div id="receivePanel" class="card">
     <label style="font-size:12px; color:var(--muted);">Amount in Satoshis (sats):</label>
     <input type="number" id="receiveAmount" placeholder="e.g. 100" value="10" />
@@ -176,15 +181,17 @@
     </div>
   </div>
 
+  <!-- SEND PANEL -->
   <div id="sendPanel" class="card hidden">
     <label style="font-size:12px; color:var(--muted);">Destination (Address or Invoice):</label>
-    <input type="text" id="sendDest" placeholder="name@speed.app, or lnbc..." />
+    <input type="text" id="sendDest" placeholder="name@speed.app or lnbc..." />
     <label style="font-size:12px; color:var(--muted);">Amount (sats):</label>
     <input type="number" id="sendAmount" placeholder="e.g. 5" />
     <button id="btnSend" class="btn-action" onclick="sendSats()">Send From Balance</button>
     <div id="sendFeedback" style="font-size:12px; margin-top:10px; text-align:center;"></div>
   </div>
 
+  <!-- SUCCESS MODAL -->
   <div id="successModal" class="modal-overlay hidden">
     <div class="modal-card">
       <div style="font-size:42px; margin-bottom:10px;">🎉</div>
@@ -209,6 +216,7 @@
   document.getElementById("userLnAddress").innerText = myLightningAddress;
 
   let activeCheckTimer = null;
+  let currentActiveInvoice = "";
 
   if (tg) {
     tg.ready();
@@ -222,6 +230,7 @@
     try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
   }
 
+  // Load Balance
   async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
@@ -231,12 +240,15 @@
     try {
       const res = await fetch(`/api/wallet?action=balance&user_id=${currentUserId}`);
       const data = await res.json();
-      const finalBal = Number(data.balance || cachedBal || 0);
-      el.innerText = `${finalBal.toLocaleString()} sats`;
-      localStorage.setItem(`bal_${currentUserId}`, finalBal);
+      if (data.success) {
+        const finalBal = Number(data.balance || cachedBal || 0);
+        el.innerText = `${finalBal.toLocaleString()} sats`;
+        localStorage.setItem(`bal_${currentUserId}`, finalBal);
+      }
     } catch (e) {}
   }
 
+  // Generate Invoice (Guaranteed to NEVER be undefined)
   async function createReceiveInvoice() {
     haptic("medium");
     const amount = document.getElementById("receiveAmount").value;
@@ -253,32 +265,29 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount, user_id: currentUserId })
       });
-      const payment = await res.json();
-      if (payment.error) throw new Error(payment.error);
+      const data = await res.json();
 
-      let invoice = "";
-      function scan(o) {
-        if (!o || typeof o !== "object") return;
-        for (const [k, v] of Object.entries(o)) {
-          if (typeof v === "string") {
-            const str = v.trim();
-            if (/^(lnbc|lntb|lightning:)/i.test(str)) { if (!invoice) invoice = str; }
-            else if ((k.toLowerCase().includes("url") || k === "link") && /^https?:\/\//i.test(str)) { if (!invoice) invoice = str; }
-          } else if (typeof v === "object") scan(v);
-        }
+      if (!data.success || !data.invoice) {
+        throw new Error(data.error || "Speed did not return an invoice. Check your API key.");
       }
-      scan(payment);
 
-      const qrTarget = invoice || payment.id;
+      currentActiveInvoice = data.invoice;
+
+      // Draw QR code with valid lightning string
+      const qrTarget = currentActiveInvoice.toLowerCase().startsWith("lightning:") 
+        ? currentActiveInvoice 
+        : `lightning:${currentActiveInvoice}`;
+
       const qrDiv = document.getElementById("qrcode");
       qrDiv.innerHTML = "";
       new QRCode(qrDiv, { text: qrTarget, width: 170, height: 170 });
 
-      document.getElementById("invoiceString").innerText = invoice || payment.id;
+      document.getElementById("invoiceString").innerText = currentActiveInvoice;
       document.getElementById("qrResult").classList.remove("hidden");
-      document.getElementById("listenNotice").innerText = "⏳ Waiting for payment (Auto-verifying)...";
+      document.getElementById("listenNotice").innerText = "⏳ Waiting for payment...";
 
-      startAutoVerification(payment.id, Number(amount));
+      // Auto-listen
+      startAutoVerification(data.id, Number(amount));
     } catch(err) {
       alert("Error: " + err.message);
     } finally {
@@ -335,6 +344,7 @@
     document.getElementById("qrResult").classList.add("hidden");
   }
 
+  // Send Sats
   async function sendSats() {
     haptic("medium");
     const destination = document.getElementById("sendDest").value.trim();
@@ -357,7 +367,7 @@
         body: JSON.stringify({ destination, amount, user_id: currentUserId })
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!data.success) throw new Error(data.error);
 
       hapticNotification("success");
       localStorage.setItem(`bal_${currentUserId}`, data.balance);
@@ -390,7 +400,8 @@
   }
 
   function copyInvoice() {
-    navigator.clipboard.writeText(document.getElementById("invoiceString").innerText);
+    if (!currentActiveInvoice) return;
+    navigator.clipboard.writeText(currentActiveInvoice);
     haptic("light");
     alert("Invoice copied!");
   }
