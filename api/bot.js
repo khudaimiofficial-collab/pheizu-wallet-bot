@@ -1,7 +1,8 @@
 // api/bot.js
 const { Telegraf, Markup } = require('telegraf');
 const { 
-  normalizeUserKey, 
+  normalizeUserKey,
+  saveUserTelegramId,
   getBalance, 
   addBalance, 
   deductBalance 
@@ -13,31 +14,16 @@ const WEBAPP_URL = (process.env.WEBAPP_URL || `https://${DOMAIN}`).trim().replac
 const SPEED_SECRET_KEY = (process.env.SPEED_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
 const SPEED_BASE_URL = "https://api.tryspeed.com";
 
-if (!BOT_TOKEN) {
-  console.error("CRITICAL: BOT_TOKEN is missing in Environment Variables!");
-}
-
 const bot = new Telegraf(BOT_TOKEN || "MISSING_TOKEN");
 
-// Helper: Escape HTML characters for Telegram
 function escapeHtml(str = "") {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-// Helper: Broadcast Speed Lightning Payout
 async function speedPay(destination, sats) {
-  if (!SPEED_SECRET_KEY) {
-    throw new Error("SPEED_SECRET_KEY is not configured.");
-  }
-
+  if (!SPEED_SECRET_KEY) throw new Error("SPEED_SECRET_KEY is not configured.");
   const authHeader = "Basic " + Buffer.from(SPEED_SECRET_KEY + ":").toString("base64");
-  const payload = {
-    currency: "SATS",
-    amount: sats
-  };
+  const payload = { currency: "SATS", amount: sats };
 
   const cleanDest = destination.trim();
   if (cleanDest.includes("@")) {
@@ -65,7 +51,6 @@ async function speedPay(destination, sats) {
     const msg = json?.message || json?.error?.message || json?.errors?.[0]?.message || text;
     throw new Error(msg || `Speed Payout failed with status ${res.status}`);
   }
-
   return json;
 }
 
@@ -73,6 +58,10 @@ async function speedPay(destination, sats) {
 bot.start(async (ctx) => {
   try {
     const userKey = normalizeUserKey(ctx.from);
+    if (ctx.from?.id) {
+      await saveUserTelegramId(userKey, ctx.from.id);
+    }
+
     const balance = await getBalance(userKey);
     const firstName = escapeHtml(ctx.from?.first_name || "Friend");
 
@@ -102,6 +91,7 @@ bot.start(async (ctx) => {
 bot.command('balance', async (ctx) => {
   try {
     const userKey = normalizeUserKey(ctx.from);
+    if (ctx.from?.id) await saveUserTelegramId(userKey, ctx.from.id);
     const balance = await getBalance(userKey);
 
     return await ctx.replyWithHTML(
@@ -113,11 +103,10 @@ bot.command('balance', async (ctx) => {
       ])
     );
   } catch (err) {
-    console.error("Balance command error:", err);
+    console.error("Balance error:", err);
   }
 });
 
-// Callback for "Refresh Balance" button
 bot.action('cb_balance', async (ctx) => {
   try {
     await ctx.answerCbQuery("Updating balance...");
@@ -135,44 +124,28 @@ bot.action('cb_balance', async (ctx) => {
         ])
       }
     );
-  } catch (err) {
-    console.warn("Callback cb_balance error:", err.message);
-  }
+  } catch (err) {}
 });
 
-// /receive command
 bot.command('receive', async (ctx) => {
-  try {
-    const userKey = normalizeUserKey(ctx.from);
-    return await ctx.replyWithHTML(
-      `📥 <b>Receive Satoshis:</b>\n\n` +
-      `Share your Lightning Address:\n<code>${userKey}@${DOMAIN}</code>\n\n` +
-      `Or open the Mini App to generate an instant QR invoice!`,
-      Markup.inlineKeyboard([
-        [Markup.button.webApp("⚡ Generate Invoice QR", WEBAPP_URL)]
-      ])
-    );
-  } catch (err) {
-    console.error("Receive command error:", err);
-  }
+  const userKey = normalizeUserKey(ctx.from);
+  return await ctx.replyWithHTML(
+    `📥 <b>Receive Satoshis:</b>\n\n` +
+    `Share your Lightning Address:\n<code>${userKey}@${DOMAIN}</code>\n\n` +
+    `Or open the Mini App to generate an instant QR invoice!`,
+    Markup.inlineKeyboard([[Markup.button.webApp("⚡ Generate Invoice QR", WEBAPP_URL)]])
+  );
 });
 
 bot.action('cb_receive', async (ctx) => {
-  try {
-    await ctx.answerCbQuery();
-    const userKey = normalizeUserKey(ctx.from);
-    return await ctx.replyWithHTML(
-      `📥 <b>Your Lightning Address:</b>\n<code>${userKey}@${DOMAIN}</code>`,
-      Markup.inlineKeyboard([
-        [Markup.button.webApp("⚡ Open Mini App", WEBAPP_URL)]
-      ])
-    );
-  } catch (err) {
-    console.error("Callback cb_receive error:", err);
-  }
+  await ctx.answerCbQuery();
+  const userKey = normalizeUserKey(ctx.from);
+  return await ctx.replyWithHTML(
+    `📥 <b>Your Lightning Address:</b>\n<code>${userKey}@${DOMAIN}</code>`,
+    Markup.inlineKeyboard([[Markup.button.webApp("⚡ Open Mini App", WEBAPP_URL)]])
+  );
 });
 
-// /send <destination> <amount> command in chat
 bot.command('send', async (ctx) => {
   try {
     const userKey = normalizeUserKey(ctx.from);
@@ -194,14 +167,10 @@ bot.command('send', async (ctx) => {
 
     const currentBal = await getBalance(userKey);
     if (currentBal < sats) {
-      return await ctx.reply(
-        `❌ Insufficient balance!\nYou have ${currentBal.toLocaleString()} sats, tried to send ${sats.toLocaleString()} sats.`
-      );
+      return await ctx.reply(`❌ Insufficient balance!\nYou have ${currentBal.toLocaleString()} sats, tried to send ${sats.toLocaleString()} sats.`);
     }
 
     const statusMsg = await ctx.reply("⏳ Broadcasting payment over Lightning...");
-
-    // Escrow balance
     await deductBalance(userKey, sats);
 
     try {
@@ -217,8 +186,7 @@ bot.command('send', async (ctx) => {
         { parse_mode: 'HTML' }
       );
     } catch (payErr) {
-      // Refund on failure
-      await addBalance(userKey, sats);
+      await addBalance(userKey, sats); // Refund
       return await ctx.telegram.editMessageText(
         ctx.chat.id,
         statusMsg.message_id,
@@ -228,50 +196,33 @@ bot.command('send', async (ctx) => {
       );
     }
   } catch (err) {
-    console.error("Send command error:", err);
     return ctx.reply("❌ Error processing send request.");
   }
 });
 
-// Vercel Serverless Function Handler
 module.exports = async (req, res) => {
-  if (!BOT_TOKEN) {
-    return res.status(500).json({ error: "BOT_TOKEN environment variable is not configured." });
-  }
+  if (!BOT_TOKEN) return res.status(500).json({ error: "BOT_TOKEN missing." });
 
-  // 1. Browser GET Request: Automatically sets and confirms Telegram Webhook
   if (req.method === 'GET') {
     const webhookUrl = `https://${DOMAIN}/api/bot`;
     try {
       const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
       const result = await response.json();
-      return res.status(200).json({
-        message: "Bot handler active",
-        webhook_setup: result,
-        target_webhook_url: webhookUrl
-      });
+      return res.status(200).json({ message: "Bot handler active", webhook_setup: result });
     } catch (e) {
-      return res.status(500).json({ error: "Failed to set webhook", details: e.message });
+      return res.status(500).json({ error: e.message });
     }
   }
 
-  // 2. Telegram POST Webhook Update
   if (req.method === 'POST') {
     try {
       let update = req.body;
-      if (typeof update === 'string') {
-        update = JSON.parse(update);
-      }
-
-      if (update && update.update_id) {
-        await bot.handleUpdate(update);
-      }
+      if (typeof update === 'string') update = JSON.parse(update);
+      if (update && update.update_id) await bot.handleUpdate(update);
       return res.status(200).send("OK");
     } catch (e) {
-      console.error("Bot update error:", e);
       return res.status(200).send("Handled with error");
     }
   }
-
   return res.status(405).send("Method Not Allowed");
 };
