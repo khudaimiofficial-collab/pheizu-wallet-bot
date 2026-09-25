@@ -2,18 +2,19 @@
 const { 
   normalizeUserKey,
   saveUserTelegramId,
+  notifyPaymentReceived,
   getBalance, 
-  addBalance, 
-  deductBalance, 
-  isPaymentProcessed, 
-  markPaymentProcessed 
+  claimPaymentAndCredit,
+  deductBalance 
 } = require('../lib/db');
 
 const SPEED_BASE_URL = "https://api.tryspeed.com";
 
+// Helper: Recursively search response for Lightning Bolt11 invoice or checkout URL
 function extractPaymentDetails(data) {
   let invoice = "";
   let url = "";
+
   function scan(obj) {
     if (!obj || typeof obj !== "object") return;
     for (const [k, v] of Object.entries(obj)) {
@@ -29,13 +30,17 @@ function extractPaymentDetails(data) {
       }
     }
   }
+
   scan(data);
   return { invoice, url };
 }
 
+// Helper: Make authenticated calls to Speed API with required version header
 async function speedRequest(endpoint, method = "GET", body = null) {
   const rawKey = (process.env.SPEED_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
-  if (!rawKey) throw new Error("SPEED_SECRET_KEY is missing in your Vercel Environment Variables.");
+  if (!rawKey) {
+    throw new Error("SPEED_SECRET_KEY is missing in your Vercel Environment Variables.");
+  }
 
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
   const authHeader = "Basic " + Buffer.from(rawKey + ":").toString("base64");
@@ -44,10 +49,14 @@ async function speedRequest(endpoint, method = "GET", body = null) {
     "accept": "application/json",
     "authorization": authHeader,
     "content-type": "application/json",
-    "speed-version": "2022-10-15"
+    "speed-version": "2022-10-15" // Required by Speed API
   };
 
-  const options = { method, headers };
+  const options = {
+    method,
+    headers
+  };
+
   if (body && (method === "POST" || method === "PUT")) {
     options.body = JSON.stringify(body);
   }
@@ -56,7 +65,9 @@ async function speedRequest(endpoint, method = "GET", body = null) {
   const text = await res.text();
 
   let json = {};
-  try { json = JSON.parse(text); } catch (e) {
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
     throw new Error(`Speed error (${res.status}): ${text}`);
   }
 
@@ -64,53 +75,77 @@ async function speedRequest(endpoint, method = "GET", body = null) {
     const errMsg = json?.message || json?.error?.message || json?.errors?.[0]?.message || text;
     throw new Error(`[Speed ${res.status}] ${errMsg}`);
   }
+
   return json;
 }
 
 module.exports = async function handler(req, res) {
+  // CORS configuration for Telegram Mini App
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, speed-version');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
   const action = req.query.action;
 
   try {
+    // =========================================================================
     // 1. GET BALANCE
+    // =========================================================================
     if (action === 'balance') {
       const userParam = req.query.user_id || req.query.username;
       const tgId = req.query.telegram_id;
       const userKey = normalizeUserKey(userParam, tgId);
 
-      if (tgId) await saveUserTelegramId(userKey, tgId);
+      // Save telegram_id so Telegram push notifications work
+      if (tgId) {
+        await saveUserTelegramId(userKey, tgId);
+      }
 
       const balance = await getBalance(userKey);
       return res.status(200).json({ success: true, balance, user: userKey });
     }
 
-    // 2. CREATE PAYMENT INVOICE
+    // =========================================================================
+    // 2. CREATE PAYMENT INVOICE (Receive Tab)
+    // =========================================================================
     if (action === 'create-payment' && req.method === 'POST') {
       const { amount, user_id, username, telegram_id } = req.body || {};
       const userKey = normalizeUserKey(username || user_id, telegram_id);
       const sats = Math.floor(Number(amount));
 
-      if (telegram_id) await saveUserTelegramId(userKey, telegram_id);
+      if (telegram_id) {
+        await saveUserTelegramId(userKey, telegram_id);
+      }
 
       if (!sats || isNaN(sats) || sats <= 0) {
         return res.status(400).json({ success: false, error: "Please enter a valid amount in sats." });
       }
 
+      // Create Payment with exact Speed requirements
       const payment = await speedRequest("payments", "POST", {
         amount: sats,
         currency: "SATS",
         target_currency: "SATS",
         payment_methods: ["lightning"],
         description: `Deposit to ${userKey}`,
-        metadata: { user_key: userKey }
+        metadata: {
+          user_key: userKey,
+          source: "telegram_mini_app"
+        }
       });
 
       const { invoice, url } = extractPaymentDetails(payment);
+
+      if (!invoice && !url) {
+        return res.status(500).json({
+          success: false,
+          error: "Speed created payment but did not return a Lightning invoice."
+        });
+      }
 
       return res.status(200).json({
         success: true,
@@ -122,15 +157,22 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 3. CHECK PAYMENT STATUS (Triggers Success Notification)
+    // =========================================================================
+    // 3. CHECK PAYMENT STATUS (Polling from Mini App with Atomic Claim)
+    // =========================================================================
     if (action === 'check-status') {
       const paymentId = req.query.payment_id;
       const userParam = req.query.user_id || req.query.username;
       const tgId = req.query.telegram_id;
       const userKey = normalizeUserKey(userParam, tgId);
 
-      if (tgId) await saveUserTelegramId(userKey, tgId);
-      if (!paymentId) return res.status(400).json({ success: false, error: "Missing payment_id." });
+      if (tgId) {
+        await saveUserTelegramId(userKey, tgId);
+      }
+
+      if (!paymentId) {
+        return res.status(400).json({ success: false, error: "Missing payment_id." });
+      }
 
       const payment = await speedRequest(`payments/${paymentId}`, "GET");
       const st = (payment.status || "").toLowerCase();
@@ -139,12 +181,18 @@ module.exports = async function handler(req, res) {
       let newBalance = 0;
 
       if (isPaid) {
-        const alreadyCredited = await isPaymentProcessed(paymentId);
-        if (!alreadyCredited) {
-          satsCredited = Math.floor(Number(payment.amount || 0));
-          newBalance = await addBalance(userKey, satsCredited);
-          await markPaymentProcessed(paymentId);
+        const satsPaid = Math.floor(Number(payment.amount || 0));
+
+        // Atomic claim: prevents double-crediting if the Webhook triggers concurrently!
+        const result = await claimPaymentAndCredit(paymentId, userKey, satsPaid);
+
+        if (!result.alreadyProcessed) {
+          satsCredited = satsPaid;
+          newBalance = result.newBalance;
+          // Send Telegram push notification
+          await notifyPaymentReceived(userKey, satsPaid, newBalance);
         } else {
+          // Already credited (by webhook or earlier poll)
           newBalance = await getBalance(userKey);
         }
       }
@@ -158,21 +206,27 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 4. SEND SATS
+    // =========================================================================
+    // 4. SEND SATS (Send Tab)
+    // =========================================================================
     if (action === 'send' && req.method === 'POST') {
       const { destination, amount, user_id, username, telegram_id } = req.body || {};
       const userKey = normalizeUserKey(username || user_id, telegram_id);
       const sats = Math.floor(Number(amount));
 
-      if (telegram_id) await saveUserTelegramId(userKey, telegram_id);
+      if (telegram_id) {
+        await saveUserTelegramId(userKey, telegram_id);
+      }
 
       if (!destination || typeof destination !== "string") {
-        return res.status(400).json({ success: false, error: "Missing destination." });
+        return res.status(400).json({ success: false, error: "Missing destination Lightning Address or Invoice." });
       }
+
       if (!sats || isNaN(sats) || sats <= 0) {
         return res.status(400).json({ success: false, error: "Invalid amount." });
       }
 
+      // Check balance
       const currentBal = await getBalance(userKey);
       if (currentBal < sats) {
         return res.status(400).json({ 
@@ -181,15 +235,21 @@ module.exports = async function handler(req, res) {
         });
       }
 
+      // Deduct balance first (escrow) to prevent double-spending
       await deductBalance(userKey, sats);
 
       try {
         const cleanDestination = destination.trim();
-        let payoutPayload = { currency: "SATS", amount: sats };
+        let payoutPayload = {
+          currency: "SATS",
+          amount: sats
+        };
 
         if (cleanDestination.includes("@")) {
+          // Lightning Address (e.g. alice@speed.app)
           payoutPayload.lnurl = cleanDestination;
         } else {
+          // Bolt11 Invoice string
           payoutPayload.payment_request = cleanDestination.replace(/^lightning:/i, "");
         }
 
@@ -202,17 +262,23 @@ module.exports = async function handler(req, res) {
           remaining_balance: await getBalance(userKey)
         });
       } catch (sendError) {
-        await addBalance(userKey, sats); // Refund on failure
+        // Refund balance if payout failed
+        const refundKey = `refund_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        await claimPaymentAndCredit(refundKey, userKey, sats);
+
         return res.status(500).json({
           success: false,
-          error: sendError.message || "Failed to broadcast payment."
+          error: sendError.message || "Failed to broadcast payment across Lightning."
         });
       }
     }
 
-    return res.status(404).json({ success: false, error: `Invalid action '${action}'` });
+    return res.status(404).json({ success: false, error: `Invalid action '${action}' requested.` });
   } catch (err) {
     console.error("Wallet API Error:", err);
-    return res.status(500).json({ success: false, error: err.message || "Internal server error" });
+    return res.status(500).json({ 
+      success: false, 
+      error: err.message || "Internal server error occurred." 
+    });
   }
 };
