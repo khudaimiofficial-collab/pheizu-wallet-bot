@@ -1,27 +1,15 @@
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
-let DYNAMIC_KEY = global.DYNAMIC_SPEED_KEY || process.env.SPEED_SECRET_KEY || "";
-
-async function callSpeed(endpoint, method = "POST", body = null) {
-  const key = DYNAMIC_KEY || global.DYNAMIC_SPEED_KEY || process.env.SPEED_SECRET_KEY;
-  if (!key) throw new Error("Speed API Key is missing.");
-
-  const auth = "Basic " + Buffer.from(key + ":").toString("base64");
-  const res = await fetch(`https://api.tryspeed.com/${endpoint}`, {
-    method,
-    headers: {
-      "accept": "application/json",
-      "authorization": auth,
-      "content-type": "application/json",
-      "speed-version": "2022-10-15"
-    },
-    body: body ? JSON.stringify(body) : null
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
-  return data;
-}
 
 function extractInvoice(obj) {
+  if (!obj) return null;
+  // Direct property lookups for Speed API
+  if (obj.payment_method_options?.lightning?.payment_request) return obj.payment_method_options.lightning.payment_request;
+  if (obj.payment_method_details?.lightning?.payment_request) return obj.payment_method_details.lightning.payment_request;
+  if (obj.payment_request) return obj.payment_request;
+  if (obj.next_action?.lightning_display_details?.payment_request) return obj.next_action.lightning_display_details.payment_request;
+  if (obj.next_action?.display_details?.payment_request) return obj.next_action.display_details.payment_request;
+
+  // Recursive scan for any lnbc/lntb string
   let invoice = null;
   function scan(o) {
     if (!o || typeof o !== "object") return;
@@ -40,8 +28,27 @@ function extractInvoice(obj) {
   return invoice;
 }
 
+async function callSpeed(endpoint, method = "POST", body = null) {
+  const key = process.env.SPEED_SECRET_KEY || global.DYNAMIC_SPEED_KEY;
+  if (!key) throw new Error("Speed API Key is missing in Vercel Environment Variables.");
+
+  const auth = "Basic " + Buffer.from(key + ":").toString("base64");
+  const res = await fetch(`https://api.tryspeed.com/${endpoint}`, {
+    method,
+    headers: {
+      "accept": "application/json",
+      "authorization": auth,
+      "content-type": "application/json",
+      "speed-version": "2022-10-15"
+    },
+    body: body ? JSON.stringify(body) : null
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || data.errors?.[0]?.message || `HTTP ${res.status}`);
+  return data;
+}
+
 module.exports = async (req, res) => {
-  // LUD-16 requires open CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -49,7 +56,7 @@ module.exports = async (req, res) => {
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  // Robust username parser: reads from query or extracts from URL path
+  // Extract username from query or URL
   let rawUser = req.query.username;
   if (!rawUser) {
     const parts = req.url.split("?")[0].split("/").filter(Boolean);
@@ -59,14 +66,14 @@ module.exports = async (req, res) => {
   const userHandle = String(rawUser || "").toLowerCase().replace(/[^a-z0-9_]/g, "");
 
   if (!userHandle) {
-    return res.status(400).json({ status: "ERROR", reason: "Invalid username" });
+    return res.status(200).json({ status: "ERROR", reason: "Invalid username" });
   }
 
-  // STEP 2: Wallet sends selected amount to callback
+  // STEP 2: The payer's wallet selected the amount and calls the callback
   if (req.query.callback || req.url.includes("/cb/")) {
     const msats = Number(req.query.amount);
     if (!msats || msats < 1000) {
-      return res.status(400).json({ status: "ERROR", reason: "Min amount 1 sat (1000 msats)" });
+      return res.status(200).json({ status: "ERROR", reason: "Minimum amount is 1 sat (1000 msats)" });
     }
     const sats = Math.floor(msats / 1000);
 
@@ -79,22 +86,22 @@ module.exports = async (req, res) => {
         metadata: { telegram_username: userHandle }
       });
 
-      const invoice = extractInvoice(pmt) || pmt.payment_request;
+      const invoice = extractInvoice(pmt);
       if (!invoice) {
-        return res.status(500).json({ status: "ERROR", reason: "Could not generate invoice" });
+        return res.status(200).json({ status: "ERROR", reason: "Speed did not return a valid Lightning invoice" });
       }
 
-      // Standard LUD-06 callback response
       return res.status(200).json({
         pr: invoice,
         routes: []
       });
     } catch (err) {
-      return res.status(500).json({ status: "ERROR", reason: err.message });
+      console.error("LNURL Callback Error:", err.message);
+      return res.status(200).json({ status: "ERROR", reason: err.message });
     }
   }
 
-  // STEP 1: Strict LUD-06 / LUD-16 Metadata Discovery
+  // STEP 1: Metadata discovery
   const metadata = JSON.stringify([
     ["text/plain", `Pay to ${userHandle} on Pheizu Wallet`],
     ["text/identifier", `${userHandle}@${DOMAIN}`]
