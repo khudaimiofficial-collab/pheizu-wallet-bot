@@ -1,6 +1,7 @@
 // api/wallet.js
 const { 
-  normalizeUserKey, 
+  normalizeUserKey,
+  saveUserTelegramId,
   getBalance, 
   addBalance, 
   deductBalance, 
@@ -10,7 +11,6 @@ const {
 
 const SPEED_BASE_URL = "https://api.tryspeed.com";
 
-// Recursive extractor for bolt11 invoice and hosted checkout URL
 function extractPaymentDetails(data) {
   let invoice = "";
   let url = "";
@@ -33,13 +33,9 @@ function extractPaymentDetails(data) {
   return { invoice, url };
 }
 
-// Universal Speed API client with required version header
 async function speedRequest(endpoint, method = "GET", body = null) {
   const rawKey = (process.env.SPEED_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
-
-  if (!rawKey) {
-    throw new Error("SPEED_SECRET_KEY is missing in your Vercel Environment Variables.");
-  }
+  if (!rawKey) throw new Error("SPEED_SECRET_KEY is missing in your Vercel Environment Variables.");
 
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
   const authHeader = "Basic " + Buffer.from(rawKey + ":").toString("base64");
@@ -48,14 +44,10 @@ async function speedRequest(endpoint, method = "GET", body = null) {
     "accept": "application/json",
     "authorization": authHeader,
     "content-type": "application/json",
-    "speed-version": "2022-10-15" // Required by Speed API
+    "speed-version": "2022-10-15"
   };
 
-  const options = {
-    method,
-    headers
-  };
-
+  const options = { method, headers };
   if (body && (method === "POST" || method === "PUT")) {
     options.body = JSON.stringify(body);
   }
@@ -64,9 +56,7 @@ async function speedRequest(endpoint, method = "GET", body = null) {
   const text = await res.text();
 
   let json = {};
-  try {
-    json = JSON.parse(text);
-  } catch (e) {
+  try { json = JSON.parse(text); } catch (e) {
     throw new Error(`Speed error (${res.status}): ${text}`);
   }
 
@@ -74,7 +64,6 @@ async function speedRequest(endpoint, method = "GET", body = null) {
     const errMsg = json?.message || json?.error?.message || json?.errors?.[0]?.message || text;
     throw new Error(`[Speed ${res.status}] ${errMsg}`);
   }
-
   return json;
 }
 
@@ -83,9 +72,7 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, speed-version');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   const action = req.query.action;
 
@@ -96,21 +83,24 @@ module.exports = async function handler(req, res) {
       const tgId = req.query.telegram_id;
       const userKey = normalizeUserKey(userParam, tgId);
 
+      if (tgId) await saveUserTelegramId(userKey, tgId);
+
       const balance = await getBalance(userKey);
       return res.status(200).json({ success: true, balance, user: userKey });
     }
 
-    // 2. CREATE PAYMENT INVOICE (Receive tab)
+    // 2. CREATE PAYMENT INVOICE
     if (action === 'create-payment' && req.method === 'POST') {
       const { amount, user_id, username, telegram_id } = req.body || {};
       const userKey = normalizeUserKey(username || user_id, telegram_id);
       const sats = Math.floor(Number(amount));
 
+      if (telegram_id) await saveUserTelegramId(userKey, telegram_id);
+
       if (!sats || isNaN(sats) || sats <= 0) {
         return res.status(400).json({ success: false, error: "Please enter a valid amount in sats." });
       }
 
-      // Calls /payments with exact required fields
       const payment = await speedRequest("payments", "POST", {
         amount: sats,
         currency: "SATS",
@@ -122,13 +112,6 @@ module.exports = async function handler(req, res) {
 
       const { invoice, url } = extractPaymentDetails(payment);
 
-      if (!invoice && !url) {
-        return res.status(500).json({
-          success: false,
-          error: "Speed created payment but did not return a Lightning invoice."
-        });
-      }
-
       return res.status(200).json({
         success: true,
         id: payment.id,
@@ -139,45 +122,52 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 3. CHECK PAYMENT STATUS (Polling)
+    // 3. CHECK PAYMENT STATUS (Triggers Success Notification)
     if (action === 'check-status') {
       const paymentId = req.query.payment_id;
       const userParam = req.query.user_id || req.query.username;
       const tgId = req.query.telegram_id;
       const userKey = normalizeUserKey(userParam, tgId);
 
-      if (!paymentId) {
-        return res.status(400).json({ success: false, error: "Missing payment_id." });
-      }
+      if (tgId) await saveUserTelegramId(userKey, tgId);
+      if (!paymentId) return res.status(400).json({ success: false, error: "Missing payment_id." });
 
       const payment = await speedRequest(`payments/${paymentId}`, "GET");
       const st = (payment.status || "").toLowerCase();
       const isPaid = st === "succeeded" || st === "paid";
+      let satsCredited = 0;
+      let newBalance = 0;
 
       if (isPaid) {
         const alreadyCredited = await isPaymentProcessed(paymentId);
         if (!alreadyCredited) {
-          const satsPaid = Math.floor(Number(payment.amount || 0));
-          await addBalance(userKey, satsPaid);
+          satsCredited = Math.floor(Number(payment.amount || 0));
+          newBalance = await addBalance(userKey, satsCredited);
           await markPaymentProcessed(paymentId);
+        } else {
+          newBalance = await getBalance(userKey);
         }
       }
 
       return res.status(200).json({
         success: true,
         is_paid: isPaid,
-        status: payment.status
+        status: payment.status,
+        amount_credited: satsCredited,
+        balance: newBalance
       });
     }
 
-    // 4. SEND SATS FROM BALANCE (Send tab)
+    // 4. SEND SATS
     if (action === 'send' && req.method === 'POST') {
       const { destination, amount, user_id, username, telegram_id } = req.body || {};
       const userKey = normalizeUserKey(username || user_id, telegram_id);
       const sats = Math.floor(Number(amount));
 
+      if (telegram_id) await saveUserTelegramId(userKey, telegram_id);
+
       if (!destination || typeof destination !== "string") {
-        return res.status(400).json({ success: false, error: "Missing destination Lightning Address or Invoice." });
+        return res.status(400).json({ success: false, error: "Missing destination." });
       }
       if (!sats || isNaN(sats) || sats <= 0) {
         return res.status(400).json({ success: false, error: "Invalid amount." });
@@ -187,7 +177,7 @@ module.exports = async function handler(req, res) {
       if (currentBal < sats) {
         return res.status(400).json({ 
           success: false, 
-          error: `Insufficient balance. You have ${currentBal.toLocaleString()} sats, needed ${sats.toLocaleString()} sats.` 
+          error: `Insufficient balance: You have ${currentBal.toLocaleString()} sats, needed ${sats.toLocaleString()} sats.` 
         });
       }
 
@@ -195,10 +185,7 @@ module.exports = async function handler(req, res) {
 
       try {
         const cleanDestination = destination.trim();
-        let payoutPayload = {
-          currency: "SATS",
-          amount: sats
-        };
+        let payoutPayload = { currency: "SATS", amount: sats };
 
         if (cleanDestination.includes("@")) {
           payoutPayload.lnurl = cleanDestination;
@@ -218,7 +205,7 @@ module.exports = async function handler(req, res) {
         await addBalance(userKey, sats); // Refund on failure
         return res.status(500).json({
           success: false,
-          error: sendError.message || "Failed to broadcast payment over Lightning."
+          error: sendError.message || "Failed to broadcast payment."
         });
       }
     }
