@@ -144,7 +144,7 @@
   <!-- Balance Card -->
   <div class="card">
     <div class="balance-title">⚡ Available Balance</div>
-    <div id="balanceDisplay" class="balance-amount">0 sats</div>
+    <div id="balanceDisplay" class="balance-amount">...</div>
     
     <div class="address-badge">
       <div>
@@ -217,7 +217,6 @@
 
   let activeCheckTimer = null;
   let currentActiveInvoice = "";
-  let currentExpectedAmount = 0;
 
   if (tg) {
     tg.ready();
@@ -231,12 +230,23 @@
     try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
   }
 
-  // Load Balance directly from phone storage (never resets to 0)
-  function loadBalance() {
+  // Load Balance: Directly synchronizes with the server
+  async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
-    const myBalance = Number(localStorage.getItem(`user_sats_${currentUserId}`) || 0);
-    el.innerText = `${myBalance.toLocaleString()} sats`;
+
+    try {
+      const res = await fetch(`/api/wallet?action=balance&user_id=${currentUserId}`);
+      const data = await res.json();
+      if (data.success) {
+        const liveBal = Number(data.balance || 0);
+        el.innerText = `${liveBal.toLocaleString()} sats`;
+        localStorage.setItem(`live_bal_${currentUserId}`, liveBal);
+      }
+    } catch (e) {
+      const cached = localStorage.getItem(`live_bal_${currentUserId}`);
+      if (cached) el.innerText = `${Number(cached).toLocaleString()} sats`;
+    }
   }
 
   // Generate Invoice
@@ -263,7 +273,6 @@
       }
 
       currentActiveInvoice = data.invoice;
-      currentExpectedAmount = amount;
 
       const qrTarget = currentActiveInvoice.toLowerCase().startsWith("lightning:") 
         ? currentActiveInvoice 
@@ -277,8 +286,7 @@
       document.getElementById("qrResult").classList.remove("hidden");
       document.getElementById("listenNotice").innerText = "⏳ Waiting for payment...";
 
-      // Start Auto-verification
-      startAutoVerification(data.id, currentExpectedAmount);
+      startAutoVerification(data.id, amount);
     } catch(err) {
       alert("Error: " + err.message);
     } finally {
@@ -287,7 +295,7 @@
     }
   }
 
-  // Auto-verify and directly update the balance on your phone
+  // Auto-verify and immediately sync balance
   function startAutoVerification(paymentId, amount) {
     let attempts = 0;
     activeCheckTimer = setInterval(async () => {
@@ -302,47 +310,36 @@
           clearInterval(activeCheckTimer);
           document.getElementById("listenNotice").innerText = "✅ Paid!";
 
-          // Add to personal balance if not already added
-          const alreadyClaimed = localStorage.getItem(`claimed_${paymentId}`);
-          if (!alreadyClaimed) {
-            localStorage.setItem(`claimed_${paymentId}`, "1");
-
-            // DIRECT ACCUMULATION: adds the sats to your balance
-            const paidSats = Number(data.amount || amount);
-            let currentBalance = Number(localStorage.getItem(`user_sats_${currentUserId}`) || 0);
-            currentBalance += paidSats;
-            localStorage.setItem(`user_sats_${currentUserId}`, currentBalance);
-
-            // Update Screen & Show Success Popup
-            document.getElementById("balanceDisplay").innerText = `${currentBalance.toLocaleString()} sats`;
-            triggerSuccessPopup(paidSats, currentBalance);
-          }
+          // Trigger Success Popup & Refresh Balance immediately from server
+          triggerSuccessPopup(amount);
+          loadBalance();
         }
       } catch (e) {}
     }, 2500);
   }
 
-  function triggerSuccessPopup(amount, newBalance) {
+  function triggerSuccessPopup(amount) {
     hapticNotification("success");
     if (tg && tg.showPopup) {
       tg.showPopup({
         title: "⚡ Payment Received!",
-        message: `+${amount} sats have been added to your balance!\nNew Balance: ${newBalance} sats`,
+        message: `+${amount} sats have been credited to your balance!`,
         buttons: [{ type: "ok", text: "Awesome!" }]
       });
     }
 
-    document.getElementById("modalAmountText").innerText = `+${amount} Satoshis Added!`;
-    document.getElementById("modalBalanceText").innerText = `Your New Balance: ${newBalance} sats`;
+    document.getElementById("modalAmountText").innerText = `+${amount} Satoshis Credited!`;
+    document.getElementById("modalBalanceText").innerText = "Balance updated!";
     document.getElementById("successModal").classList.remove("hidden");
   }
 
   function closeSuccessModal() {
     document.getElementById("successModal").classList.add("hidden");
     document.getElementById("qrResult").classList.add("hidden");
+    loadBalance();
   }
 
-  // Send Sats (Directly deducts from your phone's balance)
+  // Send Sats
   async function sendSats() {
     haptic("medium");
     const destination = document.getElementById("sendDest").value.trim();
@@ -350,9 +347,7 @@
     const feedback = document.getElementById("sendFeedback");
     const btn = document.getElementById("btnSend");
 
-    let myBalance = Number(localStorage.getItem(`user_sats_${currentUserId}`) || 0);
     if (!destination || !amount) return alert("Fill in destination and amount");
-    if (myBalance < amount) return alert(`Insufficient balance! You have ${myBalance} sats.`);
 
     btn.disabled = true;
     btn.innerText = "Sending...";
@@ -368,14 +363,9 @@
       if (!data.success) throw new Error(data.error);
 
       hapticNotification("success");
-
-      // Deduct from balance
-      myBalance -= amount;
-      localStorage.setItem(`user_sats_${currentUserId}`, myBalance);
-      document.getElementById("balanceDisplay").innerText = `${myBalance.toLocaleString()} sats`;
-
       feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully!</span>`;
       document.getElementById("sendDest").value = "";
+      loadBalance();
     } catch (err) {
       hapticNotification("error");
       feedback.innerHTML = `<span style="color:#ef4444">Failed: ${err.message}</span>`;
@@ -413,6 +403,7 @@
     alert("Lightning Address copied!\n" + myLightningAddress);
   }
 
+  // Load balance immediately on startup
   loadBalance();
 </script>
 </body>
