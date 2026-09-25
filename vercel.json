@@ -2,6 +2,7 @@
   "cleanUrls": true,
   "rewrites": [
     { "source": "/.well-known/lnurlp/(.*)", "destination": "/api/lnurlp?username=$1" },
-    { "source": "/api/lnurlp/cb/(.*)", "destination": "/api/lnurlp?username=$1&callback=1" }
+    { "source": "/api/lnurlp/cb/(.*)", "destination": "/api/lnurlp?username=$1&callback=1" },
+    { "source": "/api/speed/:path*", "destination": "https://api.tryspeed.com/:path*" }
   ]
 }
