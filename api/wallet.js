@@ -1,6 +1,6 @@
 const admin = require("firebase-admin");
 
-// 1. Bulletproof Firebase Initialization
+// 1. Firebase Initialization
 function getDb() {
   if (admin.apps.length) {
     return admin.firestore();
@@ -44,7 +44,7 @@ function getDb() {
 const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 
-// Helper: Get active Speed API key (checks Firestore first, then env variables)
+// Helper: Get active Speed API key
 async function getSpeedApiKey() {
   if (db) {
     try {
@@ -59,7 +59,40 @@ async function getSpeedApiKey() {
   return (process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "").trim();
 }
 
-// Helper: Extract real error from Speed's response
+// Helper: Resilient Speed API client that handles URL routing properly
+async function speedRequest(endpoint, method, body, apiKey) {
+  const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
+  const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
+
+  // Try direct endpoint first (/checkouts, /withdrawals)
+  let url = `https://api.tryspeed.com/${endpoint.replace(/^\//, "")}`;
+  let res = await fetch(url, {
+    method,
+    headers: {
+      "Authorization": authHeader,
+      "Content-Type": "application/json"
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  // If 404, fallback to /v1/
+  if (res.status === 404) {
+    url = `https://api.tryspeed.com/v1/${endpoint.replace(/^\//, "")}`;
+    res = await fetch(url, {
+      method,
+      headers: {
+        "Authorization": authHeader,
+        "Content-Type": "application/json"
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+  }
+
+  const data = await res.json().catch(() => null);
+  return { ok: res.ok, status: res.status, data };
+}
+
+// Helper: Extract human-readable error from Speed
 function extractErrorMessage(data, status) {
   if (!data) return `Speed API returned HTTP ${status}`;
   if (typeof data === "string") return data;
@@ -72,7 +105,7 @@ function extractErrorMessage(data, status) {
   return `Speed API error (HTTP ${status})`;
 }
 
-// Helper: Multi-identifier wallet resolver
+// Helper: Smart Wallet Resolver
 async function findUserWallet(identifiers) {
   if (!db) return null;
 
@@ -149,7 +182,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 2. CREATE PAYMENT INVOICE (DEPOSIT - FIXED)
+    // 2. CREATE DEPOSIT INVOICE (Uses /checkouts)
     // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id } = req.body;
@@ -171,48 +204,34 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Clean API key (strip Basic/Bearer if accidentally included)
-      const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
+      // Speed Checkouts API Call
+      const { ok, status, data: checkoutData } = await speedRequest("checkouts", "POST", {
+        amount: sats,
+        currency: "SATS",
+        description: `Deposit to ${uid}`
+      }, apiKey);
 
-      // FIXED PAYLOAD: Do NOT send target_currency when currency is SATS
-      const speedRes = await fetch("https://api.tryspeed.com/v1/payments", {
-        method: "POST",
-        headers: {
-          "Authorization": `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          amount: sats,
-          currency: "SATS",
-          payment_method: "lightning",
-          description: `Deposit to ${uid}`
-        })
-      });
-
-      const paymentData = await speedRes.json();
-
-      // FIXED INVOICE EXTRACTION: Check all nested locations where Speed places the bolt11 string
+      // Extract Lightning Bolt11 invoice string
       const invoiceString =
-        paymentData.payment_request ||
-        paymentData.invoice ||
-        paymentData.payment_method?.lightning?.payment_request ||
-        paymentData.payment_method_options?.lightning?.payment_request ||
-        paymentData.lightning?.payment_request;
+        checkoutData?.payment_request ||
+        checkoutData?.lightning?.payment_request ||
+        checkoutData?.invoice ||
+        checkoutData?.payment_method?.lightning?.payment_request ||
+        checkoutData?.payment_methods?.[0]?.lightning?.payment_request;
 
-      if (!speedRes.ok || !invoiceString) {
-        const errorDetail = extractErrorMessage(paymentData, speedRes.status);
-        console.error("Speed API Failure:", speedRes.status, paymentData);
-        return res.status(speedRes.status || 400).json({
+      if (!ok || !invoiceString) {
+        const errorDetail = extractErrorMessage(checkoutData, status);
+        return res.status(status || 400).json({
           success: false,
-          error: `[Speed ${speedRes.status}] ${errorDetail}`
+          error: `[Speed ${status}] ${errorDetail}`
         });
       }
 
-      const paymentId = paymentData.id || `inv_${Date.now()}`;
+      const txId = checkoutData.id || `ch_${Date.now()}`;
 
-      // Save invoice to Firestore
-      await db.collection("invoices").doc(paymentId).set({
-        id: paymentId,
+      // Record invoice and transaction in database
+      await db.collection("invoices").doc(txId).set({
+        id: txId,
         invoice: invoiceString,
         user_id: uid,
         telegram_id: telegram_id ? String(telegram_id) : null,
@@ -223,13 +242,14 @@ module.exports = async function handler(req, res) {
 
       return res.status(200).json({
         success: true,
-        id: paymentId,
+        id: txId,
+        tx_id: txId,
         invoice: invoiceString
       });
     }
 
     // ========================================================
-    // 3. CHECK STATUS
+    // 3. CHECK DEPOSIT STATUS (Credits Balance & Returns TxID)
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -242,24 +262,22 @@ module.exports = async function handler(req, res) {
       const invDoc = await invRef.get();
 
       if (invDoc.exists && invDoc.data().is_paid) {
-        return res.status(200).json({ success: true, is_paid: true });
+        return res.status(200).json({ 
+          success: true, 
+          is_paid: true, 
+          tx_id: payment_id,
+          amount: invDoc.data().amount
+        });
       }
 
       const apiKey = await getSpeedApiKey();
-      const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
+      const { data: checkout } = await speedRequest(`checkouts/${payment_id}`, "GET", null, apiKey);
 
-      const speedRes = await fetch(`https://api.tryspeed.com/v1/payments/${payment_id}`, {
-        headers: {
-          "Authorization": `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`
-        }
-      });
-
-      const payment = await speedRes.json();
-      const status = String(payment.status || payment.state || "").toLowerCase();
+      const status = String(checkout?.status || checkout?.state || "").toLowerCase();
       const isPaid = ["paid", "succeeded", "completed"].includes(status);
 
       if (isPaid && invDoc.exists && !invDoc.data().is_paid) {
-        const sats = Number(invDoc.data().amount || payment.amount || 0);
+        const sats = Number(invDoc.data().amount || checkout?.amount || 0);
         const creditTarget = invDoc.data().user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
 
         const candidates = [creditTarget, telegram_id, invDoc.data().telegram_id];
@@ -276,14 +294,29 @@ module.exports = async function handler(req, res) {
           updated_at: new Date().toISOString()
         }, { merge: true });
 
+        // Record in transaction log
+        batch.set(db.collection("transactions").doc(payment_id), {
+          id: payment_id,
+          type: "deposit",
+          user_id: wallet.id,
+          amount: sats,
+          status: "completed",
+          created_at: new Date().toISOString()
+        });
+
         await batch.commit();
       }
 
-      return res.status(200).json({ success: true, is_paid: isPaid });
+      return res.status(200).json({ 
+        success: true, 
+        is_paid: isPaid,
+        tx_id: payment_id,
+        amount: invDoc.exists ? invDoc.data().amount : 0
+      });
     }
 
     // ========================================================
-    // 4. SEND / WITHDRAW
+    // 4. SEND / WITHDRAW (Generates TxID for Internal & External)
     // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username } = req.body;
@@ -327,13 +360,14 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Internal transfer
+      // A. INTERNAL TRANSFER
       if (recipientUserId) {
         if (recipientUserId === senderWallet.id) {
           return res.status(400).json({ success: false, error: "You cannot send payments to your own account." });
         }
 
         const recipientWallet = await findUserWallet([recipientUserId]);
+        const txId = `INT_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
         const batch = db.batch();
         batch.set(senderWallet.ref, {
@@ -348,58 +382,78 @@ module.exports = async function handler(req, res) {
           batch.update(internalInvoiceDoc, {
             is_paid: true,
             paid_at: new Date().toISOString(),
-            paid_by: senderWallet.id
+            paid_by: senderWallet.id,
+            tx_id: txId
           });
         }
+
+        // Record Transaction
+        batch.set(db.collection("transactions").doc(txId), {
+          id: txId,
+          type: "internal_transfer",
+          sender_id: senderWallet.id,
+          recipient_id: recipientWallet.id,
+          amount: sendAmount,
+          status: "completed",
+          created_at: new Date().toISOString()
+        });
 
         await batch.commit();
 
         return res.status(200).json({
           success: true,
           internal: true,
+          tx_id: txId,
+          recipient: recipientWallet.id,
           message: `Internal transfer of ${sendAmount} sats completed.`
         });
       }
 
-      // External transfer
+      // B. EXTERNAL WITHDRAWAL (Speed /withdrawals)
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
         return res.status(500).json({ success: false, error: "Speed API key is not configured." });
       }
 
-      const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
+      const { ok, status, data: withdrawData } = await speedRequest("withdrawals", "POST", {
+        amount: sendAmount,
+        currency: "SATS",
+        payment_method: "lightning",
+        destination: dest
+      }, apiKey);
 
-      const speedWithdrawRes = await fetch("https://api.tryspeed.com/v1/withdrawals", {
-        method: "POST",
-        headers: {
-          "Authorization": `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          amount: sendAmount,
-          currency: "SATS",
-          payment_method: "lightning",
-          destination: dest
-        })
-      });
-
-      const withdrawData = await speedWithdrawRes.json();
-
-      if (!speedWithdrawRes.ok) {
-        const errorDetail = extractErrorMessage(withdrawData, speedWithdrawRes.status);
-        return res.status(speedWithdrawRes.status).json({
+      if (!ok) {
+        const errorDetail = extractErrorMessage(withdrawData, status);
+        return res.status(status).json({
           success: false,
-          error: `[Speed ${speedWithdrawRes.status}] ${errorDetail}`
+          error: `[Speed ${status}] ${errorDetail}`
         });
       }
 
-      await senderWallet.ref.set({
+      const txId = withdrawData?.id || `WD_${Date.now()}`;
+
+      // Deduct sender balance and record transaction
+      const batch = db.batch();
+      batch.set(senderWallet.ref, {
         balance: admin.firestore.FieldValue.increment(-sendAmount)
       }, { merge: true });
 
+      batch.set(db.collection("transactions").doc(txId), {
+        id: txId,
+        type: "external_withdrawal",
+        sender_id: senderWallet.id,
+        destination: dest,
+        amount: sendAmount,
+        status: "completed",
+        created_at: new Date().toISOString()
+      });
+
+      await batch.commit();
+
       return res.status(200).json({
         success: true,
-        id: withdrawData.id,
+        id: txId,
+        tx_id: txId,
         message: `Successfully sent ${sendAmount} sats.`
       });
     }
