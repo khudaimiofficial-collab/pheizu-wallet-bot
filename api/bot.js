@@ -1,7 +1,6 @@
 const { Telegraf, Markup } = require("telegraf");
 const admin = require("firebase-admin");
 
-// 1. Initialize Firebase Admin
 if (!admin.apps.length) {
   try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -23,12 +22,10 @@ const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const APP_URL = process.env.WEBAPP_URL || `https://${DOMAIN}`;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "").split(",").map(id => id.trim());
 
-// Helper: Check Admin Authorization
 function isAdmin(ctx) {
   return ADMIN_IDS.includes(String(ctx.from?.id));
 }
 
-// Persistent Reply Keyboard Grid
 function getMainKeyboard(ctx) {
   const rows = [
     ["💰 Balance", "📥 Deposit"],
@@ -40,7 +37,6 @@ function getMainKeyboard(ctx) {
   return Markup.keyboard(rows).resize();
 }
 
-// Session Helpers in Firestore (Keeps user conversation state in serverless)
 async function getSession(userId) {
   if (!db) return {};
   const doc = await db.collection("bot_sessions").doc(String(userId)).get();
@@ -57,9 +53,7 @@ async function clearSession(userId) {
   await db.collection("bot_sessions").doc(String(userId)).delete();
 }
 
-// ----------------------------------------------------
-// 1. /START COMMAND
-// ----------------------------------------------------
+// /start
 bot.start(async (ctx) => {
   await clearSession(ctx.from.id);
   const name = ctx.from.first_name || "User";
@@ -73,9 +67,7 @@ bot.start(async (ctx) => {
   );
 });
 
-// ----------------------------------------------------
-// 2. 💰 BALANCE BUTTON
-// ----------------------------------------------------
+// 💰 BALANCE
 bot.hears("💰 Balance", async (ctx) => {
   await clearSession(ctx.from.id);
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -103,9 +95,7 @@ bot.hears("💰 Balance", async (ctx) => {
   }
 });
 
-// ----------------------------------------------------
-// 3. 📥 DEPOSIT (Shows Address AND Asks for Amount)
-// ----------------------------------------------------
+// 📥 DEPOSIT
 bot.hears("📥 Deposit", async (ctx) => {
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   const lnAddress = `${userId}@${DOMAIN}`;
@@ -124,9 +114,7 @@ bot.hears("📥 Deposit", async (ctx) => {
   );
 });
 
-// ----------------------------------------------------
-// 4. 📤 WITHDRAW (Step 1: Ask for Destination)
-// ----------------------------------------------------
+// 📤 WITHDRAW
 bot.hears("📤 Withdraw", async (ctx) => {
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
@@ -152,9 +140,7 @@ bot.hears("📤 Withdraw", async (ctx) => {
   }
 });
 
-// ----------------------------------------------------
-// 5. 🔑 SET KEY (Admin - Direct Input Without Commands)
-// ----------------------------------------------------
+// 🔑 SET KEY (Admin)
 bot.hears("🔑 Set Key", async (ctx) => {
   if (!isAdmin(ctx)) {
     return ctx.reply("⛔ Access denied: You are not authorized.");
@@ -169,20 +155,17 @@ bot.hears("🔑 Set Key", async (ctx) => {
   );
 });
 
-// ----------------------------------------------------
-// 6. TEXT MESSAGE HANDLER (Processes conversational steps)
-// ----------------------------------------------------
+// TEXT HANDLER
 bot.on("text", async (ctx) => {
   const text = ctx.message.text.trim();
   const session = await getSession(ctx.from.id);
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
-  // Ignore if user clicks a keyboard button
   if (["💰 Balance", "📥 Deposit", "📤 Withdraw", "🔑 Set Key"].includes(text)) {
     return;
   }
 
-  // A. Process Deposit Amount Input
+  // 1. Deposit Amount Input
   if (session.step === "awaiting_deposit_amount") {
     const amount = parseInt(text, 10);
     if (isNaN(amount) || amount <= 0) {
@@ -209,11 +192,13 @@ bot.on("text", async (ctx) => {
         throw new Error(data.error || "Could not generate invoice.");
       }
 
+      const txId = data.tx_id || data.id;
       const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(data.invoice)}`;
 
       await ctx.replyWithPhoto(qrUrl, {
         caption:
-          `⚡ <b>Deposit Invoice: ${amount} sats</b>\n\n` +
+          `⚡ <b>Deposit Invoice: ${amount} sats</b>\n` +
+          `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
           `<code>${data.invoice}</code>\n\n` +
           `<i>Scan the QR code or tap the invoice text above to copy and pay.</i>`,
         parse_mode: "HTML"
@@ -224,7 +209,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // B. Process Withdraw Step 1: Destination Received
+  // 2. Withdraw Destination Received
   if (session.step === "awaiting_withdraw_dest") {
     await setSession(ctx.from.id, {
       step: "awaiting_withdraw_amount",
@@ -239,7 +224,7 @@ bot.on("text", async (ctx) => {
     );
   }
 
-  // C. Process Withdraw Step 2: Amount Received
+  // 3. Withdraw Amount Received
   if (session.step === "awaiting_withdraw_amount") {
     const amount = parseInt(text, 10);
     if (isNaN(amount) || amount <= 0) {
@@ -271,10 +256,13 @@ bot.on("text", async (ctx) => {
         throw new Error(data.error || "Withdrawal failed.");
       }
 
+      const txId = data.tx_id || data.id || "N/A";
+
       await ctx.reply(
         `✅ <b>Payment Successful!</b>\n\n` +
-        `💸 Sent: <b>${amount} sats</b>\n` +
-        `🎯 To: <code>${destination}</code>`,
+        `💸 <b>Amount:</b> ${amount} sats\n` +
+        `🎯 <b>Recipient:</b> <code>${destination}</code>\n` +
+        `🆔 <b>TxID:</b> <code>${txId}</code>`,
         { parse_mode: "HTML" }
       );
     } catch (err) {
@@ -283,7 +271,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // D. Process Admin Key Input
+  // 4. Admin Key Input
   if (session.step === "awaiting_admin_key" && isAdmin(ctx)) {
     await setSession(ctx.from.id, {
       step: "confirm_admin_key",
@@ -303,9 +291,7 @@ bot.on("text", async (ctx) => {
   }
 });
 
-// ----------------------------------------------------
-// 7. INLINE BUTTON CALLBACKS FOR ADMIN
-// ----------------------------------------------------
+// Admin Save Button
 bot.action("save_admin_key", async (ctx) => {
   if (!isAdmin(ctx)) {
     return ctx.answerCbQuery("Unauthorized", { show_alert: true });
@@ -336,7 +322,6 @@ bot.action("cancel_admin_key", async (ctx) => {
   await ctx.editMessageText("❌ Key update cancelled.");
 });
 
-// Vercel Serverless Function Export
 module.exports = async (req, res) => {
   try {
     if (req.method === "POST") {
