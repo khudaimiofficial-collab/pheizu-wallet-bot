@@ -78,29 +78,69 @@ async function getSpeedApiKey() {
   return (process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "").trim();
 }
 
-// Deep search JSON for lightning bolt11 invoice
-function extractInvoice(obj) {
+// Universal extractor for Lightning invoices, Bitcoin On-Chain, Tron & Solana addresses
+function extractPaymentTarget(obj) {
   if (!obj) return null;
+
   if (typeof obj === "string") {
-    if (obj.toLowerCase().startsWith("lnbc") || obj.toLowerCase().startsWith("lightning:lnbc")) {
-      return obj;
+    const str = obj.trim();
+    if (str.toLowerCase().startsWith("lnbc") || str.toLowerCase().startsWith("lightning:lnbc")) {
+      return { type: "lightning", value: str };
+    }
+    if (str.startsWith("bc1") || str.startsWith("1") || str.startsWith("3") || str.toLowerCase().startsWith("bitcoin:")) {
+      return { type: "onchain", value: str.replace(/^bitcoin:/i, "") };
+    }
+    if (str.startsWith("T") && str.length >= 30) {
+      return { type: "tron", value: str };
+    }
+    if (str.startsWith("0x") && str.length === 42) {
+      return { type: "ethereum", value: str };
     }
     return null;
   }
+
   if (typeof obj !== "object") return null;
 
-  if (obj.payment_request && typeof obj.payment_request === "string") return obj.payment_request;
-  if (obj.invoice && typeof obj.invoice === "string") return obj.invoice;
-
-  for (const key of Object.keys(obj)) {
-    const found = extractInvoice(obj[key]);
-    if (found) return found;
+  if (obj.payment_request && typeof obj.payment_request === "string") {
+    return { type: "lightning", value: obj.payment_request };
+  }
+  if (obj.invoice && typeof obj.invoice === "string") {
+    return { type: "lightning", value: obj.invoice };
+  }
+  if (obj.address && typeof obj.address === "string") {
+    return { type: "address", value: obj.address };
+  }
+  if (obj.uri && typeof obj.uri === "string") {
+    return { type: "uri", value: obj.uri };
   }
 
-  return obj.hosted_url || obj.url || null;
+  // Nested in payment_methods array
+  if (Array.isArray(obj.payment_methods)) {
+    for (const pm of obj.payment_methods) {
+      for (const key of ["lightning", "onchain", "tron", "solana", "ethereum"]) {
+        if (pm[key]) {
+          if (pm[key].address) return { type: key, value: pm[key].address };
+          if (pm[key].payment_request) return { type: "lightning", value: pm[key].payment_request };
+          if (pm[key].uri) return { type: key, value: pm[key].uri };
+        }
+      }
+    }
+  }
+
+  // Deep recursive search
+  for (const key of Object.keys(obj)) {
+    const res = extractPaymentTarget(obj[key]);
+    if (res) return res;
+  }
+
+  if (obj.hosted_url || obj.url) {
+    return { type: "url", value: obj.hosted_url || obj.url };
+  }
+
+  return null;
 }
 
-// Official Speed Client
+// Official Speed Request Client
 async function speedRequest(path, method, body, apiKey) {
   const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
   const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
@@ -219,8 +259,8 @@ module.exports = async function handler(req, res) {
       const numAmount = Number(amount);
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
 
-      if (!numAmount || numAmount < 1) {
-        return res.status(400).json({ success: false, error: "Minimum deposit is 1." });
+      if (!numAmount || numAmount <= 0) {
+        return res.status(400).json({ success: false, error: "Please enter a valid amount." });
       }
       if (!uid) {
         return res.status(400).json({ success: false, error: "Missing user identification." });
@@ -234,8 +274,13 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      const targetCurr = target_currency || "SATS";
-      const payMethod = payment_method || "lightning";
+      const targetCurr = (target_currency || "SATS").toUpperCase();
+      let payMethod = (payment_method || "lightning").toLowerCase();
+
+      // Normalize method to Speed's required enum (e.g. "onchain" without hyphen)
+      if (payMethod === "on-chain" || payMethod === "on_chain") payMethod = "onchain";
+
+      // Base currency: SATS for bitcoin, USD for stablecoins
       const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
 
       const { ok, status, data: paymentData } = await speedRequest("payments", "POST", {
@@ -257,7 +302,10 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      const invoiceString = extractInvoice(paymentData);
+      // Extract invoice or onchain address
+      const target = extractPaymentTarget(paymentData);
+      const invoiceString = target ? target.value : null;
+
       if (!invoiceString) {
         return res.status(500).json({
           success: false,
@@ -270,6 +318,7 @@ module.exports = async function handler(req, res) {
       await db.collection("invoices").doc(txId).set({
         id: txId,
         invoice: invoiceString,
+        payment_type: target.type,
         user_id: uid,
         target_currency: targetCurr,
         payment_method: payMethod,
@@ -283,6 +332,8 @@ module.exports = async function handler(req, res) {
         success: true,
         id: txId,
         tx_id: txId,
+        payment_type: target.type,
+        target_currency: targetCurr,
         invoice: invoiceString
       });
     }
@@ -386,7 +437,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Check for internal transfer within Pheizu bot
+      // Check for internal transfer
       let recipientUserId = null;
       let internalInvoiceDoc = null;
 
@@ -408,7 +459,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // A. INTERNAL LEDGER SETTLEMENT (Instant, Zero fee, TxID matches Invoice ID)
+      // A. Internal Transfer
       if (recipientUserId) {
         if (recipientUserId === senderWallet.id) {
           return res.status(400).json({ success: false, error: "You cannot send payments to your own account." });
@@ -471,14 +522,15 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // B. SPEED INSTANT SEND (POST https://api.tryspeed.com/send)
+      // B. Speed Instant Send
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
         return res.status(500).json({ success: false, error: "Speed API key is not configured." });
       }
 
-      // Determine method based on input format
-      let method = withdraw_method;
+      let method = (withdraw_method || "").toLowerCase();
+      if (method === "on-chain" || method === "on_chain") method = "onchain";
+
       if (!method) {
         if (dest.toLowerCase().startsWith("lnbc") || dest.includes("@")) {
           method = "lightning";
@@ -496,7 +548,6 @@ module.exports = async function handler(req, res) {
       const curr = currency || (method === "lightning" || method === "onchain" ? "SATS" : "USDT");
       const targetCurr = target_currency || curr;
 
-      // Exact parameters specified in the Speed Instant Send docs
       const { ok, status, data: sendData } = await speedRequest("send", "POST", {
         amount: sendAmount,
         currency: curr,
@@ -516,7 +567,6 @@ module.exports = async function handler(req, res) {
 
       const txId = sendData?.id || `send_${Date.now()}`;
 
-      // Deduct balance from sender and log transaction
       const batch = db.batch();
       batch.set(senderWallet.ref, {
         balance: admin.firestore.FieldValue.increment(-sendAmount)
