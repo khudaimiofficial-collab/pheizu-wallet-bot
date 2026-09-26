@@ -212,15 +212,15 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 2. CREATE DEPOSIT INVOICE
+    // 2. CREATE DEPOSIT INVOICE (Min 1 sat)
     // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id } = req.body;
       const sats = parseInt(amount, 10);
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
 
-      if (!sats || sats <= 0) {
-        return res.status(400).json({ success: false, error: "Please enter a valid amount in sats." });
+      if (!sats || sats < 1) {
+        return res.status(400).json({ success: false, error: "Minimum deposit is 1 sat." });
       }
       if (!uid) {
         return res.status(400).json({ success: false, error: "Missing user identification." });
@@ -261,9 +261,9 @@ module.exports = async function handler(req, res) {
         });
       }
 
+      // The invoice ID from Speed is used as the unique Transaction ID
       const txId = paymentData.id || `py_${Date.now()}`;
 
-      // Save invoice with telegram_id to notify the user when paid
       await db.collection("invoices").doc(txId).set({
         id: txId,
         invoice: invoiceString,
@@ -283,7 +283,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 3. CHECK DEPOSIT STATUS (Notifies user via Telegram on payment)
+    // 3. CHECK DEPOSIT STATUS (TxID is identical to invoice ID)
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -329,6 +329,7 @@ module.exports = async function handler(req, res) {
           updated_at: new Date().toISOString()
         }, { merge: true });
 
+        // Record with identical invoice ID
         batch.set(db.collection("transactions").doc(payment_id), {
           id: payment_id,
           type: "deposit",
@@ -340,7 +341,6 @@ module.exports = async function handler(req, res) {
 
         await batch.commit();
 
-        // Send Telegram confirmation to user
         if (targetTgId) {
           await notifyTelegramUser(
             targetTgId,
@@ -360,7 +360,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 4. SEND / WITHDRAW (Auto-notifies recipient on internal transfer)
+    // 4. SEND / WITHDRAW (Uses identical Invoice ID for TxID)
     // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username } = req.body;
@@ -410,7 +410,9 @@ module.exports = async function handler(req, res) {
         }
 
         const recipientWallet = await findUserWallet([recipientUserId]);
-        const txId = `INT_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+        // CRITICAL UPDATE: The TxID is strictly the SAME as the created invoice ID
+        const txId = internalInvoiceDoc ? internalInvoiceDoc.id : `INT_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
         const batch = db.batch();
         batch.set(senderWallet.ref, {
@@ -447,7 +449,6 @@ module.exports = async function handler(req, res) {
 
         await batch.commit();
 
-        // Notify the recipient on Telegram
         const targetChatId = recipientTgId || recipientWallet.data?.telegram_id;
         if (targetChatId) {
           await notifyTelegramUser(
@@ -467,7 +468,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // B. EXTERNAL WITHDRAWAL (Instant Send)
+      // B. EXTERNAL WITHDRAWAL
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
         return res.status(500).json({ success: false, error: "Speed API key is not configured." });
