@@ -9,7 +9,6 @@ function getDb() {
   try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       let sa = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
-      // Handle base64 encoded service account if present
       if (!sa.startsWith("{")) {
         sa = Buffer.from(sa, "base64").toString("utf8");
       }
@@ -45,7 +44,7 @@ function getDb() {
 const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 
-// Helper: Get active Speed API key
+// Helper: Get active Speed API key (checks Firestore first, then env variables)
 async function getSpeedApiKey() {
   if (db) {
     try {
@@ -57,11 +56,23 @@ async function getSpeedApiKey() {
       console.warn("Could not read API key from DB:", e.message);
     }
   }
-  return (process.env.SPEED_API_KEY || "").trim();
+  return (process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "").trim();
 }
 
-// Helper: Smart Wallet Resolver
-// Finds the user's wallet document whether it was created via username, telegram numeric ID, or 'user'+ID
+// Helper: Extract real error from Speed's response
+function extractErrorMessage(data, status) {
+  if (!data) return `Speed API returned HTTP ${status}`;
+  if (typeof data === "string") return data;
+  if (data.message) return data.message;
+  if (data.error && data.error.message) return data.error.message;
+  if (typeof data.error === "string") return data.error;
+  if (Array.isArray(data.errors) && data.errors[0]) {
+    return data.errors[0].message || JSON.stringify(data.errors[0]);
+  }
+  return `Speed API error (HTTP ${status})`;
+}
+
+// Helper: Multi-identifier wallet resolver
 async function findUserWallet(identifiers) {
   if (!db) return null;
 
@@ -71,7 +82,6 @@ async function findUserWallet(identifiers) {
       .map(id => String(id).trim().toLowerCase())
   ));
 
-  // Check both "users" and "wallets" collections
   const collectionsToCheck = ["users", "wallets"];
 
   for (const col of collectionsToCheck) {
@@ -92,7 +102,6 @@ async function findUserWallet(identifiers) {
     }
   }
 
-  // Fallback: Default to "users" collection with primary identifier
   const primary = candidateIds[0] || "unknown";
   return {
     ref: db.collection("users").doc(primary),
@@ -114,7 +123,7 @@ module.exports = async function handler(req, res) {
   if (!db) {
     return res.status(500).json({ 
       success: false, 
-      error: "Firebase database failed to connect. Check your FIREBASE_SERVICE_ACCOUNT variable." 
+      error: "Firebase connection failed. Verify FIREBASE_SERVICE_ACCOUNT variable." 
     });
   }
 
@@ -122,20 +131,14 @@ module.exports = async function handler(req, res) {
 
   try {
     // ========================================================
-    // 1. GET BALANCE (Checks all possible user keys)
+    // 1. GET BALANCE
     // ========================================================
     if (action === "balance" && req.method === "GET") {
       const uid = req.query.user_id;
       const uname = req.query.username;
       const tid = req.query.telegram_id;
 
-      const candidates = [
-        uid,
-        uname,
-        tid,
-        tid ? `user${tid}` : null
-      ];
-
+      const candidates = [uid, uname, tid, tid ? `user${tid}` : null];
       const wallet = await findUserWallet(candidates);
 
       return res.status(200).json({
@@ -146,7 +149,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 2. CREATE PAYMENT INVOICE (DEPOSIT)
+    // 2. CREATE PAYMENT INVOICE (DEPOSIT - FIXED)
     // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id } = req.body;
@@ -154,28 +157,33 @@ module.exports = async function handler(req, res) {
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
 
       if (!sats || sats <= 0) {
-        return res.status(400).json({ success: false, error: "Invalid amount" });
+        return res.status(400).json({ success: false, error: "Please enter a valid amount in sats." });
       }
       if (!uid) {
-        return res.status(400).json({ success: false, error: "Missing user identification" });
+        return res.status(400).json({ success: false, error: "Missing user identification." });
       }
 
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
-        return res.status(500).json({ success: false, error: "Speed API key is not set. Go to Admin -> Set Key." });
+        return res.status(500).json({ 
+          success: false, 
+          error: "Speed API key is not configured. Admin can set it using '🔑 Set Key'." 
+        });
       }
 
-      // Speed API Call
+      // Clean API key (strip Basic/Bearer if accidentally included)
+      const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
+
+      // FIXED PAYLOAD: Do NOT send target_currency when currency is SATS
       const speedRes = await fetch("https://api.tryspeed.com/v1/payments", {
         method: "POST",
         headers: {
-          "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
+          "Authorization": `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
           amount: sats,
           currency: "SATS",
-          target_currency: "SATS",
           payment_method: "lightning",
           description: `Deposit to ${uid}`
         })
@@ -183,15 +191,24 @@ module.exports = async function handler(req, res) {
 
       const paymentData = await speedRes.json();
 
-      if (!speedRes.ok || (!paymentData.payment_request && !paymentData.invoice)) {
-        return res.status(speedRes.status).json({
+      // FIXED INVOICE EXTRACTION: Check all nested locations where Speed places the bolt11 string
+      const invoiceString =
+        paymentData.payment_request ||
+        paymentData.invoice ||
+        paymentData.payment_method?.lightning?.payment_request ||
+        paymentData.payment_method_options?.lightning?.payment_request ||
+        paymentData.lightning?.payment_request;
+
+      if (!speedRes.ok || !invoiceString) {
+        const errorDetail = extractErrorMessage(paymentData, speedRes.status);
+        console.error("Speed API Failure:", speedRes.status, paymentData);
+        return res.status(speedRes.status || 400).json({
           success: false,
-          error: paymentData.message || paymentData.error || "Failed to create invoice."
+          error: `[Speed ${speedRes.status}] ${errorDetail}`
         });
       }
 
-      const invoiceString = paymentData.payment_request || paymentData.invoice;
-      const paymentId = paymentData.id;
+      const paymentId = paymentData.id || `inv_${Date.now()}`;
 
       // Save invoice to Firestore
       await db.collection("invoices").doc(paymentId).set({
@@ -212,7 +229,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 3. CHECK STATUS (Credits Balance on Payment)
+    // 3. CHECK STATUS
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -224,23 +241,21 @@ module.exports = async function handler(req, res) {
       const invRef = db.collection("invoices").doc(payment_id);
       const invDoc = await invRef.get();
 
-      // If already credited in DB
       if (invDoc.exists && invDoc.data().is_paid) {
         return res.status(200).json({ success: true, is_paid: true });
       }
 
-      // Check Speed API status
       const apiKey = await getSpeedApiKey();
+      const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
+
       const speedRes = await fetch(`https://api.tryspeed.com/v1/payments/${payment_id}`, {
         headers: {
-          "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`
+          "Authorization": `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`
         }
       });
 
       const payment = await speedRes.json();
       const status = String(payment.status || payment.state || "").toLowerCase();
-
-      // Check all possible successful status names from Speed
       const isPaid = ["paid", "succeeded", "completed"].includes(status);
 
       if (isPaid && invDoc.exists && !invDoc.data().is_paid) {
@@ -256,7 +271,6 @@ module.exports = async function handler(req, res) {
           paid_at: new Date().toISOString()
         });
 
-        // Credit both the found wallet and ensure balance field is updated
         batch.set(wallet.ref, {
           balance: admin.firestore.FieldValue.increment(sats),
           updated_at: new Date().toISOString()
@@ -269,7 +283,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 4. SEND / WITHDRAW (Handles Internal & External transfers)
+    // 4. SEND / WITHDRAW
     // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username } = req.body;
@@ -280,7 +294,6 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ success: false, error: "Invalid parameters." });
       }
 
-      // Find sender wallet
       const senderCandidates = [user_id, username, telegram_id, telegram_id ? `user${telegram_id}` : null];
       const senderWallet = await findUserWallet(senderCandidates);
 
@@ -292,7 +305,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Check if destination is internal (Pheizu Lightning Address or Internal Invoice)
+      // Check if recipient is internal
       let recipientUserId = null;
       let internalInvoiceDoc = null;
 
@@ -314,10 +327,10 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // A. INTERNAL TRANSFER (Instant, 0 fee, avoids Speed 400 error)
+      // Internal transfer
       if (recipientUserId) {
         if (recipientUserId === senderWallet.id) {
-          return res.status(400).json({ success: false, error: "Cannot send to yourself." });
+          return res.status(400).json({ success: false, error: "You cannot send payments to your own account." });
         }
 
         const recipientWallet = await findUserWallet([recipientUserId]);
@@ -348,16 +361,18 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // B. EXTERNAL LIGHTNING PAYMENT
+      // External transfer
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
         return res.status(500).json({ success: false, error: "Speed API key is not configured." });
       }
 
+      const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
+
       const speedWithdrawRes = await fetch("https://api.tryspeed.com/v1/withdrawals", {
         method: "POST",
         headers: {
-          "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
+          "Authorization": `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -371,13 +386,13 @@ module.exports = async function handler(req, res) {
       const withdrawData = await speedWithdrawRes.json();
 
       if (!speedWithdrawRes.ok) {
+        const errorDetail = extractErrorMessage(withdrawData, speedWithdrawRes.status);
         return res.status(speedWithdrawRes.status).json({
           success: false,
-          error: withdrawData.message || withdrawData.error || "External Lightning payment failed."
+          error: `[Speed ${speedWithdrawRes.status}] ${errorDetail}`
         });
       }
 
-      // Deduct balance from sender
       await senderWallet.ref.set({
         balance: admin.firestore.FieldValue.increment(-sendAmount)
       }, { merge: true });
