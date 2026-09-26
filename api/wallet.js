@@ -1,24 +1,51 @@
 const admin = require("firebase-admin");
 
-// 1. Initialize Firebase Admin
-if (!admin.apps.length) {
+// 1. Bulletproof Firebase Initialization
+function getDb() {
+  if (admin.apps.length) {
+    return admin.firestore();
+  }
+
   try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      let sa = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
+      // Handle base64 encoded service account if present
+      if (!sa.startsWith("{")) {
+        sa = Buffer.from(sa, "base64").toString("utf8");
+      }
+      const parsed = typeof sa === "string" ? JSON.parse(sa) : sa;
+      if (parsed.private_key) {
+        parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+      }
       admin.initializeApp({
-        credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
+        credential: admin.credential.cert(parsed)
       });
-    } else {
-      admin.initializeApp();
+      return admin.firestore();
     }
+
+    if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+        })
+      });
+      return admin.firestore();
+    }
+
+    admin.initializeApp();
+    return admin.firestore();
   } catch (err) {
-    console.error("Firebase initialization warning:", err.message);
+    console.error("Firebase Init Error:", err);
+    return null;
   }
 }
 
-const db = admin.apps.length ? admin.firestore() : null;
+const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 
-// Helper: Get active Speed API Key (checks Firestore first, falls back to ENV)
+// Helper: Get active Speed API key
 async function getSpeedApiKey() {
   if (db) {
     try {
@@ -27,14 +54,55 @@ async function getSpeedApiKey() {
         return snap.data().api_key.trim();
       }
     } catch (e) {
-      console.warn("Could not read key from DB:", e.message);
+      console.warn("Could not read API key from DB:", e.message);
     }
   }
   return (process.env.SPEED_API_KEY || "").trim();
 }
 
+// Helper: Smart Wallet Resolver
+// Finds the user's wallet document whether it was created via username, telegram numeric ID, or 'user'+ID
+async function findUserWallet(identifiers) {
+  if (!db) return null;
+
+  const candidateIds = Array.from(new Set(
+    identifiers
+      .filter(Boolean)
+      .map(id => String(id).trim().toLowerCase())
+  ));
+
+  // Check both "users" and "wallets" collections
+  const collectionsToCheck = ["users", "wallets"];
+
+  for (const col of collectionsToCheck) {
+    for (const docId of candidateIds) {
+      const doc = await db.collection(col).doc(docId).get();
+      if (doc.exists) {
+        const data = doc.data();
+        const bal = data.balance ?? data.sats ?? data.amount;
+        if (bal !== undefined && bal !== null) {
+          return {
+            ref: doc.ref,
+            id: doc.id,
+            balance: Number(bal) || 0,
+            collection: col
+          };
+        }
+      }
+    }
+  }
+
+  // Fallback: Default to "users" collection with primary identifier
+  const primary = candidateIds[0] || "unknown";
+  return {
+    ref: db.collection("users").doc(primary),
+    id: primary,
+    balance: 0,
+    collection: "users"
+  };
+}
+
 module.exports = async function handler(req, res) {
-  // Enable CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -43,49 +111,61 @@ module.exports = async function handler(req, res) {
     return res.status(200).end();
   }
 
+  if (!db) {
+    return res.status(500).json({ 
+      success: false, 
+      error: "Firebase database failed to connect. Check your FIREBASE_SERVICE_ACCOUNT variable." 
+    });
+  }
+
   const { action } = req.query;
 
   try {
     // ========================================================
-    // ACTION 1: GET BALANCE
+    // 1. GET BALANCE (Checks all possible user keys)
     // ========================================================
     if (action === "balance" && req.method === "GET") {
-      const userId = (req.query.user_id || req.query.username || "").toLowerCase().trim();
-      if (!userId) {
-        return res.status(400).json({ success: false, error: "Missing user_id" });
-      }
+      const uid = req.query.user_id;
+      const uname = req.query.username;
+      const tid = req.query.telegram_id;
 
-      if (!db) {
-        return res.status(200).json({ success: true, balance: 0 });
-      }
+      const candidates = [
+        uid,
+        uname,
+        tid,
+        tid ? `user${tid}` : null
+      ];
 
-      const userDoc = await db.collection("users").doc(userId).get();
-      const balance = userDoc.exists ? Number(userDoc.data().balance || 0) : 0;
+      const wallet = await findUserWallet(candidates);
 
-      return res.status(200).json({ success: true, balance });
+      return res.status(200).json({
+        success: true,
+        user_id: wallet ? wallet.id : uid,
+        balance: wallet ? wallet.balance : 0
+      });
     }
 
     // ========================================================
-    // ACTION 2: CREATE INVOICE (DEPOSIT)
+    // 2. CREATE PAYMENT INVOICE (DEPOSIT)
     // ========================================================
     if (action === "create-payment" && req.method === "POST") {
-      const { amount, user_id, username } = req.body;
+      const { amount, user_id, username, telegram_id } = req.body;
       const sats = parseInt(amount, 10);
-      const uid = (user_id || username || "").toLowerCase().trim();
+      const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
 
       if (!sats || sats <= 0) {
         return res.status(400).json({ success: false, error: "Invalid amount" });
       }
       if (!uid) {
-        return res.status(400).json({ success: false, error: "Missing user_id" });
+        return res.status(400).json({ success: false, error: "Missing user identification" });
       }
 
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
-        return res.status(500).json({ success: false, error: "Speed API key is not configured." });
+        return res.status(500).json({ success: false, error: "Speed API key is not set. Go to Admin -> Set Key." });
       }
 
-      // Call Speed API to create a Lightning Invoice
+      // Speed API Call
       const speedRes = await fetch("https://api.tryspeed.com/v1/payments", {
         method: "POST",
         headers: {
@@ -97,7 +177,7 @@ module.exports = async function handler(req, res) {
           currency: "SATS",
           target_currency: "SATS",
           payment_method: "lightning",
-          description: `Deposit for ${uid}`
+          description: `Deposit to ${uid}`
         })
       });
 
@@ -106,24 +186,23 @@ module.exports = async function handler(req, res) {
       if (!speedRes.ok || (!paymentData.payment_request && !paymentData.invoice)) {
         return res.status(speedRes.status).json({
           success: false,
-          error: paymentData.message || paymentData.error || "Failed to create invoice from Speed."
+          error: paymentData.message || paymentData.error || "Failed to create invoice."
         });
       }
 
       const invoiceString = paymentData.payment_request || paymentData.invoice;
       const paymentId = paymentData.id;
 
-      // Save the invoice in Firestore to support internal transfers & verification
-      if (db) {
-        await db.collection("invoices").doc(paymentId).set({
-          id: paymentId,
-          invoice: invoiceString,
-          user_id: uid,
-          amount: sats,
-          is_paid: false,
-          created_at: new Date().toISOString()
-        });
-      }
+      // Save invoice to Firestore
+      await db.collection("invoices").doc(paymentId).set({
+        id: paymentId,
+        invoice: invoiceString,
+        user_id: uid,
+        telegram_id: telegram_id ? String(telegram_id) : null,
+        amount: sats,
+        is_paid: false,
+        created_at: new Date().toISOString()
+      });
 
       return res.status(200).json({
         success: true,
@@ -133,25 +212,24 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // ACTION 3: CHECK INVOICE STATUS
+    // 3. CHECK STATUS (Credits Balance on Payment)
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
-      const { payment_id, user_id } = req.query;
-      const uid = (user_id || "").toLowerCase().trim();
+      const { payment_id, user_id, telegram_id } = req.query;
 
       if (!payment_id) {
         return res.status(400).json({ success: false, error: "Missing payment_id" });
       }
 
-      // Check database first
-      if (db) {
-        const invDoc = await db.collection("invoices").doc(payment_id).get();
-        if (invDoc.exists && invDoc.data().is_paid) {
-          return res.status(200).json({ success: true, is_paid: true });
-        }
+      const invRef = db.collection("invoices").doc(payment_id);
+      const invDoc = await invRef.get();
+
+      // If already credited in DB
+      if (invDoc.exists && invDoc.data().is_paid) {
+        return res.status(200).json({ success: true, is_paid: true });
       }
 
-      // Verify directly with Speed API
+      // Check Speed API status
       const apiKey = await getSpeedApiKey();
       const speedRes = await fetch(`https://api.tryspeed.com/v1/payments/${payment_id}`, {
         headers: {
@@ -160,90 +238,96 @@ module.exports = async function handler(req, res) {
       });
 
       const payment = await speedRes.json();
-      const isPaid = payment.status === "paid" || payment.status === "completed" || payment.state === "paid";
+      const status = String(payment.status || payment.state || "").toLowerCase();
 
-      if (isPaid && db) {
-        // Credit the balance once
-        const invRef = db.collection("invoices").doc(payment_id);
-        const invDoc = await invRef.get();
+      // Check all possible successful status names from Speed
+      const isPaid = ["paid", "succeeded", "completed"].includes(status);
 
-        if (invDoc.exists && !invDoc.data().is_paid) {
-          const sats = Number(invDoc.data().amount || payment.amount || 0);
-          const creditUser = invDoc.data().user_id || uid;
+      if (isPaid && invDoc.exists && !invDoc.data().is_paid) {
+        const sats = Number(invDoc.data().amount || payment.amount || 0);
+        const creditTarget = invDoc.data().user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
 
-          const batch = db.batch();
-          batch.update(invRef, { is_paid: true, paid_at: new Date().toISOString() });
-          batch.set(db.collection("users").doc(creditUser), {
-            balance: admin.firestore.FieldValue.increment(sats)
-          }, { merge: true });
+        const candidates = [creditTarget, telegram_id, invDoc.data().telegram_id];
+        const wallet = await findUserWallet(candidates);
 
-          await batch.commit();
-        }
+        const batch = db.batch();
+        batch.update(invRef, {
+          is_paid: true,
+          paid_at: new Date().toISOString()
+        });
+
+        // Credit both the found wallet and ensure balance field is updated
+        batch.set(wallet.ref, {
+          balance: admin.firestore.FieldValue.increment(sats),
+          updated_at: new Date().toISOString()
+        }, { merge: true });
+
+        await batch.commit();
       }
 
       return res.status(200).json({ success: true, is_paid: isPaid });
     }
 
     // ========================================================
-    // ACTION 4: SEND / WITHDRAW (With Internal Transfer Fix)
+    // 4. SEND / WITHDRAW (Handles Internal & External transfers)
     // ========================================================
     if (action === "send" && req.method === "POST") {
-      const { destination, amount, user_id } = req.body;
+      const { destination, amount, user_id, telegram_id, username } = req.body;
       const sendAmount = parseInt(amount, 10);
-      const senderId = (user_id || "").toLowerCase().trim();
       const dest = (destination || "").trim();
 
-      if (!senderId || !dest || isNaN(sendAmount) || sendAmount <= 0) {
+      if (!dest || isNaN(sendAmount) || sendAmount <= 0) {
         return res.status(400).json({ success: false, error: "Invalid parameters." });
       }
 
-      if (!db) {
-        return res.status(500).json({ success: false, error: "Database not connected." });
+      // Find sender wallet
+      const senderCandidates = [user_id, username, telegram_id, telegram_id ? `user${telegram_id}` : null];
+      const senderWallet = await findUserWallet(senderCandidates);
+
+      if (!senderWallet || senderWallet.balance < sendAmount) {
+        const currentBal = senderWallet ? senderWallet.balance : 0;
+        return res.status(400).json({ 
+          success: false, 
+          error: `Insufficient balance! You have ${currentBal} sats.` 
+        });
       }
 
-      // 1. Verify Sender Balance
-      const senderDoc = await db.collection("users").doc(senderId).get();
-      const currentBal = senderDoc.exists ? Number(senderDoc.data().balance || 0) : 0;
-
-      if (currentBal < sendAmount) {
-        return res.status(400).json({ success: false, error: `Insufficient balance (${currentBal} sats available).` });
-      }
-
-      // 2. CHECK IF THIS IS AN INTERNAL TRANSFER
-      let recipientId = null;
+      // Check if destination is internal (Pheizu Lightning Address or Internal Invoice)
+      let recipientUserId = null;
       let internalInvoiceDoc = null;
 
-      // Case A: Destination is a Pheizu Lightning Address (e.g. friend@pheizu-wallet-bot.vercel.app)
       if (dest.includes("@") && dest.toLowerCase().includes(DOMAIN.toLowerCase())) {
-        recipientId = dest.split("@")[0].toLowerCase().trim();
+        recipientUserId = dest.split("@")[0].toLowerCase().trim();
       }
 
-      // Case B: Destination is an Invoice created by another user inside this bot
-      if (!recipientId) {
-        const invQuery = await db.collection("invoices")
+      if (!recipientUserId) {
+        const invSnap = await db.collection("invoices")
           .where("invoice", "==", dest)
           .where("is_paid", "==", false)
           .limit(1)
           .get();
 
-        if (!invQuery.empty) {
-          const found = invQuery.docs[0];
-          recipientId = found.data().user_id;
-          internalInvoiceDoc = found.ref;
+        if (!invSnap.empty) {
+          const inv = invSnap.docs[0];
+          recipientUserId = inv.data().user_id;
+          internalInvoiceDoc = inv.ref;
         }
       }
 
-      // 3. EXECUTE INTERNAL TRANSFER (Bypasses Speed 400 error completely!)
-      if (recipientId) {
-        if (recipientId === senderId) {
-          return res.status(400).json({ success: false, error: "You cannot send payments to your own account." });
+      // A. INTERNAL TRANSFER (Instant, 0 fee, avoids Speed 400 error)
+      if (recipientUserId) {
+        if (recipientUserId === senderWallet.id) {
+          return res.status(400).json({ success: false, error: "Cannot send to yourself." });
         }
 
+        const recipientWallet = await findUserWallet([recipientUserId]);
+
         const batch = db.batch();
-        batch.update(db.collection("users").doc(senderId), {
+        batch.set(senderWallet.ref, {
           balance: admin.firestore.FieldValue.increment(-sendAmount)
-        });
-        batch.set(db.collection("users").doc(recipientId), {
+        }, { merge: true });
+
+        batch.set(recipientWallet.ref, {
           balance: admin.firestore.FieldValue.increment(sendAmount)
         }, { merge: true });
 
@@ -251,7 +335,7 @@ module.exports = async function handler(req, res) {
           batch.update(internalInvoiceDoc, {
             is_paid: true,
             paid_at: new Date().toISOString(),
-            paid_by: senderId
+            paid_by: senderWallet.id
           });
         }
 
@@ -260,11 +344,11 @@ module.exports = async function handler(req, res) {
         return res.status(200).json({
           success: true,
           internal: true,
-          message: `Internal transfer of ${sendAmount} sats sent to @${recipientId} successfully!`
+          message: `Internal transfer of ${sendAmount} sats completed.`
         });
       }
 
-      // 4. EXTERNAL WITHDRAWAL (Destination is outside Pheizu)
+      // B. EXTERNAL LIGHTNING PAYMENT
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
         return res.status(500).json({ success: false, error: "Speed API key is not configured." });
@@ -293,10 +377,10 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Deduct balance from sender after successful Speed dispatch
-      await db.collection("users").doc(senderId).update({
+      // Deduct balance from sender
+      await senderWallet.ref.set({
         balance: admin.firestore.FieldValue.increment(-sendAmount)
-      });
+      }, { merge: true });
 
       return res.status(200).json({
         success: true,
@@ -307,7 +391,7 @@ module.exports = async function handler(req, res) {
 
     return res.status(400).json({ success: false, error: "Invalid action." });
   } catch (err) {
-    console.error("Wallet API Error:", err);
+    console.error("Wallet Handler Error:", err);
     return res.status(500).json({ success: false, error: err.message });
   }
 };
