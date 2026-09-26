@@ -112,14 +112,17 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
 }
 
 // ----------------------------------------------------
-// 1. /START
+// 1. /START (Shows Minimum Deposit is 1 sat)
 // ----------------------------------------------------
 bot.start(async (ctx) => {
   await clearSession(ctx.from.id);
   const name = ctx.from.first_name || "User";
 
   await ctx.reply(
-    `👋 Hello, <b>${name}</b>!\n\nWelcome to <b>Pheizu Lightning Wallet</b>.\nChoose an option from the menu below:`,
+    `👋 Hello, <b>${name}</b>!\n\n` +
+    `Welcome to <b>Pheizu Lightning Wallet</b>.\n` +
+    `⚡ <b>Minimum deposit:</b> 1 sat\n\n` +
+    `Choose an option from the menu below:`,
     {
       parse_mode: "HTML",
       ...getMainKeyboard(ctx)
@@ -158,7 +161,7 @@ bot.hears("💰 Balance", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 3. 📥 DEPOSIT
+// 3. 📥 DEPOSIT (Shows Min 1 sat note)
 // ----------------------------------------------------
 bot.hears("📥 Deposit", async (ctx) => {
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -173,7 +176,7 @@ bot.hears("📥 Deposit", async (ctx) => {
     `<i>(Tap to copy & send from any Lightning wallet)</i>\n\n` +
     `━━━━━━━━━━━━━━━━━━━\n` +
     `<b>Or generate an Invoice QR:</b>\n` +
-    `Reply with the amount in <b>sats</b> (e.g. <code>50</code>):`,
+    `Reply with the amount in <b>sats</b> (Min: <b>1 sat</b>, e.g. <code>50</code>):`,
     { parse_mode: "HTML" }
   );
 });
@@ -238,8 +241,8 @@ bot.on("text", async (ctx) => {
   // A. PROCESS DEPOSIT AMOUNT
   if (session.step === "awaiting_deposit_amount") {
     const amount = parseInt(text, 10);
-    if (isNaN(amount) || amount <= 0) {
-      return ctx.reply("⚠️ Please enter a valid number of sats (e.g. 50).");
+    if (isNaN(amount) || amount < 1) {
+      return ctx.reply("⚠️ Minimum deposit is 1 sat. Please enter a valid number (e.g. 50).");
     }
 
     await ctx.replyWithChatAction("typing");
@@ -385,7 +388,6 @@ bot.on("text", async (ctx) => {
 
     const destination = session.destination;
 
-    // SAVE DETAILS AND SHOW CONFIRMATION BUTTON
     await setSession(ctx.from.id, {
       step: "confirm_payment",
       destination,
