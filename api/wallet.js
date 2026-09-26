@@ -1,258 +1,313 @@
-// api/wallet.js
-const { 
-  normalizeUserKey,
-  saveUserTelegramId,
-  notifyPaymentReceived,
-  getBalance, 
-  claimPaymentAndCredit,
-  deductBalance,
-  internalTransfer,
-  checkPendingDeposits
-} = require('../lib/db');
+const admin = require("firebase-admin");
 
-const DOMAIN = process.env.DOMAIN || "pheizu-wallet-bot.vercel.app";
-const SPEED_BASE_URL = "https://api.tryspeed.com";
-
-// Recursive search for invoice or hosted URL
-function extractPaymentDetails(data) {
-  let invoice = "";
-  let url = "";
-
-  function scan(obj) {
-    if (!obj || typeof obj !== "object") return;
-    for (const [k, v] of Object.entries(obj)) {
-      if (typeof v === "string") {
-        const str = v.trim();
-        if (/^(lnbc|lntb|lightning:)/i.test(str)) {
-          if (!invoice) invoice = str;
-        } else if ((k.toLowerCase().includes("url") || k === "link") && /^https?:\/\//i.test(str)) {
-          if (!url) url = str;
-        }
-      } else if (typeof v === "object") {
-        scan(v);
-      }
+// 1. Initialize Firebase Admin
+if (!admin.apps.length) {
+  try {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      admin.initializeApp({
+        credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
+      });
+    } else {
+      admin.initializeApp();
     }
+  } catch (err) {
+    console.error("Firebase initialization warning:", err.message);
   }
-
-  scan(data);
-  return { invoice, url };
 }
 
-// Universal Speed API caller
-async function speedRequest(endpoint, method = "GET", body = null) {
-  const rawKey = (process.env.SPEED_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
-  if (!rawKey) {
-    throw new Error("SPEED_SECRET_KEY is missing in your Vercel Environment Variables.");
+const db = admin.apps.length ? admin.firestore() : null;
+const DOMAIN = "pheizu-wallet-bot.vercel.app";
+
+// Helper: Get active Speed API Key (checks Firestore first, falls back to ENV)
+async function getSpeedApiKey() {
+  if (db) {
+    try {
+      const snap = await db.collection("settings").doc("speed").get();
+      if (snap.exists && snap.data().api_key) {
+        return snap.data().api_key.trim();
+      }
+    } catch (e) {
+      console.warn("Could not read key from DB:", e.message);
+    }
   }
-
-  const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint;
-  const authHeader = "Basic " + Buffer.from(rawKey + ":").toString("base64");
-
-  const headers = {
-    "accept": "application/json",
-    "authorization": authHeader,
-    "content-type": "application/json",
-    "speed-version": "2022-10-15"
-  };
-
-  const options = { method, headers };
-
-  if (body && (method === "POST" || method === "PUT")) {
-    options.body = JSON.stringify(body);
-  }
-
-  const res = await fetch(`${SPEED_BASE_URL}/${cleanEndpoint}`, options);
-  const text = await res.text();
-
-  let json = {};
-  try {
-    json = JSON.parse(text);
-  } catch (e) {
-    throw new Error(`Speed error (${res.status}): ${text}`);
-  }
-
-  if (!res.ok) {
-    const errMsg = json?.message || json?.error?.message || json?.errors?.[0]?.message || text;
-    throw new Error(`[Speed ${res.status}] ${errMsg}`);
-  }
-
-  return json;
+  return (process.env.SPEED_API_KEY || "").trim();
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, speed-version');
+  // Enable CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
 
-  const action = req.query.action;
+  const { action } = req.query;
 
   try {
-    // 1. GET BALANCE
-    if (action === 'balance') {
-      const userParam = req.query.user_id || req.query.username;
-      const tgId = req.query.telegram_id;
-      const userKey = normalizeUserKey(userParam, tgId);
+    // ========================================================
+    // ACTION 1: GET BALANCE
+    // ========================================================
+    if (action === "balance" && req.method === "GET") {
+      const userId = (req.query.user_id || req.query.username || "").toLowerCase().trim();
+      if (!userId) {
+        return res.status(400).json({ success: false, error: "Missing user_id" });
+      }
 
-      if (tgId) await saveUserTelegramId(userKey, tgId);
+      if (!db) {
+        return res.status(200).json({ success: true, balance: 0 });
+      }
 
-      // Auto-check and settle any pending Lightning Address deposits
-      await checkPendingDeposits(userKey, speedRequest);
+      const userDoc = await db.collection("users").doc(userId).get();
+      const balance = userDoc.exists ? Number(userDoc.data().balance || 0) : 0;
 
-      const balance = await getBalance(userKey);
-      return res.status(200).json({ success: true, balance, user: userKey });
+      return res.status(200).json({ success: true, balance });
     }
 
-    // 2. CREATE PAYMENT INVOICE (Receive tab)
-    if (action === 'create-payment' && req.method === 'POST') {
-      const { amount, user_id, username, telegram_id } = req.body || {};
-      const userKey = normalizeUserKey(username || user_id, telegram_id);
-      const sats = Math.floor(Number(amount));
+    // ========================================================
+    // ACTION 2: CREATE INVOICE (DEPOSIT)
+    // ========================================================
+    if (action === "create-payment" && req.method === "POST") {
+      const { amount, user_id, username } = req.body;
+      const sats = parseInt(amount, 10);
+      const uid = (user_id || username || "").toLowerCase().trim();
 
-      if (telegram_id) await saveUserTelegramId(userKey, telegram_id);
-      if (!sats || isNaN(sats) || sats <= 0) {
-        return res.status(400).json({ success: false, error: "Please enter a valid amount in sats." });
+      if (!sats || sats <= 0) {
+        return res.status(400).json({ success: false, error: "Invalid amount" });
+      }
+      if (!uid) {
+        return res.status(400).json({ success: false, error: "Missing user_id" });
       }
 
-      const payment = await speedRequest("payments", "POST", {
-        amount: sats,
-        currency: "SATS",
-        target_currency: "SATS",
-        payment_methods: ["lightning"],
-        description: `Deposit to ${userKey}`,
-        metadata: { user_key: userKey }
-      });
-
-      const { invoice, url } = extractPaymentDetails(payment);
-
-      return res.status(200).json({
-        success: true,
-        id: payment.id,
-        invoice: invoice || url,
-        url: url,
-        amount: sats,
-        user: userKey
-      });
-    }
-
-    // 3. CHECK STATUS (Polling from Mini App)
-    if (action === 'check-status') {
-      const paymentId = req.query.payment_id;
-      const userParam = req.query.user_id || req.query.username;
-      const tgId = req.query.telegram_id;
-      const userKey = normalizeUserKey(userParam, tgId);
-
-      if (tgId) await saveUserTelegramId(userKey, tgId);
-      if (!paymentId) return res.status(400).json({ success: false, error: "Missing payment_id." });
-
-      const payment = await speedRequest(`payments/${paymentId}`, "GET");
-      const st = (payment.status || "").toLowerCase();
-      const isPaid = st === "succeeded" || st === "paid";
-      let satsCredited = 0;
-      let newBalance = 0;
-
-      if (isPaid) {
-        const satsPaid = Math.floor(Number(payment.amount || 0));
-        const result = await claimPaymentAndCredit(paymentId, userKey, satsPaid);
-
-        if (!result.alreadyProcessed) {
-          satsCredited = satsPaid;
-          newBalance = result.newBalance;
-          await notifyPaymentReceived(userKey, satsPaid, newBalance);
-        } else {
-          newBalance = await getBalance(userKey);
-        }
+      const apiKey = await getSpeedApiKey();
+      if (!apiKey) {
+        return res.status(500).json({ success: false, error: "Speed API key is not configured." });
       }
 
-      return res.status(200).json({
-        success: true,
-        is_paid: isPaid,
-        status: payment.status,
-        amount_credited: satsCredited,
-        balance: newBalance
-      });
-    }
-
-    // 4. SEND SATS / WITHDRAW
-    if (action === 'send' && req.method === 'POST') {
-      const { destination, amount, user_id, username, telegram_id } = req.body || {};
-      const userKey = normalizeUserKey(username || user_id, telegram_id);
-      const sats = Math.floor(Number(amount));
-
-      if (telegram_id) await saveUserTelegramId(userKey, telegram_id);
-      if (!destination || typeof destination !== "string") {
-        return res.status(400).json({ success: false, error: "Missing destination." });
-      }
-      if (!sats || isNaN(sats) || sats <= 0) {
-        return res.status(400).json({ success: false, error: "Invalid amount." });
-      }
-
-      const cleanDest = destination.trim();
-
-      // CASE A: INTERNAL TRANSFER TO ANOTHER BOT USER (Zero Fee, Instant)
-      if (cleanDest.toLowerCase().endsWith(`@${DOMAIN}`)) {
-        const recipientUser = cleanDest.toLowerCase().replace(`@${DOMAIN}`, "").trim();
-
-        const transferRes = await internalTransfer(userKey, recipientUser, sats);
-
-        // Notify recipient in Telegram
-        await notifyPaymentReceived(recipientUser, sats, transferRes.newToBal, userKey);
-
-        return res.status(200).json({
-          success: true,
-          type: "internal",
-          sent: sats,
-          remaining_balance: transferRes.newFromBal
-        });
-      }
-
-      // CASE B: EXTERNAL SEND VIA SPEED API: POST /send
-      const currentBal = await getBalance(userKey);
-      if (currentBal < sats) {
-        return res.status(400).json({ 
-          success: false, 
-          error: `Insufficient balance: You have ${currentBal.toLocaleString()} sats, needed ${sats.toLocaleString()} sats.` 
-        });
-      }
-
-      // Deduct balance first (escrow)
-      await deductBalance(userKey, sats);
-
-      try {
-        const withdrawReq = cleanDest.replace(/^lightning:/i, "");
-
-        // Call Speed POST /send with exact documented fields
-        const sendResult = await speedRequest("send", "POST", {
+      // Call Speed API to create a Lightning Invoice
+      const speedRes = await fetch("https://api.tryspeed.com/v1/payments", {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
           amount: sats,
           currency: "SATS",
           target_currency: "SATS",
-          withdraw_method: "lightning",
-          withdraw_request: withdrawReq,
-          note: `Withdrawal by ${userKey}`
+          payment_method: "lightning",
+          description: `Deposit for ${uid}`
+        })
+      });
+
+      const paymentData = await speedRes.json();
+
+      if (!speedRes.ok || (!paymentData.payment_request && !paymentData.invoice)) {
+        return res.status(speedRes.status).json({
+          success: false,
+          error: paymentData.message || paymentData.error || "Failed to create invoice from Speed."
         });
+      }
+
+      const invoiceString = paymentData.payment_request || paymentData.invoice;
+      const paymentId = paymentData.id;
+
+      // Save the invoice in Firestore to support internal transfers & verification
+      if (db) {
+        await db.collection("invoices").doc(paymentId).set({
+          id: paymentId,
+          invoice: invoiceString,
+          user_id: uid,
+          amount: sats,
+          is_paid: false,
+          created_at: new Date().toISOString()
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        id: paymentId,
+        invoice: invoiceString
+      });
+    }
+
+    // ========================================================
+    // ACTION 3: CHECK INVOICE STATUS
+    // ========================================================
+    if (action === "check-status" && req.method === "GET") {
+      const { payment_id, user_id } = req.query;
+      const uid = (user_id || "").toLowerCase().trim();
+
+      if (!payment_id) {
+        return res.status(400).json({ success: false, error: "Missing payment_id" });
+      }
+
+      // Check database first
+      if (db) {
+        const invDoc = await db.collection("invoices").doc(payment_id).get();
+        if (invDoc.exists && invDoc.data().is_paid) {
+          return res.status(200).json({ success: true, is_paid: true });
+        }
+      }
+
+      // Verify directly with Speed API
+      const apiKey = await getSpeedApiKey();
+      const speedRes = await fetch(`https://api.tryspeed.com/v1/payments/${payment_id}`, {
+        headers: {
+          "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`
+        }
+      });
+
+      const payment = await speedRes.json();
+      const isPaid = payment.status === "paid" || payment.status === "completed" || payment.state === "paid";
+
+      if (isPaid && db) {
+        // Credit the balance once
+        const invRef = db.collection("invoices").doc(payment_id);
+        const invDoc = await invRef.get();
+
+        if (invDoc.exists && !invDoc.data().is_paid) {
+          const sats = Number(invDoc.data().amount || payment.amount || 0);
+          const creditUser = invDoc.data().user_id || uid;
+
+          const batch = db.batch();
+          batch.update(invRef, { is_paid: true, paid_at: new Date().toISOString() });
+          batch.set(db.collection("users").doc(creditUser), {
+            balance: admin.firestore.FieldValue.increment(sats)
+          }, { merge: true });
+
+          await batch.commit();
+        }
+      }
+
+      return res.status(200).json({ success: true, is_paid: isPaid });
+    }
+
+    // ========================================================
+    // ACTION 4: SEND / WITHDRAW (With Internal Transfer Fix)
+    // ========================================================
+    if (action === "send" && req.method === "POST") {
+      const { destination, amount, user_id } = req.body;
+      const sendAmount = parseInt(amount, 10);
+      const senderId = (user_id || "").toLowerCase().trim();
+      const dest = (destination || "").trim();
+
+      if (!senderId || !dest || isNaN(sendAmount) || sendAmount <= 0) {
+        return res.status(400).json({ success: false, error: "Invalid parameters." });
+      }
+
+      if (!db) {
+        return res.status(500).json({ success: false, error: "Database not connected." });
+      }
+
+      // 1. Verify Sender Balance
+      const senderDoc = await db.collection("users").doc(senderId).get();
+      const currentBal = senderDoc.exists ? Number(senderDoc.data().balance || 0) : 0;
+
+      if (currentBal < sendAmount) {
+        return res.status(400).json({ success: false, error: `Insufficient balance (${currentBal} sats available).` });
+      }
+
+      // 2. CHECK IF THIS IS AN INTERNAL TRANSFER
+      let recipientId = null;
+      let internalInvoiceDoc = null;
+
+      // Case A: Destination is a Pheizu Lightning Address (e.g. friend@pheizu-wallet-bot.vercel.app)
+      if (dest.includes("@") && dest.toLowerCase().includes(DOMAIN.toLowerCase())) {
+        recipientId = dest.split("@")[0].toLowerCase().trim();
+      }
+
+      // Case B: Destination is an Invoice created by another user inside this bot
+      if (!recipientId) {
+        const invQuery = await db.collection("invoices")
+          .where("invoice", "==", dest)
+          .where("is_paid", "==", false)
+          .limit(1)
+          .get();
+
+        if (!invQuery.empty) {
+          const found = invQuery.docs[0];
+          recipientId = found.data().user_id;
+          internalInvoiceDoc = found.ref;
+        }
+      }
+
+      // 3. EXECUTE INTERNAL TRANSFER (Bypasses Speed 400 error completely!)
+      if (recipientId) {
+        if (recipientId === senderId) {
+          return res.status(400).json({ success: false, error: "You cannot send payments to your own account." });
+        }
+
+        const batch = db.batch();
+        batch.update(db.collection("users").doc(senderId), {
+          balance: admin.firestore.FieldValue.increment(-sendAmount)
+        });
+        batch.set(db.collection("users").doc(recipientId), {
+          balance: admin.firestore.FieldValue.increment(sendAmount)
+        }, { merge: true });
+
+        if (internalInvoiceDoc) {
+          batch.update(internalInvoiceDoc, {
+            is_paid: true,
+            paid_at: new Date().toISOString(),
+            paid_by: senderId
+          });
+        }
+
+        await batch.commit();
 
         return res.status(200).json({
           success: true,
-          result: sendResult,
-          sent: sats,
-          remaining_balance: await getBalance(userKey)
-        });
-      } catch (sendError) {
-        // Refund on failure
-        const refundKey = `refund_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-        await claimPaymentAndCredit(refundKey, userKey, sats);
-
-        return res.status(500).json({
-          success: false,
-          error: sendError.message || "Failed to broadcast payment across Lightning."
+          internal: true,
+          message: `Internal transfer of ${sendAmount} sats sent to @${recipientId} successfully!`
         });
       }
+
+      // 4. EXTERNAL WITHDRAWAL (Destination is outside Pheizu)
+      const apiKey = await getSpeedApiKey();
+      if (!apiKey) {
+        return res.status(500).json({ success: false, error: "Speed API key is not configured." });
+      }
+
+      const speedWithdrawRes = await fetch("https://api.tryspeed.com/v1/withdrawals", {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          amount: sendAmount,
+          currency: "SATS",
+          payment_method: "lightning",
+          destination: dest
+        })
+      });
+
+      const withdrawData = await speedWithdrawRes.json();
+
+      if (!speedWithdrawRes.ok) {
+        return res.status(speedWithdrawRes.status).json({
+          success: false,
+          error: withdrawData.message || withdrawData.error || "External Lightning payment failed."
+        });
+      }
+
+      // Deduct balance from sender after successful Speed dispatch
+      await db.collection("users").doc(senderId).update({
+        balance: admin.firestore.FieldValue.increment(-sendAmount)
+      });
+
+      return res.status(200).json({
+        success: true,
+        id: withdrawData.id,
+        message: `Successfully sent ${sendAmount} sats.`
+      });
     }
 
-    return res.status(404).json({ success: false, error: `Invalid action '${action}'` });
+    return res.status(400).json({ success: false, error: "Invalid action." });
   } catch (err) {
     console.error("Wallet API Error:", err);
-    return res.status(500).json({ success: false, error: err.message || "Server error occurred." });
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
