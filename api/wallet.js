@@ -100,7 +100,7 @@ function extractInvoice(obj) {
   return obj.hosted_url || obj.url || null;
 }
 
-// Speed Client
+// Official Speed Client
 async function speedRequest(path, method, body, apiKey) {
   const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
   const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
@@ -212,15 +212,15 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 2. CREATE DEPOSIT INVOICE (Min 1 sat)
+    // 2. CREATE DEPOSIT INVOICE (POST /payments)
     // ========================================================
     if (action === "create-payment" && req.method === "POST") {
-      const { amount, user_id, username, telegram_id } = req.body;
-      const sats = parseInt(amount, 10);
+      const { amount, user_id, username, telegram_id, target_currency, payment_method } = req.body;
+      const numAmount = Number(amount);
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
 
-      if (!sats || sats < 1) {
-        return res.status(400).json({ success: false, error: "Minimum deposit is 1 sat." });
+      if (!numAmount || numAmount < 1) {
+        return res.status(400).json({ success: false, error: "Minimum deposit is 1." });
       }
       if (!uid) {
         return res.status(400).json({ success: false, error: "Missing user identification." });
@@ -234,11 +234,15 @@ module.exports = async function handler(req, res) {
         });
       }
 
+      const targetCurr = target_currency || "SATS";
+      const payMethod = payment_method || "lightning";
+      const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
+
       const { ok, status, data: paymentData } = await speedRequest("payments", "POST", {
-        currency: "SATS",
-        amount: sats,
-        target_currency: "SATS",
-        payment_methods: ["lightning"],
+        currency: baseCurr,
+        amount: numAmount,
+        target_currency: targetCurr,
+        payment_methods: [payMethod],
         metadata: {
           user_id: uid,
           telegram_id: telegram_id ? String(telegram_id) : ""
@@ -257,19 +261,20 @@ module.exports = async function handler(req, res) {
       if (!invoiceString) {
         return res.status(500).json({
           success: false,
-          error: "Speed did not return a valid Lightning invoice."
+          error: "Speed did not return a valid payment address or invoice."
         });
       }
 
-      // The invoice ID from Speed is used as the unique Transaction ID
       const txId = paymentData.id || `py_${Date.now()}`;
 
       await db.collection("invoices").doc(txId).set({
         id: txId,
         invoice: invoiceString,
         user_id: uid,
+        target_currency: targetCurr,
+        payment_method: payMethod,
         telegram_id: telegram_id ? String(telegram_id) : null,
-        amount: sats,
+        amount: numAmount,
         is_paid: false,
         created_at: new Date().toISOString()
       });
@@ -283,7 +288,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 3. CHECK DEPOSIT STATUS (TxID is identical to invoice ID)
+    // 3. CHECK DEPOSIT STATUS (GET /payments/{id})
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -329,7 +334,6 @@ module.exports = async function handler(req, res) {
           updated_at: new Date().toISOString()
         }, { merge: true });
 
-        // Record with identical invoice ID
         batch.set(db.collection("transactions").doc(payment_id), {
           id: payment_id,
           type: "deposit",
@@ -360,11 +364,11 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 4. SEND / WITHDRAW (Uses identical Invoice ID for TxID)
+    // 4. INSTANT SEND (POST https://api.tryspeed.com/send)
     // ========================================================
     if (action === "send" && req.method === "POST") {
-      const { destination, amount, user_id, telegram_id, username } = req.body;
-      const sendAmount = parseInt(amount, 10);
+      const { destination, amount, user_id, telegram_id, username, withdraw_method, currency, target_currency } = req.body;
+      const sendAmount = Number(amount);
       const dest = (destination || "").trim();
 
       if (!dest || isNaN(sendAmount) || sendAmount <= 0) {
@@ -382,6 +386,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
+      // Check for internal transfer within Pheizu bot
       let recipientUserId = null;
       let internalInvoiceDoc = null;
 
@@ -403,15 +408,13 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // A. INTERNAL TRANSFER
+      // A. INTERNAL LEDGER SETTLEMENT (Instant, Zero fee, TxID matches Invoice ID)
       if (recipientUserId) {
         if (recipientUserId === senderWallet.id) {
           return res.status(400).json({ success: false, error: "You cannot send payments to your own account." });
         }
 
         const recipientWallet = await findUserWallet([recipientUserId]);
-
-        // CRITICAL UPDATE: The TxID is strictly the SAME as the created invoice ID
         const txId = internalInvoiceDoc ? internalInvoiceDoc.id : `INT_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
         const batch = db.batch();
@@ -468,38 +471,52 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // B. EXTERNAL WITHDRAWAL
+      // B. SPEED INSTANT SEND (POST https://api.tryspeed.com/send)
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
         return res.status(500).json({ success: false, error: "Speed API key is not configured." });
       }
 
-      let withdrawRes = await speedRequest("withdraw-requests", "POST", {
-        amount: sendAmount,
-        currency: "SATS",
-        payment_method: "lightning",
-        destination: dest
-      }, apiKey);
-
-      if (!withdrawRes.ok && withdrawRes.status !== 201) {
-        withdrawRes = await speedRequest("instant-sends", "POST", {
-          amount: sendAmount,
-          currency: "SATS",
-          payment_method: "lightning",
-          destination: dest
-        }, apiKey);
+      // Determine method based on input format
+      let method = withdraw_method;
+      if (!method) {
+        if (dest.toLowerCase().startsWith("lnbc") || dest.includes("@")) {
+          method = "lightning";
+        } else if (dest.startsWith("bc1") || dest.startsWith("1") || dest.startsWith("3")) {
+          method = "onchain";
+        } else if (dest.startsWith("T")) {
+          method = "tron";
+        } else if (dest.startsWith("0x")) {
+          method = "ethereum";
+        } else {
+          method = "lightning";
+        }
       }
 
-      if (!withdrawRes.ok && withdrawRes.status !== 201) {
-        const errorDetail = extractErrorMessage(withdrawRes.data, withdrawRes.status);
-        return res.status(withdrawRes.status).json({
+      const curr = currency || (method === "lightning" || method === "onchain" ? "SATS" : "USDT");
+      const targetCurr = target_currency || curr;
+
+      // Exact parameters specified in the Speed Instant Send docs
+      const { ok, status, data: sendData } = await speedRequest("send", "POST", {
+        amount: sendAmount,
+        currency: curr,
+        target_currency: targetCurr,
+        withdraw_method: method,
+        withdraw_request: dest,
+        note: `Withdrawal by ${senderWallet.id}`
+      }, apiKey);
+
+      if (!ok && status !== 200 && status !== 201) {
+        const errorDetail = extractErrorMessage(sendData, status);
+        return res.status(status || 400).json({
           success: false,
-          error: `[Speed ${withdrawRes.status}] ${errorDetail}`
+          error: `[Speed ${status}] ${errorDetail}`
         });
       }
 
-      const txId = withdrawRes.data?.id || `WD_${Date.now()}`;
+      const txId = sendData?.id || `send_${Date.now()}`;
 
+      // Deduct balance from sender and log transaction
       const batch = db.batch();
       batch.set(senderWallet.ref, {
         balance: admin.firestore.FieldValue.increment(-sendAmount)
@@ -507,10 +524,12 @@ module.exports = async function handler(req, res) {
 
       batch.set(db.collection("transactions").doc(txId), {
         id: txId,
-        type: "external_withdrawal",
+        type: "instant_send",
         sender_id: senderWallet.id,
         destination: dest,
+        withdraw_method: method,
         amount: sendAmount,
+        currency: curr,
         status: "completed",
         created_at: new Date().toISOString()
       });
@@ -521,7 +540,7 @@ module.exports = async function handler(req, res) {
         success: true,
         id: txId,
         tx_id: txId,
-        message: `Successfully sent ${sendAmount} sats.`
+        message: `Successfully sent ${sendAmount} ${curr}.`
       });
     }
 
