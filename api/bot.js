@@ -91,7 +91,7 @@ async function clearSession(userId) {
   await db.collection("bot_sessions").doc(String(userId)).delete();
 }
 
-// Format My Wallet Screen (Screenshot 1)
+// Format My Wallet Screen
 async function getWalletOverviewText(userId, telegramId) {
   let sats = 0;
   try {
@@ -161,7 +161,7 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
         await bot.telegram.sendMessage(
           chatId,
           `🎉 <b>Payment Received!</b>\n\n` +
-          `⚡ <b>+${amount} sats</b> credited to your balance!\n` +
+          `⚡ <b>+${amount}</b> credited to your balance!\n` +
           `💰 <b>New Balance:</b> ${currentBal} sats\n` +
           `🆔 <b>TxID:</b> <code>${txId}</code>`,
           { parse_mode: "HTML" }
@@ -206,7 +206,7 @@ bot.hears("💰 Balance", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 3. 📥 DEPOSIT (Gateway Selector - Screenshot 2)
+// 3. 📥 DEPOSIT (Gateway Selector)
 // ----------------------------------------------------
 bot.hears("📥 Deposit", async (ctx) => {
   await clearSession(ctx.from.id);
@@ -221,7 +221,7 @@ bot.hears("📥 Deposit", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 4. 📤 WITHDRAW (Gateway Selector - Screenshot 2)
+// 4. 📤 WITHDRAW (Gateway Selector)
 // ----------------------------------------------------
 bot.hears("📤 Withdraw", async (ctx) => {
   await clearSession(ctx.from.id);
@@ -271,7 +271,8 @@ bot.action("dep_sats_lightning", async (ctx) => {
   await setSession(ctx.from.id, { 
     step: "awaiting_deposit_amount",
     target_currency: "SATS",
-    payment_method: "lightning"
+    payment_method: "lightning",
+    min_amount: 1
   });
 
   await ctx.editMessageText(
@@ -288,12 +289,13 @@ bot.action("dep_btc_onchain", async (ctx) => {
   await setSession(ctx.from.id, { 
     step: "awaiting_deposit_amount",
     target_currency: "SATS",
-    payment_method: "on-chain"
+    payment_method: "onchain", // Exactly "onchain" without hyphen
+    min_amount: 1000
   });
 
   await ctx.editMessageText(
     `₿ <b>Deposit Bitcoin (On-Chain)</b>\n\n` +
-    `Reply with the amount in <b>sats</b> to generate an on-chain address (Min: 1000 sats):`,
+    `Reply with the amount in <b>sats</b> to generate an on-chain address (Min: <b>1,000 sats</b>, e.g. <code>10000</code>):`,
     { parse_mode: "HTML" }
   );
 });
@@ -303,12 +305,13 @@ bot.action("dep_usdt_trc20", async (ctx) => {
   await setSession(ctx.from.id, { 
     step: "awaiting_deposit_amount",
     target_currency: "USDT",
-    payment_method: "tron"
+    payment_method: "tron",
+    min_amount: 0.5
   });
 
   await ctx.editMessageText(
     `💵 <b>Deposit USDT (TRC-20)</b>\n\n` +
-    `Reply with the amount in <b>USDT</b> you want to deposit (e.g. <code>10</code>):`,
+    `Reply with the amount in <b>USDT</b> (Min: <b>0.5 USDT</b>, e.g. <code>10</code>):`,
     { parse_mode: "HTML" }
   );
 });
@@ -318,12 +321,13 @@ bot.action("dep_usdc_solana", async (ctx) => {
   await setSession(ctx.from.id, { 
     step: "awaiting_deposit_amount",
     target_currency: "USDC",
-    payment_method: "solana"
+    payment_method: "solana",
+    min_amount: 0.5
   });
 
   await ctx.editMessageText(
     `💲 <b>Deposit USDC (Solana)</b>\n\n` +
-    `Reply with the amount in <b>USDC</b> you want to deposit (e.g. <code>10</code>):`,
+    `Reply with the amount in <b>USDC</b> (Min: <b>0.5 USDC</b>, e.g. <code>10</code>):`,
     { parse_mode: "HTML" }
   );
 });
@@ -365,11 +369,12 @@ bot.action("with_btc_onchain", async (ctx) => {
   await setSession(ctx.from.id, { 
     step: "awaiting_withdraw_dest",
     target_currency: "SATS",
-    withdraw_method: "onchain"
+    withdraw_method: "onchain",
+    min_amount: 1000
   });
 
   await ctx.editMessageText(
-    `₿ <b>Bitcoin On-Chain Withdrawal (Min: 1000 SATS):</b>\n\n` +
+    `₿ <b>Bitcoin On-Chain Withdrawal (Min: 1,000 SATS):</b>\n\n` +
     `Paste your Bitcoin On-Chain destination address (<code>bc1...</code> or <code>1...</code>):`,
     { parse_mode: "HTML" }
   );
@@ -380,7 +385,8 @@ bot.action("with_usdt_trc20", async (ctx) => {
   await setSession(ctx.from.id, { 
     step: "awaiting_withdraw_dest",
     target_currency: "USDT",
-    withdraw_method: "tron"
+    withdraw_method: "tron",
+    min_amount: 0.5
   });
 
   await ctx.editMessageText(
@@ -395,7 +401,8 @@ bot.action("with_usdc_solana", async (ctx) => {
   await setSession(ctx.from.id, { 
     step: "awaiting_withdraw_dest",
     target_currency: "USDC",
-    withdraw_method: "solana"
+    withdraw_method: "solana",
+    min_amount: 0.5
   });
 
   await ctx.editMessageText(
@@ -420,8 +427,10 @@ bot.on("text", async (ctx) => {
   // A. PROCESS DEPOSIT AMOUNT
   if (session.step === "awaiting_deposit_amount") {
     const amount = Number(text);
-    if (isNaN(amount) || amount < 1) {
-      return ctx.reply("⚠️ Minimum deposit is 1. Please enter a valid number (e.g. 50).");
+    const minAmount = session.min_amount || 1;
+
+    if (isNaN(amount) || amount < minAmount) {
+      return ctx.reply(`⚠️ Minimum deposit is ${minAmount}. Please enter a valid number.`);
     }
 
     await ctx.replyWithChatAction("typing");
@@ -445,20 +454,30 @@ bot.on("text", async (ctx) => {
       const data = await res.json();
 
       if (!data.success || !data.invoice) {
-        throw new Error(data.error || "Could not generate invoice.");
+        throw new Error(data.error || "Could not generate deposit.");
       }
 
       const txId = data.tx_id || data.id;
+      const isLightning = data.invoice.toLowerCase().startsWith("lnbc");
 
       const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(data.invoice)}&size=400&dark=00e676&light=0b0e14&margin=2&ecLevel=Q&centerImageUrl=https%3A%2F%2Fcdn-icons-png.flaticon.com%2F512%2F1198%2F1198305.png&centerImageSizeRatio=0.22`;
 
-      await ctx.replyWithPhoto(qrUrl, {
-        caption:
-          `⚡ <b>Deposit Payment Request Created</b>\n\n` +
+      const caption = isLightning
+        ? `⚡ <b>Lightning Deposit Invoice Created</b>\n\n` +
           `💰 <b>Amount:</b> ${amount} ${targetCurrency}\n` +
           `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
           `<code>${data.invoice}</code>\n\n` +
-          `<i>Scan QR or tap to copy. Waiting for payment...</i>`,
+          `<i>Scan QR or tap invoice to copy. Waiting for payment...</i>`
+        : `📥 <b>${targetCurrency} Deposit Address Created</b>\n\n` +
+          `💰 <b>Expected Amount:</b> ${amount} ${targetCurrency}\n` +
+          `🌐 <b>Network:</b> ${paymentMethod.toUpperCase()}\n` +
+          `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
+          `👉 <b>Deposit Address (Tap to copy):</b>\n` +
+          `<code>${data.invoice}</code>\n\n` +
+          `<i>Scan QR or copy address to deposit from your wallet or exchange. Waiting for confirmation...</i>`;
+
+      await ctx.replyWithPhoto(qrUrl, {
+        caption,
         parse_mode: "HTML"
       });
 
@@ -473,7 +492,7 @@ bot.on("text", async (ctx) => {
   if (session.step === "awaiting_withdraw_dest") {
     const isInvoice = text.toLowerCase().startsWith("lnbc") || text.toLowerCase().startsWith("lightning:lnbc");
 
-    // Case 1: Lightning Invoice (Auto-detects sats)
+    // Case 1: Lightning Invoice
     if (isInvoice) {
       await ctx.replyWithChatAction("typing");
 
@@ -541,7 +560,7 @@ bot.on("text", async (ctx) => {
       );
     }
 
-    // Case 2: Address (Prompts for amount)
+    // Case 2: Crypto Address
     await setSession(ctx.from.id, {
       step: "awaiting_withdraw_amount",
       destination: text,
