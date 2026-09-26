@@ -112,7 +112,7 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
 }
 
 // ----------------------------------------------------
-// 1. /START (Shows Minimum Deposit is 1 sat)
+// 1. /START (Shows Supported Cryptos, Networks & Min Deposit)
 // ----------------------------------------------------
 bot.start(async (ctx) => {
   await clearSession(ctx.from.id);
@@ -120,9 +120,17 @@ bot.start(async (ctx) => {
 
   await ctx.reply(
     `👋 Hello, <b>${name}</b>!\n\n` +
-    `Welcome to <b>Pheizu Lightning Wallet</b>.\n` +
-    `⚡ <b>Minimum deposit:</b> 1 sat\n\n` +
-    `Choose an option from the menu below:`,
+    `Welcome to <b>Pheizu Multi-Crypto & Lightning Wallet</b>.\n\n` +
+    `🌐 <b>Supported API Cryptocurrencies:</b>\n` +
+    `• ⚡ <b>Bitcoin (BTC / SATS)</b>\n` +
+    `  └ <i>Networks:</i> Lightning Network, Bitcoin On-Chain\n` +
+    `• 💵 <b>Tether (USDT)</b>\n` +
+    `  └ <i>Networks:</i> Lightning, Tron (TRC-20), Solana (SPL), Ethereum (ERC-20)\n` +
+    `• 💲 <b>USD Coin (USDC)</b>\n` +
+    `  └ <i>Networks:</i> Lightning, Solana (SPL), Ethereum (ERC-20)\n\n` +
+    `⚡ <b>Active Bot Wallet Asset:</b> Bitcoin (SATS)\n` +
+    `📌 <b>Minimum Deposit:</b> 1 sat\n\n` +
+    `Choose an action from the menu below:`,
     {
       parse_mode: "HTML",
       ...getMainKeyboard(ctx)
@@ -161,7 +169,7 @@ bot.hears("💰 Balance", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 3. 📥 DEPOSIT (Shows Min 1 sat note)
+// 3. 📥 DEPOSIT
 // ----------------------------------------------------
 bot.hears("📥 Deposit", async (ctx) => {
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -287,7 +295,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // B. PROCESS WITHDRAW DESTINATION (DETECTS INVOICE -> PROMPTS FOR CONFIRMATION BUTTON)
+  // B. PROCESS WITHDRAW DESTINATION
   if (session.step === "awaiting_withdraw_dest") {
     const isInvoice = text.toLowerCase().startsWith("lnbc") || text.toLowerCase().startsWith("lightning:lnbc");
 
@@ -297,7 +305,6 @@ bot.on("text", async (ctx) => {
 
       let detectedSats = null;
 
-      // 1. Check internal Firestore records
       if (db) {
         const invSnap = await db.collection("invoices")
           .where("invoice", "==", text)
@@ -309,12 +316,10 @@ bot.on("text", async (ctx) => {
         }
       }
 
-      // 2. Decode from BOLT-11 string
       if (!detectedSats) {
         detectedSats = decodeBolt11Sats(text);
       }
 
-      // Zero-amount invoice fallback
       if (!detectedSats || detectedSats <= 0) {
         await setSession(ctx.from.id, {
           step: "awaiting_withdraw_amount",
@@ -328,7 +333,6 @@ bot.on("text", async (ctx) => {
         );
       }
 
-      // Check balance
       if (detectedSats > session.balance) {
         await clearSession(ctx.from.id);
         return ctx.reply(
@@ -338,7 +342,6 @@ bot.on("text", async (ctx) => {
         );
       }
 
-      // SAVE DETAILS AND SHOW CONFIRMATION BUTTON (NO AUTO-SEND)
       await setSession(ctx.from.id, {
         step: "confirm_payment",
         destination: text,
@@ -376,7 +379,7 @@ bot.on("text", async (ctx) => {
     );
   }
 
-  // C. PROCESS WITHDRAW AMOUNT (For Lightning Addresses)
+  // C. PROCESS WITHDRAW AMOUNT
   if (session.step === "awaiting_withdraw_amount") {
     const amount = parseInt(text, 10);
     if (isNaN(amount) || amount <= 0) {
@@ -432,7 +435,7 @@ bot.on("text", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 7. BUTTON CALLBACKS (Send / Cancel Payment)
+// 7. BUTTON CALLBACKS
 // ----------------------------------------------------
 bot.action("confirm_send", async (ctx) => {
   await ctx.answerCbQuery("Processing payment...");
