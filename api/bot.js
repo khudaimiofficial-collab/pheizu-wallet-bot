@@ -40,37 +40,115 @@ function getMainKeyboard(ctx) {
   return Markup.keyboard(rows).resize();
 }
 
-// Deposit Gateway Keyboard
-function getDepositGatewayKeyboard() {
+// ----------------------------------------------------
+// KEYBOARDS: STEP 1 (ASSET SELECTION)
+// ----------------------------------------------------
+function getDepositAssetKeyboard() {
   return Markup.inlineKeyboard([
+    [Markup.button.callback("⚡ Bitcoin (SATS)", "dep_asset_sats")],
     [
-      Markup.button.callback("⚡ SATS (Lightning)", "dep_sats_lightning"),
-      Markup.button.callback("₿ BTC (On-Chain)", "dep_btc_onchain")
+      Markup.button.callback("💵 USDT", "dep_asset_usdt"),
+      Markup.button.callback("💲 USDC", "dep_asset_usdc")
     ],
-    [
-      Markup.button.callback("💵 USDT (TRC-20)", "dep_usdt_trc20"),
-      Markup.button.callback("💲 USDC (Solana)", "dep_usdc_solana")
-    ],
-    [
-      Markup.button.callback("🔙 Back", "gateway_back")
-    ]
+    [Markup.button.callback("🔙 Back", "gateway_back")]
   ]);
 }
 
-// Withdrawal Gateway Keyboard
-function getWithdrawGatewayKeyboard() {
+function getWithdrawAssetKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("⚡ Bitcoin (SATS)", "with_asset_sats")],
+    [
+      Markup.button.callback("💵 USDT", "with_asset_usdt"),
+      Markup.button.callback("💲 USDC", "with_asset_usdc")
+    ],
+    [Markup.button.callback("🔙 Back", "gateway_back")]
+  ]);
+}
+
+// ----------------------------------------------------
+// KEYBOARDS: STEP 2 (NETWORK SELECTION)
+// ----------------------------------------------------
+// USDT Networks: Lightning, Ethereum, Tron, Solana, TON
+function getUsdtDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ SATS (Lightning)", "with_sats_lightning"),
-      Markup.button.callback("₿ BTC (On-Chain)", "with_btc_onchain")
+      Markup.button.callback("⚡ Lightning", "dep_net_usdt_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "dep_net_usdt_ethereum")
     ],
     [
-      Markup.button.callback("💵 USDT (TRC-20)", "with_usdt_trc20"),
-      Markup.button.callback("💲 USDC (Solana)", "with_usdc_solana")
+      Markup.button.callback("🔴 Tron", "dep_net_usdt_tron"),
+      Markup.button.callback("🟣 Solana", "dep_net_usdt_solana")
     ],
     [
-      Markup.button.callback("🔙 Back", "gateway_back")
-    ]
+      Markup.button.callback("💎 TON", "dep_net_usdt_ton")
+    ],
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
+  ]);
+}
+
+// USDC Networks: Lightning, Ethereum, Solana
+function getUsdcDepositNetworks() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("⚡ Lightning", "dep_net_usdc_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "dep_net_usdc_ethereum")
+    ],
+    [
+      Markup.button.callback("🟣 Solana", "dep_net_usdc_solana")
+    ],
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
+  ]);
+}
+
+// Bitcoin Networks: Lightning, On-Chain
+function getSatsDepositNetworks() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("⚡ Lightning", "dep_net_sats_lightning"),
+      Markup.button.callback("₿ On-Chain", "dep_net_sats_onchain")
+    ],
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
+  ]);
+}
+
+// Withdraw Network Keyboards
+function getUsdtWithdrawNetworks() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("⚡ Lightning", "with_net_usdt_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdt_ethereum")
+    ],
+    [
+      Markup.button.callback("🔴 Tron", "with_net_usdt_tron"),
+      Markup.button.callback("🟣 Solana", "with_net_usdt_solana")
+    ],
+    [
+      Markup.button.callback("💎 TON", "with_net_usdt_ton")
+    ],
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+  ]);
+}
+
+function getUsdcWithdrawNetworks() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("⚡ Lightning", "with_net_usdc_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdc_ethereum")
+    ],
+    [
+      Markup.button.callback("🟣 Solana", "with_net_usdc_solana")
+    ],
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+  ]);
+}
+
+function getSatsWithdrawNetworks() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("⚡ Lightning", "with_net_sats_lightning"),
+      Markup.button.callback("₿ On-Chain", "with_net_sats_onchain")
+    ],
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
   ]);
 }
 
@@ -172,7 +250,7 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
 }
 
 // ----------------------------------------------------
-// 1. /START
+// 1. /START & 2. 💰 BALANCE
 // ----------------------------------------------------
 bot.start(async (ctx) => {
   await clearSession(ctx.from.id);
@@ -187,9 +265,6 @@ bot.start(async (ctx) => {
   });
 });
 
-// ----------------------------------------------------
-// 2. 💰 BALANCE
-// ----------------------------------------------------
 bot.hears("💰 Balance", async (ctx) => {
   await clearSession(ctx.from.id);
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -206,31 +281,31 @@ bot.hears("💰 Balance", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 3. 📥 DEPOSIT (Gateway Selector)
+// 3. 📥 DEPOSIT (Step 1: Asset Selection)
 // ----------------------------------------------------
 bot.hears("📥 Deposit", async (ctx) => {
   await clearSession(ctx.from.id);
 
   await ctx.reply(
-    `🔥 <b>Select a Deposit Gateway:</b> 🔥`,
+    `🔥 <b>Select a Deposit Asset:</b> 🔥`,
     {
       parse_mode: "HTML",
-      ...getDepositGatewayKeyboard()
+      ...getDepositAssetKeyboard()
     }
   );
 });
 
 // ----------------------------------------------------
-// 4. 📤 WITHDRAW (Gateway Selector)
+// 4. 📤 WITHDRAW (Step 1: Asset Selection)
 // ----------------------------------------------------
 bot.hears("📤 Withdraw", async (ctx) => {
   await clearSession(ctx.from.id);
 
   await ctx.reply(
-    `🔥 <b>Select a Withdrawal Gateway:</b> 🔥`,
+    `🔥 <b>Select a Withdrawal Asset:</b> 🔥`,
     {
       parse_mode: "HTML",
-      ...getWithdrawGatewayKeyboard()
+      ...getWithdrawAssetKeyboard()
     }
   );
 });
@@ -253,17 +328,189 @@ bot.hears("🔑 Set Key", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// GATEWAY CALLBACK ACTIONS
+// CALLBACKS: DEPOSIT STEP 2 (NETWORK SELECTION)
 // ----------------------------------------------------
-bot.action("gateway_back", async (ctx) => {
-  await clearSession(ctx.from.id);
+bot.action("dep_back_to_assets", async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.deleteMessage().catch(() => {});
-  await ctx.reply("🔙 Returned to main menu.", getMainKeyboard(ctx));
+  await ctx.editMessageText(
+    `🔥 <b>Select a Deposit Asset:</b> 🔥`,
+    {
+      parse_mode: "HTML",
+      ...getDepositAssetKeyboard()
+    }
+  );
 });
 
-// DEPOSIT GATEWAYS
-bot.action("dep_sats_lightning", async (ctx) => {
+bot.action("dep_asset_usdt", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(
+    `🔥 <b>Select USDT Network:</b> 🔥`,
+    {
+      parse_mode: "HTML",
+      ...getUsdtDepositNetworks()
+    }
+  );
+});
+
+bot.action("dep_asset_usdc", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(
+    `🔥 <b>Select USDC Network:</b> 🔥`,
+    {
+      parse_mode: "HTML",
+      ...getUsdcDepositNetworks()
+    }
+  );
+});
+
+bot.action("dep_asset_sats", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(
+    `🔥 <b>Select Bitcoin Network:</b> 🔥`,
+    {
+      parse_mode: "HTML",
+      ...getSatsDepositNetworks()
+    }
+  );
+});
+
+// --- USDT Networks Actions ---
+bot.action("dep_net_usdt_lightning", async (ctx) => {
+  await ctx.answerCbQuery();
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
+  const lnAddress = `${userId}@${DOMAIN}`;
+
+  await setSession(ctx.from.id, { 
+    step: "awaiting_deposit_amount",
+    target_currency: "USDT",
+    payment_method: "lightning",
+    min_amount: 0.5
+  });
+
+  await ctx.editMessageText(
+    `⚡ <b>Deposit USDT (Lightning Network)</b>\n\n` +
+    `👉 <b>Lightning Address:</b>\n<code>${lnAddress}</code>\n\n` +
+    `<b>Or generate an Invoice:</b>\n` +
+    `Reply with the amount in <b>USDT</b> (Min: <b>0.5 USDT</b>, e.g. <code>10</code>):`,
+    { parse_mode: "HTML" }
+  );
+});
+
+bot.action("dep_net_usdt_ethereum", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_deposit_amount",
+    target_currency: "USDT",
+    payment_method: "ethereum",
+    min_amount: 0.5
+  });
+
+  await ctx.editMessageText(
+    `⛓️ <b>Deposit USDT (Ethereum - ERC20)</b>\n\n` +
+    `Reply with the amount in <b>USDT</b> (Min: <b>0.5 USDT</b>, e.g. <code>25</code>):`,
+    { parse_mode: "HTML" }
+  );
+});
+
+bot.action("dep_net_usdt_tron", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_deposit_amount",
+    target_currency: "USDT",
+    payment_method: "tron",
+    min_amount: 0.5
+  });
+
+  await ctx.editMessageText(
+    `🔴 <b>Deposit USDT (Tron - TRC20)</b>\n\n` +
+    `Reply with the amount in <b>USDT</b> (Min: <b>0.5 USDT</b>, e.g. <code>10</code>):`,
+    { parse_mode: "HTML" }
+  );
+});
+
+bot.action("dep_net_usdt_solana", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_deposit_amount",
+    target_currency: "USDT",
+    payment_method: "solana",
+    min_amount: 0.5
+  });
+
+  await ctx.editMessageText(
+    `🟣 <b>Deposit USDT (Solana)</b>\n\n` +
+    `Reply with the amount in <b>USDT</b> (Min: <b>0.5 USDT</b>, e.g. <code>10</code>):`,
+    { parse_mode: "HTML" }
+  );
+});
+
+bot.action("dep_net_usdt_ton", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_deposit_amount",
+    target_currency: "USDT",
+    payment_method: "ton",
+    min_amount: 0.5
+  });
+
+  await ctx.editMessageText(
+    `💎 <b>Deposit USDT (TON Network)</b>\n\n` +
+    `Reply with the amount in <b>USDT</b> (Min: <b>0.5 USDT</b>, e.g. <code>10</code>):`,
+    { parse_mode: "HTML" }
+  );
+});
+
+// --- USDC Networks Actions ---
+bot.action("dep_net_usdc_lightning", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_deposit_amount",
+    target_currency: "USDC",
+    payment_method: "lightning",
+    min_amount: 0.5
+  });
+
+  await ctx.editMessageText(
+    `⚡ <b>Deposit USDC (Lightning Network)</b>\n\n` +
+    `Reply with the amount in <b>USDC</b> (Min: <b>0.5 USDC</b>, e.g. <code>10</code>):`,
+    { parse_mode: "HTML" }
+  );
+});
+
+bot.action("dep_net_usdc_ethereum", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_deposit_amount",
+    target_currency: "USDC",
+    payment_method: "ethereum",
+    min_amount: 0.5
+  });
+
+  await ctx.editMessageText(
+    `⛓️ <b>Deposit USDC (Ethereum - ERC20)</b>\n\n` +
+    `Reply with the amount in <b>USDC</b> (Min: <b>0.5 USDC</b>, e.g. <code>25</code>):`,
+    { parse_mode: "HTML" }
+  );
+});
+
+bot.action("dep_net_usdc_solana", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_deposit_amount",
+    target_currency: "USDC",
+    payment_method: "solana",
+    min_amount: 0.5
+  });
+
+  await ctx.editMessageText(
+    `🟣 <b>Deposit USDC (Solana)</b>\n\n` +
+    `Reply with the amount in <b>USDC</b> (Min: <b>0.5 USDC</b>, e.g. <code>10</code>):`,
+    { parse_mode: "HTML" }
+  );
+});
+
+// --- SATS Networks Actions ---
+bot.action("dep_net_sats_lightning", async (ctx) => {
   await ctx.answerCbQuery();
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   const lnAddress = `${userId}@${DOMAIN}`;
@@ -277,66 +524,71 @@ bot.action("dep_sats_lightning", async (ctx) => {
 
   await ctx.editMessageText(
     `⚡ <b>Deposit SATS (Lightning Network)</b>\n\n` +
-    `👉 <b>Lightning Address:</b>\n<code>${lnAddress}</code>\n<i>(Tap to copy & pay from any wallet)</i>\n\n` +
-    `<b>Or generate an Invoice QR:</b>\n` +
-    `Reply with amount in <b>sats</b> (Min: <b>1 sat</b>, e.g. <code>50</code>):`,
+    `👉 <b>Lightning Address:</b>\n<code>${lnAddress}</code>\n\n` +
+    `<b>Or generate an Invoice:</b>\n` +
+    `Reply with the amount in <b>sats</b> (Min: <b>1 sat</b>, e.g. <code>50</code>):`,
     { parse_mode: "HTML" }
   );
 });
 
-bot.action("dep_btc_onchain", async (ctx) => {
+bot.action("dep_net_sats_onchain", async (ctx) => {
   await ctx.answerCbQuery();
   await setSession(ctx.from.id, { 
     step: "awaiting_deposit_amount",
     target_currency: "SATS",
-    payment_method: "onchain", // Exactly "onchain" without hyphen
+    payment_method: "onchain",
     min_amount: 1000
   });
 
   await ctx.editMessageText(
     `₿ <b>Deposit Bitcoin (On-Chain)</b>\n\n` +
-    `Reply with the amount in <b>sats</b> to generate an on-chain address (Min: <b>1,000 sats</b>, e.g. <code>10000</code>):`,
+    `Reply with the amount in <b>sats</b> (Min: <b>1,000 sats</b>, e.g. <code>10000</code>):`,
     { parse_mode: "HTML" }
   );
 });
 
-bot.action("dep_usdt_trc20", async (ctx) => {
+// ----------------------------------------------------
+// CALLBACKS: WITHDRAW STEP 2 (NETWORK SELECTION)
+// ----------------------------------------------------
+bot.action("with_back_to_assets", async (ctx) => {
   await ctx.answerCbQuery();
-  await setSession(ctx.from.id, { 
-    step: "awaiting_deposit_amount",
-    target_currency: "USDT",
-    payment_method: "tron",
-    min_amount: 0.5
-  });
-
   await ctx.editMessageText(
-    `💵 <b>Deposit USDT (TRC-20)</b>\n\n` +
-    `Reply with the amount in <b>USDT</b> (Min: <b>0.5 USDT</b>, e.g. <code>10</code>):`,
-    { parse_mode: "HTML" }
+    `🔥 <b>Select a Withdrawal Asset:</b> 🔥`,
+    {
+      parse_mode: "HTML",
+      ...getWithdrawAssetKeyboard()
+    }
   );
 });
 
-bot.action("dep_usdc_solana", async (ctx) => {
+bot.action("with_asset_usdt", async (ctx) => {
   await ctx.answerCbQuery();
-  await setSession(ctx.from.id, { 
-    step: "awaiting_deposit_amount",
-    target_currency: "USDC",
-    payment_method: "solana",
-    min_amount: 0.5
+  await ctx.editMessageText(`🔥 <b>Select USDT Withdrawal Network:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getUsdtWithdrawNetworks()
   });
-
-  await ctx.editMessageText(
-    `💲 <b>Deposit USDC (Solana)</b>\n\n` +
-    `Reply with the amount in <b>USDC</b> (Min: <b>0.5 USDC</b>, e.g. <code>10</code>):`,
-    { parse_mode: "HTML" }
-  );
 });
 
-// WITHDRAWAL GATEWAYS
-bot.action("with_sats_lightning", async (ctx) => {
+bot.action("with_asset_usdc", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(`🔥 <b>Select USDC Withdrawal Network:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getUsdcWithdrawNetworks()
+  });
+});
+
+bot.action("with_asset_sats", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText(`🔥 <b>Select Bitcoin Withdrawal Network:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getSatsWithdrawNetworks()
+  });
+});
+
+// Withdraw Network Actions
+bot.action("with_net_sats_lightning", async (ctx) => {
   await ctx.answerCbQuery();
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
-
   try {
     const res = await fetch(`${APP_URL}/api/wallet?action=balance&user_id=${encodeURIComponent(userId)}&telegram_id=${ctx.from.id}`);
     const data = await res.json();
@@ -364,7 +616,7 @@ bot.action("with_sats_lightning", async (ctx) => {
   }
 });
 
-bot.action("with_btc_onchain", async (ctx) => {
+bot.action("with_net_sats_onchain", async (ctx) => {
   await ctx.answerCbQuery();
   await setSession(ctx.from.id, { 
     step: "awaiting_withdraw_dest",
@@ -372,15 +624,10 @@ bot.action("with_btc_onchain", async (ctx) => {
     withdraw_method: "onchain",
     min_amount: 1000
   });
-
-  await ctx.editMessageText(
-    `₿ <b>Bitcoin On-Chain Withdrawal (Min: 1,000 SATS):</b>\n\n` +
-    `Paste your Bitcoin On-Chain destination address (<code>bc1...</code> or <code>1...</code>):`,
-    { parse_mode: "HTML" }
-  );
+  await ctx.editMessageText(`₿ <b>Bitcoin On-Chain Withdrawal (Min: 1,000 SATS):</b>\n\nPaste your Bitcoin On-Chain destination address:`, { parse_mode: "HTML" });
 });
 
-bot.action("with_usdt_trc20", async (ctx) => {
+bot.action("with_net_usdt_tron", async (ctx) => {
   await ctx.answerCbQuery();
   await setSession(ctx.from.id, { 
     step: "awaiting_withdraw_dest",
@@ -388,15 +635,54 @@ bot.action("with_usdt_trc20", async (ctx) => {
     withdraw_method: "tron",
     min_amount: 0.5
   });
-
-  await ctx.editMessageText(
-    `💵 <b>USDT (TRC-20) Withdrawal (Min: 0.5 USDT):</b>\n\n` +
-    `Paste your Tron USDT wallet address (<code>T...</code>):`,
-    { parse_mode: "HTML" }
-  );
+  await ctx.editMessageText(`🔴 <b>USDT (Tron - TRC20) Withdrawal:</b>\n\nPaste your Tron destination address (<code>T...</code>):`, { parse_mode: "HTML" });
 });
 
-bot.action("with_usdc_solana", async (ctx) => {
+bot.action("with_net_usdt_solana", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDT",
+    withdraw_method: "solana",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`🟣 <b>USDT (Solana) Withdrawal:</b>\n\nPaste your Solana destination address:`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdt_ethereum", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDT",
+    withdraw_method: "ethereum",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`⛓️ <b>USDT (Ethereum - ERC20) Withdrawal:</b>\n\nPaste your Ethereum address (<code>0x...</code>):`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdt_ton", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDT",
+    withdraw_method: "ton",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`💎 <b>USDT (TON) Withdrawal:</b>\n\nPaste your TON destination address:`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdt_lightning", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDT",
+    withdraw_method: "lightning",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`⚡ <b>USDT (Lightning) Withdrawal:</b>\n\nPaste your Lightning invoice or address:`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdc_solana", async (ctx) => {
   await ctx.answerCbQuery();
   await setSession(ctx.from.id, { 
     step: "awaiting_withdraw_dest",
@@ -404,12 +690,36 @@ bot.action("with_usdc_solana", async (ctx) => {
     withdraw_method: "solana",
     min_amount: 0.5
   });
+  await ctx.editMessageText(`🟣 <b>USDC (Solana) Withdrawal:</b>\n\nPaste your Solana destination address:`, { parse_mode: "HTML" });
+});
 
-  await ctx.editMessageText(
-    `💲 <b>USDC (Solana) Withdrawal (Min: 0.5 USDC):</b>\n\n` +
-    `Paste your Solana USDC wallet address:`,
-    { parse_mode: "HTML" }
-  );
+bot.action("with_net_usdc_ethereum", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDC",
+    withdraw_method: "ethereum",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`⛓️ <b>USDC (Ethereum) Withdrawal:</b>\n\nPaste your Ethereum address (<code>0x...</code>):`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdc_lightning", async (ctx) => {
+  await ctx.answerCbQuery();
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDC",
+    withdraw_method: "lightning",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`⚡ <b>USDC (Lightning) Withdrawal:</b>\n\nPaste your Lightning invoice or address:`, { parse_mode: "HTML" });
+});
+
+bot.action("gateway_back", async (ctx) => {
+  await clearSession(ctx.from.id);
+  await ctx.answerCbQuery();
+  await ctx.deleteMessage().catch(() => {});
+  await ctx.reply("🔙 Returned to main menu.", getMainKeyboard(ctx));
 });
 
 // ----------------------------------------------------
@@ -474,7 +784,7 @@ bot.on("text", async (ctx) => {
           `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
           `👉 <b>Deposit Address (Tap to copy):</b>\n` +
           `<code>${data.invoice}</code>\n\n` +
-          `<i>Scan QR or copy address to deposit from your wallet or exchange. Waiting for confirmation...</i>`;
+          `<i>Scan QR or copy address to deposit. Waiting for confirmation...</i>`;
 
       await ctx.replyWithPhoto(qrUrl, {
         caption,
@@ -492,10 +802,8 @@ bot.on("text", async (ctx) => {
   if (session.step === "awaiting_withdraw_dest") {
     const isInvoice = text.toLowerCase().startsWith("lnbc") || text.toLowerCase().startsWith("lightning:lnbc");
 
-    // Case 1: Lightning Invoice
     if (isInvoice) {
       await ctx.replyWithChatAction("typing");
-
       let detectedSats = null;
 
       if (db) {
@@ -560,7 +868,7 @@ bot.on("text", async (ctx) => {
       );
     }
 
-    // Case 2: Crypto Address
+    // Crypto Address destination
     await setSession(ctx.from.id, {
       step: "awaiting_withdraw_amount",
       destination: text,
@@ -601,7 +909,7 @@ bot.on("text", async (ctx) => {
       `⚡ <b>Payment Summary</b>\n\n` +
       `💰 <b>Amount:</b> ${amount} ${curr}\n` +
       `🎯 <b>Recipient:</b> <code>${destination}</code>\n` +
-      `🌐 <b>Method:</b> ${withdrawMethod}\n\n` +
+      `🌐 <b>Method:</b> ${withdrawMethod.toUpperCase()}\n\n` +
       `Click <b>Send</b> below to confirm:`,
       {
         parse_mode: "HTML",
@@ -637,7 +945,7 @@ bot.on("text", async (ctx) => {
 // 7. BUTTON CALLBACKS (Send / Cancel)
 // ----------------------------------------------------
 bot.action("confirm_send", async (ctx) => {
-  await ctx.answerCbQuery("Broadcasting Instant Send...");
+  await ctx.answerCbQuery("Broadcasting payment...");
   const session = await getSession(ctx.from.id);
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
