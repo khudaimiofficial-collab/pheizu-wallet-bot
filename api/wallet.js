@@ -43,6 +43,25 @@ function getDb() {
 
 const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
+const BOT_TOKEN = process.env.BOT_TOKEN;
+
+// Helper: Send Instant Telegram Notification
+async function notifyTelegramUser(telegramId, message) {
+  if (!BOT_TOKEN || !telegramId) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: telegramId,
+        text: message,
+        parse_mode: "HTML"
+      })
+    });
+  } catch (e) {
+    console.error("Failed to notify user:", e.message);
+  }
+}
 
 // Helper: Get active Speed API key
 async function getSpeedApiKey() {
@@ -59,7 +78,7 @@ async function getSpeedApiKey() {
   return (process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "").trim();
 }
 
-// Helper: Deep search any JSON object for a bolt11 lightning invoice ("lnbc...") or payment string
+// Deep search JSON for lightning bolt11 invoice
 function extractInvoice(obj) {
   if (!obj) return null;
   if (typeof obj === "string") {
@@ -70,22 +89,18 @@ function extractInvoice(obj) {
   }
   if (typeof obj !== "object") return null;
 
-  // Direct known Speed properties
   if (obj.payment_request && typeof obj.payment_request === "string") return obj.payment_request;
   if (obj.invoice && typeof obj.invoice === "string") return obj.invoice;
 
-  // Search inside arrays (like payment_methods) or objects
   for (const key of Object.keys(obj)) {
-    const val = obj[key];
-    const found = extractInvoice(val);
+    const found = extractInvoice(obj[key]);
     if (found) return found;
   }
 
-  // Fallback: Check for hosted URL or checkout URL
   return obj.hosted_url || obj.url || null;
 }
 
-// Helper: Official Speed Request Client (includes required 'speed-version' header)
+// Speed Client
 async function speedRequest(path, method, body, apiKey) {
   const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
   const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
@@ -106,7 +121,6 @@ async function speedRequest(path, method, body, apiKey) {
   return { ok: res.ok, status: res.status, data };
 }
 
-// Helper: Extract human-readable error from Speed
 function extractErrorMessage(data, status) {
   if (!data) return `Speed API returned HTTP ${status}`;
   if (typeof data === "string") return data;
@@ -119,7 +133,7 @@ function extractErrorMessage(data, status) {
   return `Speed API error (HTTP ${status})`;
 }
 
-// Helper: Multi-identifier wallet resolver
+// Smart Wallet Resolver
 async function findUserWallet(identifiers) {
   if (!db) return null;
 
@@ -141,6 +155,7 @@ async function findUserWallet(identifiers) {
           return {
             ref: doc.ref,
             id: doc.id,
+            data,
             balance: Number(bal) || 0,
             collection: col
           };
@@ -153,6 +168,7 @@ async function findUserWallet(identifiers) {
   return {
     ref: db.collection("users").doc(primary),
     id: primary,
+    data: {},
     balance: 0,
     collection: "users"
   };
@@ -196,7 +212,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 2. CREATE DEPOSIT INVOICE (Fixed for HTTP 201)
+    // 2. CREATE DEPOSIT INVOICE
     // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id } = req.body;
@@ -224,11 +240,11 @@ module.exports = async function handler(req, res) {
         target_currency: "SATS",
         payment_methods: ["lightning"],
         metadata: {
-          user_id: uid
+          user_id: uid,
+          telegram_id: telegram_id ? String(telegram_id) : ""
         }
       }, apiKey);
 
-      // HTTP 200 or 201 means Success!
       if (!ok && status !== 201) {
         const errorDetail = extractErrorMessage(paymentData, status);
         return res.status(status || 400).json({
@@ -237,20 +253,17 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Deep search for the invoice string anywhere in the response
       const invoiceString = extractInvoice(paymentData);
-
       if (!invoiceString) {
-        console.error("Speed 201 response missing invoice:", JSON.stringify(paymentData));
         return res.status(500).json({
           success: false,
-          error: "Payment created on Speed, but no Lightning invoice string was found in the response."
+          error: "Speed did not return a valid Lightning invoice."
         });
       }
 
       const txId = paymentData.id || `py_${Date.now()}`;
 
-      // Save to Firestore
+      // Save invoice with telegram_id to notify the user when paid
       await db.collection("invoices").doc(txId).set({
         id: txId,
         invoice: invoiceString,
@@ -270,7 +283,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 3. CHECK DEPOSIT STATUS
+    // 3. CHECK DEPOSIT STATUS (Notifies user via Telegram on payment)
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -300,8 +313,9 @@ module.exports = async function handler(req, res) {
       if (isPaid && invDoc.exists && !invDoc.data().is_paid) {
         const sats = Number(invDoc.data().amount || payment?.amount || 0);
         const creditTarget = invDoc.data().user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
+        const targetTgId = invDoc.data().telegram_id || telegram_id;
 
-        const candidates = [creditTarget, telegram_id, invDoc.data().telegram_id];
+        const candidates = [creditTarget, targetTgId];
         const wallet = await findUserWallet(candidates);
 
         const batch = db.batch();
@@ -325,6 +339,16 @@ module.exports = async function handler(req, res) {
         });
 
         await batch.commit();
+
+        // Send Telegram confirmation to user
+        if (targetTgId) {
+          await notifyTelegramUser(
+            targetTgId,
+            `🎉 <b>Payment Received!</b>\n\n` +
+            `⚡ <b>+${sats} sats</b> have been credited to your balance!\n` +
+            `🆔 <b>TxID:</b> <code>${payment_id}</code>`
+          );
+        }
       }
 
       return res.status(200).json({ 
@@ -336,7 +360,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 4. SEND / WITHDRAW
+    // 4. SEND / WITHDRAW (Auto-notifies recipient on internal transfer)
     // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username } = req.body;
@@ -358,7 +382,6 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Check for internal transfer
       let recipientUserId = null;
       let internalInvoiceDoc = null;
 
@@ -380,7 +403,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // A. Internal Transfer
+      // A. INTERNAL TRANSFER
       if (recipientUserId) {
         if (recipientUserId === senderWallet.id) {
           return res.status(400).json({ success: false, error: "You cannot send payments to your own account." });
@@ -398,7 +421,12 @@ module.exports = async function handler(req, res) {
           balance: admin.firestore.FieldValue.increment(sendAmount)
         }, { merge: true });
 
+        let recipientTgId = null;
+
         if (internalInvoiceDoc) {
+          const invData = (await internalInvoiceDoc.get()).data();
+          recipientTgId = invData?.telegram_id;
+
           batch.update(internalInvoiceDoc, {
             is_paid: true,
             paid_at: new Date().toISOString(),
@@ -419,6 +447,17 @@ module.exports = async function handler(req, res) {
 
         await batch.commit();
 
+        // Notify the recipient on Telegram
+        const targetChatId = recipientTgId || recipientWallet.data?.telegram_id;
+        if (targetChatId) {
+          await notifyTelegramUser(
+            targetChatId,
+            `🎉 <b>Payment Received!</b>\n\n` +
+            `💰 <b>+${sendAmount} sats</b> received from @${senderWallet.id}!\n` +
+            `🆔 <b>TxID:</b> <code>${txId}</code>`
+          );
+        }
+
         return res.status(200).json({
           success: true,
           internal: true,
@@ -428,7 +467,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // B. External Withdrawal
+      // B. EXTERNAL WITHDRAWAL (Instant Send)
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
         return res.status(500).json({ success: false, error: "Speed API key is not configured." });
