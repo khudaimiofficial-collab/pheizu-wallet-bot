@@ -1,256 +1,138 @@
-// api/bot.js
-const { Telegraf, Markup } = require('telegraf');
-const { 
-  normalizeUserKey,
-  saveUserTelegramId,
-  getBalance, 
-  claimPaymentAndCredit,
-  deductBalance,
-  internalTransfer,
-  notifyPaymentReceived
-} = require('../lib/db');
+const { Telegraf, Markup } = require("telegraf");
 
-const BOT_TOKEN = (process.env.BOT_TOKEN || "").trim();
-const DOMAIN = process.env.DOMAIN || "pheizu-wallet-bot.vercel.app";
-const WEBAPP_URL = (process.env.WEBAPP_URL || `https://${DOMAIN}`).trim().replace(/\/$/, "");
-const SPEED_SECRET_KEY = (process.env.SPEED_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
-const SPEED_BASE_URL = "https://api.tryspeed.com";
+const bot = new Telegraf(process.env.BOT_TOKEN);
 
-const bot = new Telegraf(BOT_TOKEN || "MISSING_TOKEN");
+// Put your Telegram Numeric ID or comma-separated IDs in environment variables
+const ADMIN_IDS = (process.env.ADMIN_IDS || "").split(",").map(id => id.trim());
+const WEBAPP_URL = process.env.WEBAPP_URL || "https://pheizu-wallet-bot.vercel.app";
 
-function escapeHtml(str = "") {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+// Helper: Check if user is an admin
+function isAdmin(ctx) {
+  const userId = String(ctx.from?.id);
+  return ADMIN_IDS.includes(userId);
 }
 
-// Middleware: Auto-save Telegram chat ID on every interaction
-bot.use(async (ctx, next) => {
-  if (ctx.from?.id) {
-    const userKey = normalizeUserKey(ctx.from);
-    try {
-      await saveUserTelegramId(userKey, ctx.from.id);
-    } catch (e) {}
-  }
-  return next();
-});
+// Generate the Keyboard Menu
+function getMainKeyboard(ctx) {
+  const rows = [
+    ["💰 Balance", "📥 Deposit"],
+    ["📤 Withdraw"]
+  ];
 
-// Speed Instant Send Helper using POST /send
-async function speedInstantSend(destination, sats, userKey) {
-  if (!SPEED_SECRET_KEY) {
-    throw new Error("SPEED_SECRET_KEY is not configured.");
+  // Show "🔑 Set Key" only if the user is an admin
+  if (isAdmin(ctx)) {
+    rows.push(["🔑 Set Key"]);
   }
 
-  const authHeader = "Basic " + Buffer.from(SPEED_SECRET_KEY + ":").toString("base64");
-  const withdrawReq = destination.trim().replace(/^lightning:/i, "");
-
-  const payload = {
-    amount: sats,
-    currency: "SATS",
-    target_currency: "SATS",
-    withdraw_method: "lightning",
-    withdraw_request: withdrawReq,
-    note: `Withdrawal by ${userKey}`
-  };
-
-  const res = await fetch(`${SPEED_BASE_URL}/send`, {
-    method: "POST",
-    headers: {
-      "Authorization": authHeader,
-      "Content-Type": "application/json",
-      "accept": "application/json",
-      "speed-version": "2022-10-15"
-    },
-    body: JSON.stringify(payload)
-  });
-
-  const text = await res.text();
-  let json = {};
-  try { json = JSON.parse(text); } catch (e) {}
-
-  if (!res.ok) {
-    const msg = json?.message || json?.error?.message || json?.errors?.[0]?.message || text;
-    throw new Error(msg || `Speed send failed with status ${res.status}`);
-  }
-
-  return json;
+  return Markup.keyboard(rows).resize();
 }
 
-// /start command
+// 1. /start command
 bot.start(async (ctx) => {
-  const userKey = normalizeUserKey(ctx.from);
-  const balance = await getBalance(userKey);
-  const firstName = escapeHtml(ctx.from?.first_name || "Friend");
+  const name = ctx.from.first_name || "User";
 
-  const text = 
-    `⚡ <b>Welcome to Pheizu Wallet, ${firstName}!</b>\n\n` +
-    `💳 <b>Your Lightning Address:</b>\n<code>${userKey}@${DOMAIN}</code>\n\n` +
-    `💰 <b>Available Balance:</b> <code>${balance.toLocaleString()} sats</code>\n\n` +
-    `Use the buttons below to open your Mini App or withdraw satoshis directly in chat.`;
-
-  return await ctx.replyWithHTML(
-    text,
-    Markup.inlineKeyboard([
-      [Markup.button.webApp("🚀 Open Mini App", WEBAPP_URL)],
-      [
-        Markup.button.callback("🔄 Refresh Balance", "cb_balance"),
-        Markup.button.callback("📤 Withdraw", "cb_withdraw")
-      ]
-    ])
-  );
-});
-
-// /balance command
-bot.command('balance', async (ctx) => {
-  const userKey = normalizeUserKey(ctx.from);
-  const balance = await getBalance(userKey);
-
-  return await ctx.replyWithHTML(
-    `⚡ <b>Account:</b> <code>${userKey}</code>\n` +
-    `💰 <b>Balance:</b> <code>${balance.toLocaleString()} sats</code>`,
-    Markup.inlineKeyboard([
-      [Markup.button.webApp("🚀 Open Mini App", WEBAPP_URL)],
-      [Markup.button.callback("🔄 Refresh", "cb_balance")]
-    ])
-  );
-});
-
-bot.action('cb_balance', async (ctx) => {
-  try {
-    await ctx.answerCbQuery("Updating balance...");
-    const userKey = normalizeUserKey(ctx.from);
-    const balance = await getBalance(userKey);
-
-    return await ctx.editMessageText(
-      `⚡ <b>Account:</b> <code>${userKey}</code>\n` +
-      `💰 <b>Current Balance:</b> <code>${balance.toLocaleString()} sats</code>`,
-      {
-        parse_mode: 'HTML',
-        ...Markup.inlineKeyboard([
-          [Markup.button.webApp("🚀 Open Mini App", WEBAPP_URL)],
-          [Markup.button.callback("🔄 Refresh Balance", "cb_balance")]
-        ])
-      }
-    );
-  } catch (err) {}
-});
-
-// /withdraw, /send, /pay commands
-bot.command(['withdraw', 'send', 'pay'], async (ctx) => {
-  const userKey = normalizeUserKey(ctx.from);
-  const parts = ctx.message.text.trim().split(/\s+/);
-
-  if (parts.length < 3) {
-    return await ctx.replyWithHTML(
-      `⚠️ <b>Usage:</b> <code>/withdraw &lt;address_or_invoice&gt; &lt;amount_in_sats&gt;</code>\n\n` +
-      `<b>Examples:</b>\n` +
-      `• <code>/withdraw satoshi@speed.app 21</code>\n` +
-      `• <code>/withdraw lnbc... 100</code>`,
-      Markup.inlineKeyboard([[Markup.button.webApp("⚡ Send via Mini App", WEBAPP_URL)]])
-    );
-  }
-
-  const destination = parts[1].trim();
-  const sats = Math.floor(Number(parts[2]));
-
-  if (!sats || isNaN(sats) || sats <= 0) {
-    return await ctx.reply("❌ Please enter a valid number of satoshis.");
-  }
-
-  // CASE A: INTERNAL TRANSFER
-  if (destination.toLowerCase().endsWith(`@${DOMAIN}`)) {
-    const recipientUser = destination.toLowerCase().replace(`@${DOMAIN}`, "").trim();
-    try {
-      const transferRes = await internalTransfer(userKey, recipientUser, sats);
-      await notifyPaymentReceived(recipientUser, sats, transferRes.newToBal, userKey);
-
-      return await ctx.replyWithHTML(
-        `🎉 <b>Internal Transfer Successful!</b>\n\n` +
-        `⚡ <b>Sent:</b> <code>${sats.toLocaleString()} sats</code>\n` +
-        `📍 <b>To:</b> <code>${escapeHtml(destination)}</code>\n` +
-        `💰 <b>Remaining Balance:</b> <code>${transferRes.newFromBal.toLocaleString()} sats</code>`
-      );
-    } catch (err) {
-      return await ctx.reply(`❌ Transfer failed: ${err.message}`);
+  await ctx.reply(
+    `👋 Hello, <b>${name}</b>!\n\nWelcome to <b>Pheizu Lightning Wallet</b>.\nChoose an action below:`,
+    {
+      parse_mode: "HTML",
+      ...getMainKeyboard(ctx)
     }
-  }
+  );
+});
 
-  // CASE B: EXTERNAL LIGHTNING SEND
-  const currentBal = await getBalance(userKey);
-  if (currentBal < sats) {
-    return await ctx.reply(
-      `❌ Insufficient balance!\nYou have ${currentBal.toLocaleString()} sats, but tried to withdraw ${sats.toLocaleString()} sats.`
-    );
-  }
-
-  const statusMsg = await ctx.reply("⏳ Broadcasting payment over Lightning Network...");
-  await deductBalance(userKey, sats);
-
-  try {
-    await speedInstantSend(destination, sats, userKey);
-    const newBal = await getBalance(userKey);
-
-    try { await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id); } catch (e) {}
-
-    return await ctx.replyWithHTML(
-      `🎉 <b>Payment Sent Successfully!</b>\n\n` +
-      `⚡ <b>Amount:</b> <code>${sats.toLocaleString()} sats</code>\n` +
-      `📍 <b>Destination:</b> <code>${escapeHtml(destination)}</code>\n` +
-      `💰 <b>Remaining Balance:</b> <code>${newBal.toLocaleString()} sats</code>`,
-      Markup.inlineKeyboard([
-        [Markup.button.webApp("🚀 Open Mini App", WEBAPP_URL)],
-        [Markup.button.callback("🔄 Check Balance", "cb_balance")]
+// 2. 💰 Balance Button
+bot.hears("💰 Balance", async (ctx) => {
+  const username = ctx.from.username || `user${ctx.from.id}`;
+  
+  await ctx.reply(
+    `⚡ <b>Your Wallet</b>\n` +
+    `• Username: <code>${username}</code>\n` +
+    `• Lightning Address: <code>${username}@pheizu-wallet-bot.vercel.app</code>\n\n` +
+    `Tap below to open your full dashboard:`,
+    {
+      parse_mode: "HTML",
+      ...Markup.inlineKeyboard([
+        Markup.button.webApp("📱 Open Wallet App", WEBAPP_URL)
       ])
-    );
-  } catch (payErr) {
-    // Refund on failure
-    const refundKey = `refund_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    await claimPaymentAndCredit(refundKey, userKey, sats);
-
-    try { await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id); } catch (e) {}
-
-    return await ctx.replyWithHTML(
-      `❌ <b>Withdrawal Failed:</b>\n${escapeHtml(payErr.message)}\n\n` +
-      `🛡️ Your balance of <b>${sats.toLocaleString()} sats</b> has been refunded.`
-    );
-  }
-});
-
-bot.action('cb_withdraw', async (ctx) => {
-  await ctx.answerCbQuery();
-  return await ctx.replyWithHTML(
-    `📤 <b>Withdraw Satoshis:</b>\n\n` +
-    `Type the command in chat:\n<code>/withdraw &lt;address&gt; &lt;sats&gt;</code>\n\n` +
-    `<b>Example:</b>\n<code>/withdraw satoshi@speed.app 21</code>\n\n` +
-    `Or open the Mini App to paste and send visually:`,
-    Markup.inlineKeyboard([[Markup.button.webApp("🚀 Open Mini App to Send", WEBAPP_URL)]])
+    }
   );
 });
 
+// 3. 📥 Deposit Button
+bot.hears("📥 Deposit", async (ctx) => {
+  const username = ctx.from.username || `user${ctx.from.id}`;
+  const lnAddress = `${username}@pheizu-wallet-bot.vercel.app`;
+
+  await ctx.reply(
+    `📥 <b>Deposit Satoshis</b>\n\n` +
+    `Send Lightning sats directly to your address:\n` +
+    `👉 <code>${lnAddress}</code>\n\n` +
+    `Or open the Web App to generate a custom Lightning Invoice QR code.`,
+    {
+      parse_mode: "HTML",
+      ...Markup.inlineKeyboard([
+        Markup.button.webApp("⚡ Generate Invoice QR", WEBAPP_URL)
+      ])
+    }
+  );
+});
+
+// 4. 📤 Withdraw Button
+bot.hears("📤 Withdraw", async (ctx) => {
+  await ctx.reply(
+    `📤 <b>Withdraw / Send Sats</b>\n\n` +
+    `To withdraw satoshis to any Lightning Address or Lightning Invoice, launch the wallet interface:`,
+    {
+      parse_mode: "HTML",
+      ...Markup.inlineKeyboard([
+        Markup.button.webApp("🚀 Send / Withdraw", WEBAPP_URL)
+      ])
+    }
+  );
+});
+
+// 5. 🔑 Set Key (Admin Only)
+bot.hears("🔑 Set Key", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    return ctx.reply("⛔ Access denied: You are not authorized to set API keys.");
+  }
+
+  await ctx.reply(
+    `🔑 <b>Admin Control Panel</b>\n\n` +
+    `To update your Speed / LNURL API key, send the command:\n` +
+    `<code>/setkey YOUR_SECRET_KEY_HERE</code>`,
+    { parse_mode: "HTML" }
+  );
+});
+
+// Command to accept and store the key
+bot.command("setkey", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    return ctx.reply("⛔ Access denied.");
+  }
+
+  const parts = ctx.message.text.split(" ");
+  if (parts.length < 2 || !parts[1].trim()) {
+    return ctx.reply("⚠️ Usage: <code>/setkey YOUR_NEW_KEY</code>", { parse_mode: "HTML" });
+  }
+
+  const newKey = parts[1].trim();
+
+  // Here you can save 'newKey' to Firestore or your database
+  // await db.collection("settings").doc("keys").set({ speed_api_key: newKey }, { merge: true });
+
+  await ctx.reply("✅ <b>API Key updated successfully!</b>", { parse_mode: "HTML" });
+});
+
+// Vercel Serverless Function Handler
 module.exports = async (req, res) => {
-  if (!BOT_TOKEN) return res.status(500).json({ error: "BOT_TOKEN missing." });
-
-  if (req.method === 'GET') {
-    const webhookUrl = `https://${DOMAIN}/api/bot`;
-    try {
-      const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
-      const result = await response.json();
-      return res.status(200).json({ message: "Bot handler active", webhook_setup: result });
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
+  try {
+    if (req.method === "POST") {
+      await bot.handleUpdate(req.body);
     }
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("Bot webhook error:", err);
+    res.status(500).send("Internal Server Error");
   }
-
-  if (req.method === 'POST') {
-    try {
-      let update = req.body;
-      if (typeof update === 'string') update = JSON.parse(update);
-      if (update && update.update_id) await bot.handleUpdate(update);
-      return res.status(200).send("OK");
-    } catch (e) {
-      return res.status(200).send("Handled with error");
-    }
-  }
-  return res.status(405).send("Method Not Allowed");
 };
