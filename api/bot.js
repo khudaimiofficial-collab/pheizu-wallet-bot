@@ -143,7 +143,9 @@ function getUsdcWithdrawNetworks() {
       Markup.button.callback("⚡ Lightning", "with_net_usdc_lightning"),
       Markup.button.callback("⛓️ Ethereum", "with_net_usdc_ethereum")
     ],
-    [Markup.button.callback("🟣 Solana", "with_net_usdc_solana")],
+    [
+      Markup.button.callback("🟣 Solana", "with_net_usdc_solana")
+    ],
     [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
   ]);
 }
@@ -166,7 +168,7 @@ function getUsdtDepositNetworks() {
       Markup.button.callback("⛓️ Ethereum", "dep_net_usdt_ethereum")
     ],
     [
-      Markup.button.callback("🔴 Tron", "dep_net_usdt_tron"),
+      Markup.button.callback("🔴 Tron (TRC-20)", "dep_net_usdt_tron"),
       Markup.button.callback("🟣 Solana", "dep_net_usdt_solana")
     ],
     [Markup.button.callback("💎 TON", "dep_net_usdt_ton")],
@@ -180,7 +182,9 @@ function getUsdcDepositNetworks() {
       Markup.button.callback("⚡ Lightning", "dep_net_usdc_lightning"),
       Markup.button.callback("⛓️ Ethereum", "dep_net_usdc_ethereum")
     ],
-    [Markup.button.callback("🟣 Solana", "dep_net_usdc_solana")],
+    [
+      Markup.button.callback("🟣 Solana", "dep_net_usdc_solana")
+    ],
     [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
   ]);
 }
@@ -277,7 +281,6 @@ function stopDepositWatcher(chatId) {
   }
 }
 
-// Background poller: wallet.js sends the single authoritative alert; poller shuts down cleanly
 function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
   stopDepositWatcher(chatId);
   let attempts = 0;
@@ -323,7 +326,7 @@ async function getWalletOverviewText(userId, telegramId, isAdm) {
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `💵 <b>Total:</b> <code>${totalUsd}$</code>\n\n` +
     `⚡ <b>Lightning Address:</b> <code>${userId}@${DOMAIN}</code>\n` +
-    `📌 <b>Minimum Deposit:</b> 1 sat`
+    `📌 <b>Minimum Deposit:</b> 1 sat / 0.5 USDT`
   );
 }
 
@@ -354,6 +357,88 @@ async function isUserBanned(userId, numericId) {
     }
   } catch (e) {}
   return false;
+}
+
+// ----------------------------------------------------
+// DIRECT DEPOSIT HANDLER (NO AMOUNT PROMPT NEEDED)
+// ----------------------------------------------------
+async function handleDirectDeposit(ctx, { targetCurrency, paymentMethod, minAmount, networkLabel }) {
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
+  await clearSession(ctx.from.id);
+
+  await ctx.editMessageText(
+    `⏳ <b>Generating ${targetCurrency} (${networkLabel}) deposit details...</b>`,
+    { parse_mode: "HTML" }
+  ).catch(() => {});
+
+  try {
+    const res = await fetch(`${APP_URL}/api/wallet?action=create-payment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount: minAmount,
+        target_currency: targetCurrency,
+        payment_method: paymentMethod,
+        user_id: userId,
+        username: userId,
+        telegram_id: String(ctx.from.id)
+      })
+    });
+
+    const data = await res.json();
+    if (!data.success || !data.invoice) {
+      throw new Error(data.error || "Failed to generate deposit details.");
+    }
+
+    const txId = data.tx_id || data.id;
+    const isLightning = paymentMethod === "lightning" || data.invoice.toLowerCase().startsWith("lnbc");
+    const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(data.invoice)}&size=400&dark=00e676&light=0b0e14&margin=2&ecLevel=Q&centerImageUrl=https%3A%2F%2Fcdn-icons-png.flaticon.com%2F512%2F1198%2F1198305.png&centerImageSizeRatio=0.22`;
+
+    const minDepositNotice = targetCurrency === "SATS"
+      ? `${minAmount.toLocaleString()} SATS`
+      : `${minAmount} ${targetCurrency}`;
+
+    let caption = "";
+    if (isLightning) {
+      caption = `⚡ <b>Lightning Deposit Details</b>\n\n` +
+        `🌐 <b>Network:</b> Lightning Network (${targetCurrency})\n` +
+        `📌 <b>Minimum Deposit:</b> <code>${minDepositNotice}</code>\n` +
+        `⚡ <b>Lightning Address:</b> <code>${userId}@${DOMAIN}</code>\n\n` +
+        `<b>Invoice (tap to copy):</b>\n<code>${data.invoice}</code>\n\n` +
+        `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
+        `<i>Scan QR or copy invoice to pay. Waiting for payment...</i>`;
+    } else {
+      caption = `📥 <b>${targetCurrency} Deposit Details</b>\n\n` +
+        `🌐 <b>Network:</b> ${networkLabel}\n` +
+        `📌 <b>Minimum Deposit:</b> <code>${minDepositNotice}</code>\n\n` +
+        `👉 <b>Deposit Address (tap to copy):</b>\n<code>${data.invoice}</code>\n\n` +
+        `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
+        `<i>Scan QR or send funds to the address above.</i>`;
+    }
+
+    const backCallback = targetCurrency === "SATS"
+      ? "dep_asset_sats"
+      : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
+
+    await ctx.deleteMessage().catch(() => {});
+    await ctx.replyWithPhoto(qrUrl, {
+      caption,
+      parse_mode: "HTML",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("« Back to Networks", backCallback)],
+        [Markup.button.callback("🏠 Main Menu", "gateway_back")]
+      ])
+    });
+
+    startDepositWatcher(ctx.from.id, txId, minAmount, userId);
+  } catch (err) {
+    await ctx.reply(`❌ <b>Failed to generate deposit:</b> ${err.message}`, {
+      parse_mode: "HTML",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("« Try Again", "dep_back_to_assets")]
+      ])
+    });
+  }
 }
 
 // ----------------------------------------------------
@@ -537,6 +622,132 @@ bot.command("admin", async (ctx) => {
 });
 
 // ----------------------------------------------------
+// CALLBACK ACTIONS: DIRECT DEPOSITS (NO AMOUNT INPUT)
+// ----------------------------------------------------
+bot.action("dep_back_to_assets", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await ctx.editMessageText(`🔥 <b>Select a Deposit Asset:</b> 🔥`, { parse_mode: "HTML", ...getDepositAssetKeyboard() });
+});
+
+bot.action("dep_asset_usdt", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await ctx.editMessageText(`🔥 <b>Select USDT Network:</b> 🔥`, { parse_mode: "HTML", ...getUsdtDepositNetworks() });
+});
+
+bot.action("dep_asset_usdc", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await ctx.editMessageText(`🔥 <b>Select USDC Network:</b> 🔥`, { parse_mode: "HTML", ...getUsdcDepositNetworks() });
+});
+
+bot.action("dep_asset_sats", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await ctx.editMessageText(`🔥 <b>Select Bitcoin Network:</b> 🔥`, { parse_mode: "HTML", ...getSatsDepositNetworks() });
+});
+
+// SATS Direct Deposits
+bot.action("dep_net_sats_lightning", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "SATS",
+    paymentMethod: "lightning",
+    minAmount: 1,
+    networkLabel: "Lightning Network"
+  });
+});
+
+bot.action("dep_net_sats_onchain", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "SATS",
+    paymentMethod: "onchain",
+    minAmount: 1000,
+    networkLabel: "Bitcoin On-Chain"
+  });
+});
+
+// USDT Direct Deposits (Min: 0.5 USDT)
+bot.action("dep_net_usdt_lightning", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "USDT",
+    paymentMethod: "lightning",
+    minAmount: 0.5,
+    networkLabel: "Lightning"
+  });
+});
+
+bot.action("dep_net_usdt_ethereum", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "USDT",
+    paymentMethod: "ethereum",
+    minAmount: 0.5,
+    networkLabel: "Ethereum (ERC-20)"
+  });
+});
+
+bot.action("dep_net_usdt_tron", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "USDT",
+    paymentMethod: "tron",
+    minAmount: 0.5,
+    networkLabel: "Tron (TRC-20)"
+  });
+});
+
+bot.action("dep_net_usdt_solana", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "USDT",
+    paymentMethod: "solana",
+    minAmount: 0.5,
+    networkLabel: "Solana"
+  });
+});
+
+bot.action("dep_net_usdt_ton", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "USDT",
+    paymentMethod: "ton",
+    minAmount: 0.5,
+    networkLabel: "TON"
+  });
+});
+
+// USDC Direct Deposits (Min: 0.5 USDC)
+bot.action("dep_net_usdc_lightning", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "USDC",
+    paymentMethod: "lightning",
+    minAmount: 0.5,
+    networkLabel: "Lightning"
+  });
+});
+
+bot.action("dep_net_usdc_ethereum", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "USDC",
+    paymentMethod: "ethereum",
+    minAmount: 0.5,
+    networkLabel: "Ethereum (ERC-20)"
+  });
+});
+
+bot.action("dep_net_usdc_solana", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await handleDirectDeposit(ctx, {
+    targetCurrency: "USDC",
+    paymentMethod: "solana",
+    minAmount: 0.5,
+    networkLabel: "Solana"
+  });
+});
+
+// ----------------------------------------------------
 // CALLBACK ACTIONS: WITHDRAWAL SELECTIONS
 // ----------------------------------------------------
 bot.action("with_back_to_assets", async (ctx) => {
@@ -694,91 +905,6 @@ bot.action("gateway_back", async (ctx) => {
   await ctx.reply("🔙 Returned to main menu.", kb);
 });
 
-// ----------------------------------------------------
-// DEPOSIT CALLBACK ACTIONS
-// ----------------------------------------------------
-bot.action("dep_back_to_assets", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`🔥 <b>Select a Deposit Asset:</b> 🔥`, { parse_mode: "HTML", ...getDepositAssetKeyboard() });
-});
-
-bot.action("dep_asset_usdt", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`🔥 <b>Select USDT Network:</b> 🔥`, { parse_mode: "HTML", ...getUsdtDepositNetworks() });
-});
-
-bot.action("dep_asset_usdc", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`🔥 <b>Select USDC Network:</b> 🔥`, { parse_mode: "HTML", ...getUsdcDepositNetworks() });
-});
-
-bot.action("dep_asset_sats", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`🔥 <b>Select Bitcoin Network:</b> 🔥`, { parse_mode: "HTML", ...getSatsDepositNetworks() });
-});
-
-bot.action("dep_net_usdt_lightning", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "USDT", payment_method: "lightning", min_amount: 0.5 });
-  await ctx.editMessageText(`⚡ <b>Deposit USDT (Lightning)</b>\nAddress: <code>${userId}@${DOMAIN}</code>\n\nReply with amount (Min: 0.5 USDT):`, { parse_mode: "HTML" });
-});
-
-bot.action("dep_net_usdt_ethereum", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "USDT", payment_method: "ethereum", min_amount: 0.5 });
-  await ctx.editMessageText(`⛓️ <b>Deposit USDT (Ethereum - ERC20)</b>\nReply with amount (Min: 0.5 USDT):`, { parse_mode: "HTML" });
-});
-
-bot.action("dep_net_usdt_tron", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "USDT", payment_method: "tron", min_amount: 0.5 });
-  await ctx.editMessageText(`🔴 <b>Deposit USDT (Tron - TRC20)</b>\nReply with amount (Min: 0.5 USDT):`, { parse_mode: "HTML" });
-});
-
-bot.action("dep_net_usdt_solana", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "USDT", payment_method: "solana", min_amount: 0.5 });
-  await ctx.editMessageText(`🟣 <b>Deposit USDT (Solana)</b>\nReply with amount (Min: 0.5 USDT):`, { parse_mode: "HTML" });
-});
-
-bot.action("dep_net_usdt_ton", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "USDT", payment_method: "ton", min_amount: 0.5 });
-  await ctx.editMessageText(`💎 <b>Deposit USDT (TON)</b>\nReply with amount (Min: 0.5 USDT):`, { parse_mode: "HTML" });
-});
-
-bot.action("dep_net_usdc_lightning", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "USDC", payment_method: "lightning", min_amount: 0.5 });
-  await ctx.editMessageText(`⚡ <b>Deposit USDC (Lightning)</b>\nReply with amount (Min: 0.5 USDC):`, { parse_mode: "HTML" });
-});
-
-bot.action("dep_net_usdc_ethereum", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "USDC", payment_method: "ethereum", min_amount: 0.5 });
-  await ctx.editMessageText(`⛓️ <b>Deposit USDC (Ethereum)</b>\nReply with amount (Min: 0.5 USDC):`, { parse_mode: "HTML" });
-});
-
-bot.action("dep_net_usdc_solana", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "USDC", payment_method: "solana", min_amount: 0.5 });
-  await ctx.editMessageText(`🟣 <b>Deposit USDC (Solana)</b>\nReply with amount (Min: 0.5 USDC):`, { parse_mode: "HTML" });
-});
-
-bot.action("dep_net_sats_lightning", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "SATS", payment_method: "lightning", min_amount: 1 });
-  await ctx.editMessageText(`⚡ <b>Deposit SATS (Lightning)</b>\nAddress: <code>${userId}@${DOMAIN}</code>\n\nReply with sats (Min: 1 sat):`, { parse_mode: "HTML" });
-});
-
-bot.action("dep_net_sats_onchain", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  await setSession(ctx.from.id, { step: "awaiting_deposit_amount", target_currency: "SATS", payment_method: "onchain", min_amount: 1000 });
-  await ctx.editMessageText(`₿ <b>Deposit Bitcoin (On-Chain)</b>\nReply with amount in sats (Min: 1,000 sats):`, { parse_mode: "HTML" });
-});
-
 // Admin Callbacks
 bot.action("admin_main_dashboard", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
@@ -890,7 +1016,7 @@ bot.action("admin_setkey_prompt", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 7. TEXT MESSAGE HANDLER
+// 7. TEXT MESSAGE HANDLER (WITHDRAWALS & ADMIN)
 // ----------------------------------------------------
 bot.on("text", async (ctx) => {
   const text = ctx.message.text.trim();
@@ -1006,54 +1132,7 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  // B. DEPOSIT AMOUNT INPUT
-  if (session.step === "awaiting_deposit_amount") {
-    const amount = Number(text);
-    const minAmount = session.min_amount || 1;
-
-    if (isNaN(amount) || amount < minAmount) {
-      return ctx.reply(`⚠️ Minimum deposit is ${minAmount}. Please enter a valid number.`);
-    }
-
-    await ctx.replyWithChatAction("typing");
-    const targetCurrency = session.target_currency || "SATS";
-    const paymentMethod = session.payment_method || "lightning";
-    await clearSession(ctx.from.id);
-
-    try {
-      const res = await fetch(`${APP_URL}/api/wallet?action=create-payment`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount,
-          target_currency: targetCurrency,
-          payment_method: paymentMethod,
-          user_id: userId,
-          username: userId,
-          telegram_id: String(ctx.from.id)
-        })
-      });
-      const data = await res.json();
-
-      if (!data.success || !data.invoice) throw new Error(data.error || "Could not generate deposit.");
-
-      const txId = data.tx_id || data.id;
-      const isLightning = data.invoice.toLowerCase().startsWith("lnbc");
-      const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(data.invoice)}&size=400&dark=00e676&light=0b0e14&margin=2&ecLevel=Q&centerImageUrl=https%3A%2F%2Fcdn-icons-png.flaticon.com%2F512%2F1198%2F1198305.png&centerImageSizeRatio=0.22`;
-
-      const caption = isLightning
-        ? `⚡ <b>Lightning Deposit Invoice Created</b>\n\n💰 <b>Amount:</b> ${amount} ${targetCurrency}\n🆔 <b>TxID:</b> <code>${txId}</code>\n\n<code>${data.invoice}</code>\n\n<i>Scan QR or tap invoice to copy. Waiting for payment...</i>`
-        : `📥 <b>${targetCurrency} Deposit Address Created</b>\n\n💰 <b>Expected Amount:</b> ${amount} ${targetCurrency}\n🌐 <b>Network:</b> ${paymentMethod.toUpperCase()}\n🆔 <b>TxID:</b> <code>${txId}</code>\n\n👉 <b>Address:</b>\n<code>${data.invoice}</code>\n\n<i>Scan QR or copy address to transfer.</i>`;
-
-      await ctx.replyWithPhoto(qrUrl, { caption, parse_mode: "HTML" });
-      startDepositWatcher(ctx.from.id, txId, amount, userId);
-    } catch (err) {
-      ctx.reply(`❌ Failed to create deposit: ${err.message}`);
-    }
-    return;
-  }
-
-  // C. WITHDRAW DESTINATION INPUT
+  // B. WITHDRAW DESTINATION INPUT
   if (session.step === "awaiting_withdraw_dest") {
     await ctx.replyWithChatAction("typing");
 
@@ -1133,7 +1212,7 @@ bot.on("text", async (ctx) => {
     return ctx.reply(`📍 <b>Destination Address:</b>\n<code>${text}</code>\n\nAvailable: <b>${availText}</b>\nEnter the <b>amount in ${detectedCurrency} to send</b>:`, { parse_mode: "HTML" });
   }
 
-  // D. WITHDRAW AMOUNT INPUT (Checks Dedicated Currency Balance)
+  // C. WITHDRAW AMOUNT INPUT
   if (session.step === "awaiting_withdraw_amount") {
     const amount = Number(text);
     if (isNaN(amount) || amount <= 0) return ctx.reply("⚠️ Please enter a valid number.");
