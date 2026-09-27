@@ -360,7 +360,7 @@ async function isUserBanned(userId, numericId) {
 }
 
 // ----------------------------------------------------
-// DIRECT DEPOSIT HANDLER (NO AMOUNT PROMPT NEEDED)
+// DIRECT DEPOSIT HANDLER (ONLY "CHECK STATUS" BUTTON)
 // ----------------------------------------------------
 async function handleDirectDeposit(ctx, { targetCurrency, paymentMethod, minAmount, networkLabel }) {
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -416,17 +416,12 @@ async function handleDirectDeposit(ctx, { targetCurrency, paymentMethod, minAmou
         `<i>Scan QR or send funds to the address above.</i>`;
     }
 
-    const backCallback = targetCurrency === "SATS"
-      ? "dep_asset_sats"
-      : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
-
     await ctx.deleteMessage().catch(() => {});
     await ctx.replyWithPhoto(qrUrl, {
       caption,
       parse_mode: "HTML",
       ...Markup.inlineKeyboard([
-        [Markup.button.callback("« Back to Networks", backCallback)],
-        [Markup.button.callback("🏠 Main Menu", "gateway_back")]
+        [Markup.button.callback("🔄 Check Status", `check_dep:${txId}`)]
       ])
     });
 
@@ -440,6 +435,38 @@ async function handleDirectDeposit(ctx, { targetCurrency, paymentMethod, minAmou
     });
   }
 }
+
+// ----------------------------------------------------
+// CALLBACK ACTION: CHECK DEPOSIT STATUS BUTTON
+// ----------------------------------------------------
+bot.action(/^check_dep:(.+)$/, async (ctx) => {
+  const paymentId = ctx.match[1];
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
+  const chatId = ctx.from.id;
+
+  await ctx.answerCbQuery("Checking payment status...").catch(() => {});
+
+  try {
+    const res = await fetch(`${APP_URL}/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${userId}&telegram_id=${chatId}`);
+    const data = await res.json();
+
+    if (data && data.is_paid) {
+      stopDepositWatcher(chatId);
+      await ctx.answerCbQuery("✅ Payment Confirmed! Your balance has been credited.", { show_alert: true }).catch(() => {});
+
+      // Update button on success
+      await ctx.editMessageReplyMarkup(
+        Markup.inlineKeyboard([
+          [Markup.button.callback("✅ Payment Confirmed", "gateway_back")]
+        ]).reply_markup
+      ).catch(() => {});
+    } else {
+      await ctx.answerCbQuery("⏳ Payment not detected yet. Please ensure the transfer is complete.", { show_alert: true }).catch(() => {});
+    }
+  } catch (err) {
+    await ctx.answerCbQuery("⚠️ Error checking status: " + err.message, { show_alert: true }).catch(() => {});
+  }
+});
 
 // ----------------------------------------------------
 // COMMANDS
@@ -622,7 +649,7 @@ bot.command("admin", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// CALLBACK ACTIONS: DIRECT DEPOSITS (NO AMOUNT INPUT)
+// CALLBACK ACTIONS: DIRECT DEPOSIT SELECTIONS
 // ----------------------------------------------------
 bot.action("dep_back_to_assets", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
