@@ -44,8 +44,9 @@ function getDb() {
 const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const SAT_TO_USD = 0.00065;
 
-// Helper: Send Instant Telegram Notification to User
+// Helper: Send Single Instant Telegram Notification to User
 async function notifyTelegramUser(telegramId, message) {
   if (!BOT_TOKEN || !telegramId) return;
   try {
@@ -98,7 +99,6 @@ async function forwardToLogsChannel(text) {
 
     const result = await res.json();
     if (!result.ok) {
-      // Plain text fallback if HTML formatting fails
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -251,7 +251,7 @@ function extractErrorMessage(data, status) {
   return `Speed API error (HTTP ${status})`;
 }
 
-// Smart Wallet Resolver (Fixed: Never skips existing documents with undefined initial balance)
+// Smart Wallet Resolver
 async function findUserWallet(identifiers) {
   if (!db) return null;
 
@@ -329,7 +329,6 @@ async function findUserWallet(identifiers) {
     }
   }
 
-  // Fallback: Primary ID
   const primary = candidateIds.find(c => !c.startsWith("user") && /^\d+$/.test(c)) || candidateIds[0] || "unknown";
   return {
     ref: db.collection("users").doc(primary),
@@ -373,12 +372,14 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({
         success: true,
         user_id: wallet ? wallet.id : uid,
-        balance: wallet ? wallet.balance : 0
+        balance: wallet ? wallet.balance : 0,
+        usdt_balance: wallet ? (Number(wallet.data.usdt_balance) || 0) : 0,
+        usdc_balance: wallet ? (Number(wallet.data.usdc_balance) || 0) : 0
       });
     }
 
     // ========================================================
-    // 2. TRANSACTION HISTORY (Deposits & Withdrawals)
+    // 2. TRANSACTION HISTORY
     // ========================================================
     if (action === "history" && req.method === "GET") {
       const uid = (req.query.user_id || req.query.username || "").toLowerCase().trim();
@@ -446,7 +447,6 @@ module.exports = async function handler(req, res) {
 
       let { ok, status, data: paymentData } = await speedRequest("payments", "POST", speedBody, apiKey);
 
-      // Fallback: If Speed rejects target_currency on SATS, retry with standard currency
       if (!ok && (status === 400 || status === 422)) {
         const fallbackBody = {
           currency: baseCurr,
@@ -494,7 +494,6 @@ module.exports = async function handler(req, res) {
         created_at: new Date().toISOString()
       }, { merge: true });
 
-      // Forward creation event to admin logs channel
       await forwardToLogsChannel(
         `📥 <b>Deposit Invoice Created</b>\n` +
         `• User: @${uid}\n` +
@@ -514,7 +513,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 4. CHECK DEPOSIT STATUS & REAL-TIME BALANCE UPDATE
+    // 4. CHECK DEPOSIT STATUS (Atomic lock prevents duplicate alerts)
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -542,7 +541,7 @@ module.exports = async function handler(req, res) {
 
       const wallet = await findUserWallet([creditTarget, targetTgId, user_id]);
 
-      // If already processed and credited in database
+      // If already processed and credited in database, exit immediately without re-alerting
       if (invData && invData.is_paid) {
         return res.status(200).json({ 
           success: true, 
@@ -564,6 +563,7 @@ module.exports = async function handler(req, res) {
         const finalSats = sats || Number(payment?.amount || 0);
         const finalCurr = curr || payment?.target_currency || "SATS";
 
+        // Atomic update and lock: mark as is_paid first
         const batch = db.batch();
 
         if (invRef) {
@@ -573,13 +573,11 @@ module.exports = async function handler(req, res) {
           }, { merge: true });
         }
 
-        // Increment user's primary wallet document balance
         batch.set(wallet.ref, {
           balance: admin.firestore.FieldValue.increment(finalSats),
           updated_at: new Date().toISOString()
         }, { merge: true });
 
-        // Save transaction record to history
         batch.set(db.collection("transactions").doc(payment_id), {
           id: payment_id,
           tx_id: payment_id,
@@ -595,7 +593,7 @@ module.exports = async function handler(req, res) {
 
         const updatedBal = wallet.balance + finalSats;
 
-        // Instant notification to user
+        // Exactly ONE user notification is sent here
         if (targetTgId) {
           await notifyTelegramUser(
             targetTgId,
@@ -606,7 +604,7 @@ module.exports = async function handler(req, res) {
           );
         }
 
-        // Forward to Telegram logs channel
+        // Exactly ONE log channel event is sent here
         await forwardToLogsChannel(
           `📥 <b>Deposit Confirmed</b>\n` +
           `• User: @${wallet.id}\n` +
@@ -636,7 +634,98 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 5. WITHDRAW / SEND (Matches Deposit Networks & Sends Logs)
+    // 5. ASSET SWAP (SATS <-> USDT/USDC)
+    // ========================================================
+    if (action === "swap" && req.method === "POST") {
+      const { from_currency, to_currency, amount, user_id, telegram_id, username } = req.body;
+      const swapAmount = Number(amount);
+
+      if (!swapAmount || swapAmount <= 0) {
+        return res.status(400).json({ success: false, error: "Invalid swap amount." });
+      }
+
+      const wallet = await findUserWallet([user_id, username, telegram_id]);
+      if (!wallet) {
+        return res.status(400).json({ success: false, error: "User wallet not found." });
+      }
+
+      const fromCurr = (from_currency || "SATS").toUpperCase();
+      const toCurr = (to_currency || "USDT").toUpperCase();
+
+      const satsBal = Number(wallet.data.balance || 0);
+      const usdtBal = Number(wallet.data.usdt_balance || 0);
+      const usdcBal = Number(wallet.data.usdc_balance || 0);
+
+      let targetAmount = 0;
+      const updateData = { updated_at: new Date().toISOString() };
+
+      if (fromCurr === "SATS") {
+        if (swapAmount > satsBal) {
+          return res.status(400).json({ success: false, error: `Insufficient SATS! You have ${satsBal.toLocaleString()} sats.` });
+        }
+        targetAmount = Number((swapAmount * SAT_TO_USD).toFixed(4));
+        updateData.balance = admin.firestore.FieldValue.increment(-swapAmount);
+        if (toCurr === "USDT") {
+          updateData.usdt_balance = admin.firestore.FieldValue.increment(targetAmount);
+        } else {
+          updateData.usdc_balance = admin.firestore.FieldValue.increment(targetAmount);
+        }
+      } else if (fromCurr === "USDT") {
+        if (swapAmount > usdtBal) {
+          return res.status(400).json({ success: false, error: `Insufficient USDT! You have ${usdtBal.toFixed(2)} USDT.` });
+        }
+        targetAmount = Math.round(swapAmount / SAT_TO_USD);
+        updateData.usdt_balance = admin.firestore.FieldValue.increment(-swapAmount);
+        updateData.balance = admin.firestore.FieldValue.increment(targetAmount);
+      } else if (fromCurr === "USDC") {
+        if (swapAmount > usdcBal) {
+          return res.status(400).json({ success: false, error: `Insufficient USDC! You have ${usdcBal.toFixed(2)} USDC.` });
+        }
+        targetAmount = Math.round(swapAmount / SAT_TO_USD);
+        updateData.usdc_balance = admin.firestore.FieldValue.increment(-swapAmount);
+        updateData.balance = admin.firestore.FieldValue.increment(targetAmount);
+      } else {
+        return res.status(400).json({ success: false, error: "Unsupported swap currency pair." });
+      }
+
+      const txId = `swap_${Date.now()}`;
+      const batch = db.batch();
+      batch.set(wallet.ref, updateData, { merge: true });
+
+      batch.set(db.collection("transactions").doc(txId), {
+        id: txId,
+        tx_id: txId,
+        type: "swap",
+        user_id: wallet.id,
+        from_currency: fromCurr,
+        from_amount: swapAmount,
+        to_currency: toCurr,
+        to_amount: targetAmount,
+        status: "completed",
+        created_at: new Date().toISOString()
+      });
+
+      await batch.commit();
+
+      await forwardToLogsChannel(
+        `🔄 <b>Swap Executed</b>\n` +
+        `• User: @${wallet.id}\n` +
+        `• Swapped: ${swapAmount.toLocaleString()} ${fromCurr} ➔ ${targetAmount.toLocaleString()} ${toCurr}\n` +
+        `• TxID: <code>${txId}</code>`
+      );
+
+      return res.status(200).json({
+        success: true,
+        tx_id: txId,
+        from_amount: swapAmount,
+        from_currency: fromCurr,
+        to_amount: targetAmount,
+        to_currency: toCurr
+      });
+    }
+
+    // ========================================================
+    // 6. WITHDRAW / SEND
     // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, network, currency, target_currency } = req.body;
@@ -789,7 +878,6 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Resolve Lightning Address to BOLT11 invoice if applicable
       let finalDest = dest;
       if (method === "lightning" && dest.includes("@")) {
         finalDest = await resolveLnAddress(dest, sendAmount);
@@ -807,7 +895,6 @@ module.exports = async function handler(req, res) {
         note: `Withdrawal by ${senderWallet.id}`
       }, apiKey);
 
-      // Dual-route fallback: retry via instant_sends if /send returns 404 or 403
       if (!ok && (status === 404 || status === 403)) {
         const retry = await speedRequest("instant_sends", "POST", {
           amount: sendAmount,
@@ -845,7 +932,6 @@ module.exports = async function handler(req, res) {
       const txId = sendData?.id || `send_${Date.now()}`;
       const remainingBal = senderWallet.balance - sendAmount;
 
-      // Deduct balance and record withdrawal in history
       const batch = db.batch();
       batch.set(senderWallet.ref, {
         balance: admin.firestore.FieldValue.increment(-sendAmount),
@@ -867,7 +953,6 @@ module.exports = async function handler(req, res) {
 
       await batch.commit();
 
-      // Forward to Telegram logs channel
       await forwardToLogsChannel(
         `📤 <b>Withdrawal Completed</b>\n` +
         `• User: @${senderWallet.id}\n` +
