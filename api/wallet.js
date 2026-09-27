@@ -78,7 +78,7 @@ async function getSpeedApiKey() {
   return (process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "").trim();
 }
 
-// Universal extractor for Lightning invoices, Bitcoin On-Chain, Tron & Solana addresses
+// Universal extractor for payment targets
 function extractPaymentTarget(obj) {
   if (!obj) return null;
 
@@ -114,7 +114,6 @@ function extractPaymentTarget(obj) {
     return { type: "uri", value: obj.uri };
   }
 
-  // Nested in payment_methods array
   if (Array.isArray(obj.payment_methods)) {
     for (const pm of obj.payment_methods) {
       for (const key of ["lightning", "onchain", "tron", "solana", "ethereum"]) {
@@ -127,7 +126,6 @@ function extractPaymentTarget(obj) {
     }
   }
 
-  // Deep recursive search
   for (const key of Object.keys(obj)) {
     const res = extractPaymentTarget(obj[key]);
     if (res) return res;
@@ -140,7 +138,7 @@ function extractPaymentTarget(obj) {
   return null;
 }
 
-// Official Speed Request Client
+// Speed Client
 async function speedRequest(path, method, body, apiKey) {
   const cleanKey = apiKey.replace(/^Bearer\s+/i, "").replace(/^Basic\s+/i, "").trim();
   const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
@@ -252,7 +250,36 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 2. CREATE DEPOSIT INVOICE (POST /payments)
+    // 2. TRANSACTION HISTORY (Deposits & Withdrawals)
+    // ========================================================
+    if (action === "history" && req.method === "GET") {
+      const uid = (req.query.user_id || req.query.username || "").toLowerCase().trim();
+      const tid = req.query.telegram_id;
+
+      const candidates = [uid, tid, tid ? `user${tid}` : null].filter(Boolean);
+      const wallet = await findUserWallet(candidates);
+      const queryUser = wallet ? wallet.id : uid;
+
+      // Query transactions where user participated
+      const snap = await db.collection("transactions")
+        .where("user_id", "==", queryUser)
+        .limit(20)
+        .get();
+
+      const list = [];
+      snap.forEach(d => list.push(d.data()));
+
+      // In-memory sort by date descending (prevents composite index requirements)
+      list.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+      return res.status(200).json({
+        success: true,
+        history: list.slice(0, 10)
+      });
+    }
+
+    // ========================================================
+    // 3. CREATE DEPOSIT INVOICE (POST /payments)
     // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method } = req.body;
@@ -277,10 +304,7 @@ module.exports = async function handler(req, res) {
       const targetCurr = (target_currency || "SATS").toUpperCase();
       let payMethod = (payment_method || "lightning").toLowerCase();
 
-      // Normalize method to Speed's required enum (e.g. "onchain" without hyphen)
       if (payMethod === "on-chain" || payMethod === "on_chain") payMethod = "onchain";
-
-      // Base currency: SATS for bitcoin, USD for stablecoins
       const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
 
       const { ok, status, data: paymentData } = await speedRequest("payments", "POST", {
@@ -302,7 +326,6 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Extract invoice or onchain address
       const target = extractPaymentTarget(paymentData);
       const invoiceString = target ? target.value : null;
 
@@ -315,6 +338,7 @@ module.exports = async function handler(req, res) {
 
       const txId = paymentData.id || `py_${Date.now()}`;
 
+      // Save invoice with currency & amount for auto-detection
       await db.collection("invoices").doc(txId).set({
         id: txId,
         invoice: invoiceString,
@@ -339,7 +363,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 3. CHECK DEPOSIT STATUS (GET /payments/{id})
+    // 4. CHECK DEPOSIT STATUS
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -356,7 +380,8 @@ module.exports = async function handler(req, res) {
           success: true, 
           is_paid: true, 
           tx_id: payment_id,
-          amount: invDoc.data().amount
+          amount: invDoc.data().amount,
+          currency: invDoc.data().target_currency || "SATS"
         });
       }
 
@@ -368,6 +393,7 @@ module.exports = async function handler(req, res) {
 
       if (isPaid && invDoc.exists && !invDoc.data().is_paid) {
         const sats = Number(invDoc.data().amount || payment?.amount || 0);
+        const curr = invDoc.data().target_currency || "SATS";
         const creditTarget = invDoc.data().user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
         const targetTgId = invDoc.data().telegram_id || telegram_id;
 
@@ -385,11 +411,14 @@ module.exports = async function handler(req, res) {
           updated_at: new Date().toISOString()
         }, { merge: true });
 
+        // Save to user's history
         batch.set(db.collection("transactions").doc(payment_id), {
           id: payment_id,
+          tx_id: payment_id,
           type: "deposit",
           user_id: wallet.id,
           amount: sats,
+          currency: curr,
           status: "completed",
           created_at: new Date().toISOString()
         });
@@ -400,7 +429,7 @@ module.exports = async function handler(req, res) {
           await notifyTelegramUser(
             targetTgId,
             `🎉 <b>Payment Received!</b>\n\n` +
-            `⚡ <b>+${sats} sats</b> have been credited to your balance!\n` +
+            `⚡ <b>+${sats} ${curr}</b> have been credited to your balance!\n` +
             `🆔 <b>TxID:</b> <code>${payment_id}</code>`
           );
         }
@@ -410,12 +439,13 @@ module.exports = async function handler(req, res) {
         success: true, 
         is_paid: isPaid,
         tx_id: payment_id,
-        amount: invDoc.exists ? invDoc.data().amount : 0
+        amount: invDoc.exists ? invDoc.data().amount : 0,
+        currency: invDoc.exists ? invDoc.data().target_currency : "SATS"
       });
     }
 
     // ========================================================
-    // 4. INSTANT SEND (POST https://api.tryspeed.com/send)
+    // 5. INSTANT SEND (POST https://api.tryspeed.com/send)
     // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, currency, target_currency } = req.body;
@@ -437,7 +467,6 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Check for internal transfer
       let recipientUserId = null;
       let internalInvoiceDoc = null;
 
@@ -491,12 +520,28 @@ module.exports = async function handler(req, res) {
           });
         }
 
-        batch.set(db.collection("transactions").doc(txId), {
-          id: txId,
-          type: "internal_transfer",
-          sender_id: senderWallet.id,
-          recipient_id: recipientWallet.id,
+        // Record history for SENDER
+        batch.set(db.collection("transactions").doc(`${txId}_send`), {
+          id: `${txId}_send`,
+          tx_id: txId,
+          type: "transfer_sent",
+          user_id: senderWallet.id,
+          to: recipientWallet.id,
           amount: sendAmount,
+          currency: currency || "SATS",
+          status: "completed",
+          created_at: new Date().toISOString()
+        });
+
+        // Record history for RECIPIENT
+        batch.set(db.collection("transactions").doc(`${txId}_recv`), {
+          id: `${txId}_recv`,
+          tx_id: txId,
+          type: "transfer_received",
+          user_id: recipientWallet.id,
+          from: senderWallet.id,
+          amount: sendAmount,
+          currency: currency || "SATS",
           status: "completed",
           created_at: new Date().toISOString()
         });
@@ -508,7 +553,7 @@ module.exports = async function handler(req, res) {
           await notifyTelegramUser(
             targetChatId,
             `🎉 <b>Payment Received!</b>\n\n` +
-            `💰 <b>+${sendAmount} sats</b> received from @${senderWallet.id}!\n` +
+            `💰 <b>+${sendAmount} ${currency || "SATS"}</b> received from @${senderWallet.id}!\n` +
             `🆔 <b>TxID:</b> <code>${txId}</code>`
           );
         }
@@ -518,7 +563,7 @@ module.exports = async function handler(req, res) {
           internal: true,
           tx_id: txId,
           recipient: recipientWallet.id,
-          message: `Internal transfer of ${sendAmount} sats completed.`
+          message: `Internal transfer of ${sendAmount} ${currency || "SATS"} completed.`
         });
       }
 
@@ -567,6 +612,7 @@ module.exports = async function handler(req, res) {
 
       const txId = sendData?.id || `send_${Date.now()}`;
 
+      // Deduct balance and record withdrawal in history
       const batch = db.batch();
       batch.set(senderWallet.ref, {
         balance: admin.firestore.FieldValue.increment(-sendAmount)
@@ -574,8 +620,9 @@ module.exports = async function handler(req, res) {
 
       batch.set(db.collection("transactions").doc(txId), {
         id: txId,
-        type: "instant_send",
-        sender_id: senderWallet.id,
+        tx_id: txId,
+        type: "withdrawal",
+        user_id: senderWallet.id,
         destination: dest,
         withdraw_method: method,
         amount: sendAmount,
