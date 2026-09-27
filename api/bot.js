@@ -24,11 +24,13 @@ const ADMIN_IDS = (process.env.ADMIN_IDS || "").split(",").map(id => id.trim());
 
 const SAT_TO_USD = 0.00065;
 
+// Active watcher registry to cancel background timers immediately
+const activeWatchers = new Map();
+
 function isAdmin(ctx) {
   return ADMIN_IDS.includes(String(ctx.from?.id));
 }
 
-// Persistent Reply Keyboard with 📜 History Added
 function getMainKeyboard(ctx) {
   const rows = [
     ["💰 Balance", "📥 Deposit"],
@@ -162,6 +164,14 @@ async function clearSession(userId) {
   await db.collection("bot_sessions").doc(String(userId)).delete();
 }
 
+function stopDepositWatcher(chatId) {
+  const id = String(chatId);
+  if (activeWatchers.has(id)) {
+    clearInterval(activeWatchers.get(id));
+    activeWatchers.delete(id);
+  }
+}
+
 // Format My Wallet Screen
 async function getWalletOverviewText(userId, telegramId) {
   let sats = 0;
@@ -206,13 +216,14 @@ function decodeBolt11Sats(invoice) {
 
 // Background poller for deposits
 function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
+  stopDepositWatcher(chatId); // Cancel any previous watcher
   let attempts = 0;
   const maxAttempts = 60;
 
   const timer = setInterval(async () => {
     attempts++;
     if (attempts > maxAttempts) {
-      clearInterval(timer);
+      stopDepositWatcher(chatId);
       return;
     }
 
@@ -221,7 +232,7 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
       const data = await res.json();
 
       if (data && data.is_paid) {
-        clearInterval(timer);
+        stopDepositWatcher(chatId);
         const amount = data.amount || expectedAmount;
         const txId = data.tx_id || paymentId;
         const curr = data.currency || "SATS";
@@ -241,15 +252,18 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
       }
     } catch (e) {}
   }, 3000);
+
+  activeWatchers.set(String(chatId), timer);
 }
 
 // ----------------------------------------------------
-// 1. /START & 2. 💰 BALANCE
+// 1. /START - ALWAYS DIRECTLY GOES BACK TO WALLET HOME
 // ----------------------------------------------------
 bot.start(async (ctx) => {
+  stopDepositWatcher(ctx.from.id);
   await clearSession(ctx.from.id);
-  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   await ctx.replyWithChatAction("typing");
   const walletText = await getWalletOverviewText(userId, ctx.from.id);
 
@@ -259,10 +273,14 @@ bot.start(async (ctx) => {
   });
 });
 
+// ----------------------------------------------------
+// 2. 💰 BALANCE
+// ----------------------------------------------------
 bot.hears("💰 Balance", async (ctx) => {
+  stopDepositWatcher(ctx.from.id);
   await clearSession(ctx.from.id);
-  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   await ctx.replyWithChatAction("typing");
   const walletText = await getWalletOverviewText(userId, ctx.from.id);
 
@@ -275,12 +293,13 @@ bot.hears("💰 Balance", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 3. 📜 HISTORY BUTTON (Deposits & Withdrawals)
+// 3. 📜 HISTORY
 // ----------------------------------------------------
 bot.hears("📜 History", async (ctx) => {
+  stopDepositWatcher(ctx.from.id);
   await clearSession(ctx.from.id);
-  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   await ctx.replyWithChatAction("typing");
 
   try {
@@ -331,6 +350,7 @@ bot.hears("📜 History", async (ctx) => {
 // 4. 📥 DEPOSIT (Step 1)
 // ----------------------------------------------------
 bot.hears("📥 Deposit", async (ctx) => {
+  stopDepositWatcher(ctx.from.id);
   await clearSession(ctx.from.id);
 
   await ctx.reply(
@@ -346,6 +366,7 @@ bot.hears("📥 Deposit", async (ctx) => {
 // 5. 📤 WITHDRAW (Step 1)
 // ----------------------------------------------------
 bot.hears("📤 Withdraw", async (ctx) => {
+  stopDepositWatcher(ctx.from.id);
   await clearSession(ctx.from.id);
 
   await ctx.reply(
@@ -365,6 +386,7 @@ bot.hears("🔑 Set Key", async (ctx) => {
     return ctx.reply("⛔ Access denied: You are not authorized.");
   }
 
+  stopDepositWatcher(ctx.from.id);
   await setSession(ctx.from.id, { step: "awaiting_admin_key" });
 
   await ctx.reply(
@@ -718,6 +740,7 @@ bot.action("with_net_usdc_solana", async (ctx) => {
 });
 
 bot.action("gateway_back", async (ctx) => {
+  stopDepositWatcher(ctx.from.id);
   await clearSession(ctx.from.id);
   await ctx.answerCbQuery();
   await ctx.deleteMessage().catch(() => {});
@@ -725,16 +748,40 @@ bot.action("gateway_back", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 7. TEXT MESSAGE HANDLER (WITH UNIVERSAL AUTO-DETECT)
+// 7. TEXT MESSAGE HANDLER (ABORTS ON /start OR MENU BUTTONS)
 // ----------------------------------------------------
 bot.on("text", async (ctx) => {
   const text = ctx.message.text.trim();
-  const session = await getSession(ctx.from.id);
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
-  if (["💰 Balance", "📥 Deposit", "📤 Withdraw", "📜 History", "🔑 Set Key"].includes(text)) {
+  // EMERGENCY ESCAPE: If user sends /start, "start", or "Home", directly return to Wallet without checking amount
+  if (
+    text.startsWith("/start") ||
+    text.toLowerCase() === "start" ||
+    text.toLowerCase() === "home" ||
+    text === "🏠 Home"
+  ) {
+    stopDepositWatcher(ctx.from.id);
+    await clearSession(ctx.from.id);
+    await ctx.replyWithChatAction("typing");
+    const walletText = await getWalletOverviewText(userId, ctx.from.id);
+    return ctx.reply(walletText, {
+      parse_mode: "HTML",
+      ...getMainKeyboard(ctx)
+    });
+  }
+
+  // If user clicked any persistent button or command, abort pending inputs
+  if (
+    text.startsWith("/") ||
+    ["💰 Balance", "📥 Deposit", "📤 Withdraw", "📜 History", "🔑 Set Key", "🔙 Back"].includes(text)
+  ) {
+    stopDepositWatcher(ctx.from.id);
+    await clearSession(ctx.from.id);
     return;
   }
+
+  const session = await getSession(ctx.from.id);
 
   // A. PROCESS DEPOSIT AMOUNT
   if (session.step === "awaiting_deposit_amount") {
@@ -800,7 +847,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // B. PROCESS WITHDRAW DESTINATION (UNIVERSAL AUTO-DETECT FOR ALL CURRENCIES)
+  // B. PROCESS WITHDRAW DESTINATION (UNIVERSAL AUTO-DETECT)
   if (session.step === "awaiting_withdraw_dest") {
     await ctx.replyWithChatAction("typing");
 
@@ -808,7 +855,7 @@ bot.on("text", async (ctx) => {
     let detectedCurrency = session.target_currency || "SATS";
     let detectedMethod = session.withdraw_method || "lightning";
 
-    // 1. Check internal Firestore records (Auto-detects SATS, USDT, USDC)
+    // 1. Check internal Firestore records
     if (db) {
       const invSnap = await db.collection("invoices")
         .where("invoice", "==", text)
@@ -833,7 +880,7 @@ bot.on("text", async (ctx) => {
       }
     }
 
-    // 3. Decode URI params (e.g. ?amount=...)
+    // 3. Decode URI params (?amount=...)
     if (!detectedAmount && text.includes("?")) {
       const uriMatch = text.match(/[?&]amount=([0-9.]+)/i);
       if (uriMatch) {
@@ -852,7 +899,7 @@ bot.on("text", async (ctx) => {
       }
     }
 
-    // IF AMOUNT WAS AUTO-DETECTED (Skips prompt for amount!)
+    // IF AMOUNT WAS AUTO-DETECTED (Skips asking for amount!)
     if (detectedAmount && detectedAmount > 0) {
       if (session.balance && detectedCurrency === "SATS" && detectedAmount > session.balance) {
         await clearSession(ctx.from.id);
@@ -902,7 +949,7 @@ bot.on("text", async (ctx) => {
     );
   }
 
-  // C. PROCESS WITHDRAW AMOUNT (Only when amount wasn't in invoice)
+  // C. PROCESS WITHDRAW AMOUNT
   if (session.step === "awaiting_withdraw_amount") {
     const amount = Number(text);
     if (isNaN(amount) || amount <= 0) {
@@ -1015,6 +1062,7 @@ bot.action("confirm_send", async (ctx) => {
 });
 
 bot.action("cancel_send", async (ctx) => {
+  stopDepositWatcher(ctx.from.id);
   await clearSession(ctx.from.id);
   await ctx.answerCbQuery("Cancelled");
   await ctx.editMessageText("❌ Payment cancelled.");
