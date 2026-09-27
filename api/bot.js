@@ -28,11 +28,11 @@ function isAdmin(ctx) {
   return ADMIN_IDS.includes(String(ctx.from?.id));
 }
 
-// Persistent Reply Keyboard
+// Persistent Reply Keyboard with 📜 History Added
 function getMainKeyboard(ctx) {
   const rows = [
     ["💰 Balance", "📥 Deposit"],
-    ["📤 Withdraw"]
+    ["📤 Withdraw", "📜 History"]
   ];
   if (isAdmin(ctx)) {
     rows.push(["🔑 Set Key"]);
@@ -40,9 +40,7 @@ function getMainKeyboard(ctx) {
   return Markup.keyboard(rows).resize();
 }
 
-// ----------------------------------------------------
-// KEYBOARDS: STEP 1 (ASSET SELECTION)
-// ----------------------------------------------------
+// Keyboards: Step 1 (Asset Selection)
 function getDepositAssetKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("⚡ Bitcoin (SATS)", "dep_asset_sats")],
@@ -65,10 +63,7 @@ function getWithdrawAssetKeyboard() {
   ]);
 }
 
-// ----------------------------------------------------
-// KEYBOARDS: STEP 2 (NETWORK SELECTION)
-// ----------------------------------------------------
-// USDT Networks: Lightning, Ethereum, Tron, Solana, TON
+// Keyboards: Step 2 (Deposit Networks)
 function getUsdtDepositNetworks() {
   return Markup.inlineKeyboard([
     [
@@ -86,7 +81,6 @@ function getUsdtDepositNetworks() {
   ]);
 }
 
-// USDC Networks: Lightning, Ethereum, Solana
 function getUsdcDepositNetworks() {
   return Markup.inlineKeyboard([
     [
@@ -100,7 +94,6 @@ function getUsdcDepositNetworks() {
   ]);
 }
 
-// Bitcoin Networks: Lightning, On-Chain
 function getSatsDepositNetworks() {
   return Markup.inlineKeyboard([
     [
@@ -111,7 +104,7 @@ function getSatsDepositNetworks() {
   ]);
 }
 
-// Withdraw Network Keyboards
+// Keyboards: Step 2 (Withdraw Networks)
 function getUsdtWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
@@ -231,6 +224,7 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
         clearInterval(timer);
         const amount = data.amount || expectedAmount;
         const txId = data.tx_id || paymentId;
+        const curr = data.currency || "SATS";
 
         const bRes = await fetch(`${APP_URL}/api/wallet?action=balance&user_id=${targetUserId}&telegram_id=${chatId}`);
         const bData = await bRes.json();
@@ -239,7 +233,7 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
         await bot.telegram.sendMessage(
           chatId,
           `🎉 <b>Payment Received!</b>\n\n` +
-          `⚡ <b>+${amount}</b> credited to your balance!\n` +
+          `⚡ <b>+${amount} ${curr}</b> credited to your balance!\n` +
           `💰 <b>New Balance:</b> ${currentBal} sats\n` +
           `🆔 <b>TxID:</b> <code>${txId}</code>`,
           { parse_mode: "HTML" }
@@ -281,7 +275,60 @@ bot.hears("💰 Balance", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 3. 📥 DEPOSIT (Step 1: Asset Selection)
+// 3. 📜 HISTORY BUTTON (Deposits & Withdrawals)
+// ----------------------------------------------------
+bot.hears("📜 History", async (ctx) => {
+  await clearSession(ctx.from.id);
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
+
+  await ctx.replyWithChatAction("typing");
+
+  try {
+    const res = await fetch(`${APP_URL}/api/wallet?action=history&user_id=${encodeURIComponent(userId)}&telegram_id=${ctx.from.id}`);
+    const data = await res.json();
+
+    if (!data.success || !data.history || data.history.length === 0) {
+      return ctx.reply(
+        `📜 <b>Transaction History</b>\n\n` +
+        `No transactions found yet.\n` +
+        `Your deposits, withdrawals, and internal transfers will appear here.`,
+        { parse_mode: "HTML" }
+      );
+    }
+
+    let msg = `📜 <b>Recent Transactions:</b>\n\n`;
+
+    data.history.forEach((tx) => {
+      const date = tx.created_at ? new Date(tx.created_at).toISOString().replace("T", " ").substring(0, 16) : "Recent";
+      const curr = tx.currency || "SATS";
+      const amt = tx.amount;
+      const txId = tx.tx_id || tx.id || "N/A";
+
+      if (tx.type === "deposit") {
+        msg += `📥 <b>Deposit:</b> +${amt} ${curr}\n`;
+      } else if (tx.type === "withdrawal" || tx.type === "instant_send") {
+        msg += `📤 <b>Withdrawal:</b> -${amt} ${curr}\n`;
+      } else if (tx.type === "transfer_sent") {
+        msg += `⚡ <b>Sent to:</b> @${tx.to || "user"} (-${amt} ${curr})\n`;
+      } else if (tx.type === "transfer_received") {
+        msg += `⚡ <b>Received from:</b> @${tx.from || "user"} (+${amt} ${curr})\n`;
+      } else {
+        msg += `🔄 <b>Transfer:</b> ${amt} ${curr}\n`;
+      }
+
+      msg += `📅 <code>${date} UTC</code>\n`;
+      msg += `🆔 <code>${txId}</code>\n`;
+      msg += `─────────────────────\n`;
+    });
+
+    await ctx.reply(msg, { parse_mode: "HTML" });
+  } catch (e) {
+    ctx.reply("⚠️ Could not load history. Please try again later.");
+  }
+});
+
+// ----------------------------------------------------
+// 4. 📥 DEPOSIT (Step 1)
 // ----------------------------------------------------
 bot.hears("📥 Deposit", async (ctx) => {
   await clearSession(ctx.from.id);
@@ -296,7 +343,7 @@ bot.hears("📥 Deposit", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 4. 📤 WITHDRAW (Step 1: Asset Selection)
+// 5. 📤 WITHDRAW (Step 1)
 // ----------------------------------------------------
 bot.hears("📤 Withdraw", async (ctx) => {
   await clearSession(ctx.from.id);
@@ -311,7 +358,7 @@ bot.hears("📤 Withdraw", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 5. 🔑 SET KEY (Admin)
+// 6. 🔑 SET KEY (Admin)
 // ----------------------------------------------------
 bot.hears("🔑 Set Key", async (ctx) => {
   if (!isAdmin(ctx)) {
@@ -343,38 +390,29 @@ bot.action("dep_back_to_assets", async (ctx) => {
 
 bot.action("dep_asset_usdt", async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.editMessageText(
-    `🔥 <b>Select USDT Network:</b> 🔥`,
-    {
-      parse_mode: "HTML",
-      ...getUsdtDepositNetworks()
-    }
-  );
+  await ctx.editMessageText(`🔥 <b>Select USDT Network:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getUsdtDepositNetworks()
+  });
 });
 
 bot.action("dep_asset_usdc", async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.editMessageText(
-    `🔥 <b>Select USDC Network:</b> 🔥`,
-    {
-      parse_mode: "HTML",
-      ...getUsdcDepositNetworks()
-    }
-  );
+  await ctx.editMessageText(`🔥 <b>Select USDC Network:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getUsdcDepositNetworks()
+  });
 });
 
 bot.action("dep_asset_sats", async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.editMessageText(
-    `🔥 <b>Select Bitcoin Network:</b> 🔥`,
-    {
-      parse_mode: "HTML",
-      ...getSatsDepositNetworks()
-    }
-  );
+  await ctx.editMessageText(`🔥 <b>Select Bitcoin Network:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getSatsDepositNetworks()
+  });
 });
 
-// --- USDT Networks Actions ---
+// USDT Networks
 bot.action("dep_net_usdt_lightning", async (ctx) => {
   await ctx.answerCbQuery();
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -460,7 +498,7 @@ bot.action("dep_net_usdt_ton", async (ctx) => {
   );
 });
 
-// --- USDC Networks Actions ---
+// USDC Networks
 bot.action("dep_net_usdc_lightning", async (ctx) => {
   await ctx.answerCbQuery();
   await setSession(ctx.from.id, { 
@@ -509,7 +547,7 @@ bot.action("dep_net_usdc_solana", async (ctx) => {
   );
 });
 
-// --- SATS Networks Actions ---
+// SATS Networks
 bot.action("dep_net_sats_lightning", async (ctx) => {
   await ctx.answerCbQuery();
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -548,17 +586,14 @@ bot.action("dep_net_sats_onchain", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// CALLBACKS: WITHDRAW STEP 2 (NETWORK SELECTION)
+// CALLBACKS: WITHDRAW STEP 2 (NETWORKS)
 // ----------------------------------------------------
 bot.action("with_back_to_assets", async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.editMessageText(
-    `🔥 <b>Select a Withdrawal Asset:</b> 🔥`,
-    {
-      parse_mode: "HTML",
-      ...getWithdrawAssetKeyboard()
-    }
-  );
+  await ctx.editMessageText(`🔥 <b>Select a Withdrawal Asset:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getWithdrawAssetKeyboard()
+  });
 });
 
 bot.action("with_asset_usdt", async (ctx) => {
@@ -585,7 +620,7 @@ bot.action("with_asset_sats", async (ctx) => {
   });
 });
 
-// Withdraw Network Actions
+// Withdraw Networks Actions
 bot.action("with_net_sats_lightning", async (ctx) => {
   await ctx.answerCbQuery();
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -608,7 +643,7 @@ bot.action("with_net_sats_lightning", async (ctx) => {
 
     await ctx.editMessageText(
       `⚡ <b>Withdraw SATS (Lightning)</b>\nAvailable: <b>${balance.toLocaleString()} sats</b>\n\n` +
-      `Paste the recipient's <b>Lightning Invoice</b> (<code>lnbc...</code>) or <b>Lightning Address</b> (e.g. <code>name@speed.app</code>):`,
+      `Paste the recipient's <b>Lightning Invoice</b> or <b>Lightning Address</b>:`,
       { parse_mode: "HTML" }
     );
   } catch (err) {
@@ -624,7 +659,7 @@ bot.action("with_net_sats_onchain", async (ctx) => {
     withdraw_method: "onchain",
     min_amount: 1000
   });
-  await ctx.editMessageText(`₿ <b>Bitcoin On-Chain Withdrawal (Min: 1,000 SATS):</b>\n\nPaste your Bitcoin On-Chain destination address:`, { parse_mode: "HTML" });
+  await ctx.editMessageText(`₿ <b>Bitcoin On-Chain Withdrawal (Min: 1,000 SATS):</b>\n\nPaste your Bitcoin destination address:`, { parse_mode: "HTML" });
 });
 
 bot.action("with_net_usdt_tron", async (ctx) => {
@@ -671,17 +706,6 @@ bot.action("with_net_usdt_ton", async (ctx) => {
   await ctx.editMessageText(`💎 <b>USDT (TON) Withdrawal:</b>\n\nPaste your TON destination address:`, { parse_mode: "HTML" });
 });
 
-bot.action("with_net_usdt_lightning", async (ctx) => {
-  await ctx.answerCbQuery();
-  await setSession(ctx.from.id, { 
-    step: "awaiting_withdraw_dest",
-    target_currency: "USDT",
-    withdraw_method: "lightning",
-    min_amount: 0.5
-  });
-  await ctx.editMessageText(`⚡ <b>USDT (Lightning) Withdrawal:</b>\n\nPaste your Lightning invoice or address:`, { parse_mode: "HTML" });
-});
-
 bot.action("with_net_usdc_solana", async (ctx) => {
   await ctx.answerCbQuery();
   await setSession(ctx.from.id, { 
@@ -693,28 +717,6 @@ bot.action("with_net_usdc_solana", async (ctx) => {
   await ctx.editMessageText(`🟣 <b>USDC (Solana) Withdrawal:</b>\n\nPaste your Solana destination address:`, { parse_mode: "HTML" });
 });
 
-bot.action("with_net_usdc_ethereum", async (ctx) => {
-  await ctx.answerCbQuery();
-  await setSession(ctx.from.id, { 
-    step: "awaiting_withdraw_dest",
-    target_currency: "USDC",
-    withdraw_method: "ethereum",
-    min_amount: 0.5
-  });
-  await ctx.editMessageText(`⛓️ <b>USDC (Ethereum) Withdrawal:</b>\n\nPaste your Ethereum address (<code>0x...</code>):`, { parse_mode: "HTML" });
-});
-
-bot.action("with_net_usdc_lightning", async (ctx) => {
-  await ctx.answerCbQuery();
-  await setSession(ctx.from.id, { 
-    step: "awaiting_withdraw_dest",
-    target_currency: "USDC",
-    withdraw_method: "lightning",
-    min_amount: 0.5
-  });
-  await ctx.editMessageText(`⚡ <b>USDC (Lightning) Withdrawal:</b>\n\nPaste your Lightning invoice or address:`, { parse_mode: "HTML" });
-});
-
 bot.action("gateway_back", async (ctx) => {
   await clearSession(ctx.from.id);
   await ctx.answerCbQuery();
@@ -723,14 +725,14 @@ bot.action("gateway_back", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 6. TEXT MESSAGE HANDLER
+// 7. TEXT MESSAGE HANDLER (WITH UNIVERSAL AUTO-DETECT)
 // ----------------------------------------------------
 bot.on("text", async (ctx) => {
   const text = ctx.message.text.trim();
   const session = await getSession(ctx.from.id);
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
-  if (["💰 Balance", "📥 Deposit", "📤 Withdraw", "🔑 Set Key"].includes(text)) {
+  if (["💰 Balance", "📥 Deposit", "📤 Withdraw", "📜 History", "🔑 Set Key"].includes(text)) {
     return;
   }
 
@@ -798,47 +800,65 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // B. PROCESS WITHDRAW DESTINATION
+  // B. PROCESS WITHDRAW DESTINATION (UNIVERSAL AUTO-DETECT FOR ALL CURRENCIES)
   if (session.step === "awaiting_withdraw_dest") {
-    const isInvoice = text.toLowerCase().startsWith("lnbc") || text.toLowerCase().startsWith("lightning:lnbc");
+    await ctx.replyWithChatAction("typing");
 
-    if (isInvoice) {
-      await ctx.replyWithChatAction("typing");
-      let detectedSats = null;
+    let detectedAmount = null;
+    let detectedCurrency = session.target_currency || "SATS";
+    let detectedMethod = session.withdraw_method || "lightning";
 
-      if (db) {
-        const invSnap = await db.collection("invoices")
-          .where("invoice", "==", text)
-          .where("is_paid", "==", false)
-          .limit(1)
-          .get();
-        if (!invSnap.empty) {
-          detectedSats = Number(invSnap.docs[0].data().amount || 0);
+    // 1. Check internal Firestore records (Auto-detects SATS, USDT, USDC)
+    if (db) {
+      const invSnap = await db.collection("invoices")
+        .where("invoice", "==", text)
+        .where("is_paid", "==", false)
+        .limit(1)
+        .get();
+
+      if (!invSnap.empty) {
+        const invData = invSnap.docs[0].data();
+        detectedAmount = Number(invData.amount || 0);
+        detectedCurrency = invData.target_currency || detectedCurrency;
+        detectedMethod = invData.payment_method || detectedMethod;
+      }
+    }
+
+    // 2. Decode Lightning Bolt-11 Invoice
+    if (!detectedAmount && (text.toLowerCase().startsWith("lnbc") || text.toLowerCase().startsWith("lightning:lnbc"))) {
+      detectedAmount = decodeBolt11Sats(text);
+      if (detectedAmount) {
+        detectedCurrency = "SATS";
+        detectedMethod = "lightning";
+      }
+    }
+
+    // 3. Decode URI params (e.g. ?amount=...)
+    if (!detectedAmount && text.includes("?")) {
+      const uriMatch = text.match(/[?&]amount=([0-9.]+)/i);
+      if (uriMatch) {
+        const parsedAmt = parseFloat(uriMatch[1]);
+        if (!isNaN(parsedAmt) && parsedAmt > 0) {
+          detectedAmount = parsedAmt;
+          if (text.toLowerCase().startsWith("bitcoin:")) {
+            detectedCurrency = "SATS";
+            detectedMethod = "onchain";
+            if (detectedAmount < 1) detectedAmount = Math.round(detectedAmount * 100000000);
+          } else if (text.toLowerCase().startsWith("tron:")) {
+            detectedCurrency = "USDT";
+            detectedMethod = "tron";
+          }
         }
       }
+    }
 
-      if (!detectedSats) {
-        detectedSats = decodeBolt11Sats(text);
-      }
-
-      if (!detectedSats || detectedSats <= 0) {
-        await setSession(ctx.from.id, {
-          step: "awaiting_withdraw_amount",
-          destination: text,
-          balance: session.balance
-        });
-        return ctx.reply(
-          `📍 <b>Invoice detected without preset amount.</b>\n\n` +
-          `Enter the <b>amount in sats</b> to pay (Max: <b>${session.balance} sats</b>):`,
-          { parse_mode: "HTML" }
-        );
-      }
-
-      if (detectedSats > session.balance) {
+    // IF AMOUNT WAS AUTO-DETECTED (Skips prompt for amount!)
+    if (detectedAmount && detectedAmount > 0) {
+      if (session.balance && detectedCurrency === "SATS" && detectedAmount > session.balance) {
         await clearSession(ctx.from.id);
         return ctx.reply(
           `⚠️ <b>Insufficient Balance!</b>\n` +
-          `This invoice requires <b>${detectedSats.toLocaleString()} sats</b>, but your available balance is <b>${session.balance.toLocaleString()} sats</b>.`,
+          `This payment requires <b>${detectedAmount.toLocaleString()} ${detectedCurrency}</b>, but your available balance is <b>${session.balance.toLocaleString()} sats</b>.`,
           { parse_mode: "HTML" }
         );
       }
@@ -846,29 +866,29 @@ bot.on("text", async (ctx) => {
       await setSession(ctx.from.id, {
         step: "confirm_payment",
         destination: text,
-        amount: detectedSats,
-        withdraw_method: "lightning",
-        currency: "SATS",
+        amount: detectedAmount,
+        withdraw_method: detectedMethod,
+        currency: detectedCurrency,
         balance: session.balance
       });
 
       return ctx.reply(
-        `⚡ <b>Invoice Detected!</b>\n\n` +
-        `💰 <b>Amount:</b> ${detectedSats.toLocaleString()} sats\n` +
-        `🎯 <b>Invoice:</b> <code>${text.substring(0, 32)}...</code>\n` +
-        `💳 <b>Your Balance:</b> ${session.balance.toLocaleString()} sats\n\n` +
+        `⚡ <b>Payment Request Detected!</b>\n\n` +
+        `💰 <b>Amount:</b> ${detectedAmount.toLocaleString()} ${detectedCurrency}\n` +
+        `🌐 <b>Network:</b> ${detectedMethod.toUpperCase()}\n` +
+        `🎯 <b>Recipient:</b> <code>${text.substring(0, 32)}...</code>\n\n` +
         `Click <b>Send</b> below to confirm payment:`,
         {
           parse_mode: "HTML",
           ...Markup.inlineKeyboard([
-            [Markup.button.callback(`🚀 Send ${detectedSats.toLocaleString()} sats`, "confirm_send")],
+            [Markup.button.callback(`🚀 Send ${detectedAmount.toLocaleString()} ${detectedCurrency}`, "confirm_send")],
             [Markup.button.callback("❌ Cancel", "cancel_send")]
           ])
         }
       );
     }
 
-    // Crypto Address destination
+    // If destination is a plain address without an embedded amount
     await setSession(ctx.from.id, {
       step: "awaiting_withdraw_amount",
       destination: text,
@@ -877,18 +897,18 @@ bot.on("text", async (ctx) => {
 
     return ctx.reply(
       `📍 <b>Destination Address:</b>\n<code>${text}</code>\n\n` +
-      `Enter the <b>amount to send</b>:`,
+      `Enter the <b>amount in ${detectedCurrency} to send</b>:`,
       { parse_mode: "HTML" }
     );
   }
 
-  // C. PROCESS WITHDRAW AMOUNT
+  // C. PROCESS WITHDRAW AMOUNT (Only when amount wasn't in invoice)
   if (session.step === "awaiting_withdraw_amount") {
     const amount = Number(text);
     if (isNaN(amount) || amount <= 0) {
       return ctx.reply("⚠️ Please enter a valid positive number.");
     }
-    if (session.balance && amount > session.balance) {
+    if (session.balance && session.target_currency === "SATS" && amount > session.balance) {
       return ctx.reply(`⚠️ Insufficient balance! You only have ${session.balance} sats.`);
     }
 
@@ -942,10 +962,10 @@ bot.on("text", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 7. BUTTON CALLBACKS (Send / Cancel)
+// 8. CONFIRM SEND & CANCEL CALLBACKS
 // ----------------------------------------------------
 bot.action("confirm_send", async (ctx) => {
-  await ctx.answerCbQuery("Broadcasting payment...");
+  await ctx.answerCbQuery("Broadcasting Instant Send...");
   const session = await getSession(ctx.from.id);
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
