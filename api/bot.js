@@ -61,7 +61,7 @@ async function isAuthorizedAdmin(ctx) {
   return false;
 }
 
-// Direct Firestore Balance Fetch (All Supported Assets)
+// Direct Firestore Balance Fetch
 async function getDirectBalance(userId, telegramId) {
   if (!db) return { sats: 0, usdt: 0, usdc: 0 };
   try {
@@ -84,12 +84,11 @@ async function getDirectBalance(userId, telegramId) {
   return { sats: 0, usdt: 0, usdc: 0 };
 }
 
-// Persistent Reply Keyboard with Swap
+// Persistent Reply Keyboard
 async function getMainKeyboard(ctx) {
   const rows = [
     ["💰 Balance", "📥 Deposit"],
-    ["📤 Withdraw", "🔄 Swap"],
-    ["📜 History"]
+    ["📤 Withdraw", "📜 History"]
   ];
 
   if (await isAuthorizedAdmin(ctx)) {
@@ -100,22 +99,8 @@ async function getMainKeyboard(ctx) {
 }
 
 // ----------------------------------------------------
-// KEYBOARDS: SWAP, WITHDRAW, DEPOSIT & ADMIN
+// KEYBOARDS: WITHDRAW, DEPOSIT & ADMIN
 // ----------------------------------------------------
-function getSwapPairKeyboard() {
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback("⚡ SATS ➔ 💵 USDT", "swap_pair_sats_usdt"),
-      Markup.button.callback("💵 USDT ➔ ⚡ SATS", "swap_pair_usdt_sats")
-    ],
-    [
-      Markup.button.callback("⚡ SATS ➔ 💲 USDC", "swap_pair_sats_usdc"),
-      Markup.button.callback("💲 USDC ➔ ⚡ SATS", "swap_pair_usdc_sats")
-    ],
-    [Markup.button.callback("🔙 Back to Main Menu", "gateway_back")]
-  ]);
-}
-
 function getWithdrawAssetKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("⚡ Bitcoin (SATS)", "with_asset_sats")],
@@ -292,7 +277,7 @@ function stopDepositWatcher(chatId) {
   }
 }
 
-// Background poller: wallet.js sends the single authoritative alert upon crediting; poller just shuts down.
+// Background poller: wallet.js sends the single authoritative alert; poller shuts down cleanly
 function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
   stopDepositWatcher(chatId);
   let attempts = 0;
@@ -471,7 +456,6 @@ bot.hears("📜 History", async (ctx) => {
 
       if (tx.type === "deposit") msg += `📥 <b>Deposit:</b> +${amt} ${curr}\n`;
       else if (tx.type === "withdrawal" || tx.type === "instant_send") msg += `📤 <b>Withdrawal:</b> -${amt} ${curr}\n`;
-      else if (tx.type === "swap") msg += `🔄 <b>Swap:</b> ${tx.from_amount} ${tx.from_currency} ➔ ${tx.to_amount} ${tx.to_currency}\n`;
       else if (tx.type === "transfer_sent") msg += `⚡ <b>Sent to:</b> @${tx.to || "user"} (-${amt} ${curr})\n`;
       else if (tx.type === "transfer_received") msg += `⚡ <b>Received from:</b> @${tx.from || "user"} (+${amt} ${curr})\n`;
       else msg += `🔄 <b>Transfer:</b> ${amt} ${curr}\n`;
@@ -523,66 +507,6 @@ bot.hears("📤 Withdraw", async (ctx) => {
       parse_mode: "HTML",
       ...getWithdrawAssetKeyboard()
     }
-  );
-});
-
-// ----------------------------------------------------
-// 🔄 ASSET SWAP MENU
-// ----------------------------------------------------
-bot.command("swap", async (ctx) => showSwapMenu(ctx));
-bot.hears("🔄 Swap", async (ctx) => showSwapMenu(ctx));
-
-async function showSwapMenu(ctx) {
-  stopDepositWatcher(ctx.from.id);
-  await clearSession(ctx.from.id);
-
-  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
-  if (await isUserBanned(userId, ctx.from.id)) {
-    return ctx.reply("⛔ Your account has been suspended.");
-  }
-
-  const bal = await getDirectBalance(userId, ctx.from.id);
-
-  await ctx.reply(
-    `🔄 <b>Asset Swap</b>\n\n` +
-    `💰 <b>Your Balances:</b>\n` +
-    `• ⚡ SATS: <code>${bal.sats.toLocaleString()} SATS</code>\n` +
-    `• 💵 USDT: <code>${bal.usdt.toFixed(2)} USDT</code>\n` +
-    `• 💲 USDC: <code>${bal.usdc.toFixed(2)} USDC</code>\n\n` +
-    `📊 <b>Rate:</b> 1 SATS ≈ $${SAT_TO_USD} USD\n\n` +
-    `Select the swap pair below:`,
-    {
-      parse_mode: "HTML",
-      ...getSwapPairKeyboard()
-    }
-  );
-}
-
-bot.action(/^swap_pair_(sats|usdt|usdc)_(sats|usdt|usdc)$/, async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  const fromCurr = ctx.match[1].toUpperCase();
-  const toCurr = ctx.match[2].toUpperCase();
-
-  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
-  const bal = await getDirectBalance(userId, ctx.from.id);
-
-  let avail = 0;
-  if (fromCurr === "SATS") avail = bal.sats;
-  else if (fromCurr === "USDT") avail = bal.usdt;
-  else if (fromCurr === "USDC") avail = bal.usdc;
-
-  await setSession(ctx.from.id, {
-    step: "awaiting_swap_amount",
-    from_curr: fromCurr,
-    to_curr: toCurr,
-    available: avail
-  });
-
-  await ctx.editMessageText(
-    `🔄 <b>Swap: ${fromCurr} ➔ ${toCurr}</b>\n\n` +
-    `Available ${fromCurr}: <b>${avail}</b>\n\n` +
-    `Enter the amount of <b>${fromCurr}</b> you want to swap:`,
-    { parse_mode: "HTML" }
   );
 });
 
@@ -982,7 +906,7 @@ bot.on("text", async (ctx) => {
     return ctx.reply(walletText, { parse_mode: "HTML", ...kb });
   }
 
-  if (text.startsWith("/") || ["💰 Balance", "📥 Deposit", "📤 Withdraw", "🔄 Swap", "📜 History", "👑 Admin Panel"].includes(text)) {
+  if (text.startsWith("/") || ["💰 Balance", "📥 Deposit", "📤 Withdraw", "📜 History", "👑 Admin Panel"].includes(text)) {
     stopDepositWatcher(ctx.from.id);
     await clearSession(ctx.from.id);
     return;
@@ -1082,48 +1006,7 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  // B. SWAP AMOUNT INPUT
-  if (session.step === "awaiting_swap_amount") {
-    const amount = Number(text);
-    if (isNaN(amount) || amount <= 0) return ctx.reply("⚠️ Please enter a valid positive number.");
-
-    const { from_curr, to_curr, available } = session;
-    if (amount > available) {
-      return ctx.reply(`⚠️ Insufficient balance! You only have ${available} ${from_curr}.`);
-    }
-
-    let targetAmount = 0;
-    if (from_curr === "SATS") {
-      targetAmount = Number((amount * SAT_TO_USD).toFixed(4));
-    } else {
-      targetAmount = Math.round(amount / SAT_TO_USD);
-    }
-
-    await setSession(ctx.from.id, {
-      step: "confirm_swap_step",
-      from_curr,
-      to_curr,
-      amount,
-      target_amount: targetAmount
-    });
-
-    return ctx.reply(
-      `🔄 <b>Confirm Swap</b>\n\n` +
-      `• <b>You Pay:</b> ${amount.toLocaleString()} ${from_curr}\n` +
-      `• <b>You Receive:</b> ${targetAmount.toLocaleString()} ${to_curr}\n` +
-      `• <b>Rate:</b> 1 SAT ≈ $${SAT_TO_USD} USD\n\n` +
-      `Proceed with swap?`,
-      {
-        parse_mode: "HTML",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback(`🚀 Swap Now`, "confirm_swap")],
-          [Markup.button.callback("❌ Cancel", "cancel_send")]
-        ])
-      }
-    );
-  }
-
-  // C. DEPOSIT AMOUNT INPUT
+  // B. DEPOSIT AMOUNT INPUT
   if (session.step === "awaiting_deposit_amount") {
     const amount = Number(text);
     const minAmount = session.min_amount || 1;
@@ -1170,7 +1053,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // D. WITHDRAW DESTINATION INPUT
+  // C. WITHDRAW DESTINATION INPUT
   if (session.step === "awaiting_withdraw_dest") {
     await ctx.replyWithChatAction("typing");
 
@@ -1250,7 +1133,7 @@ bot.on("text", async (ctx) => {
     return ctx.reply(`📍 <b>Destination Address:</b>\n<code>${text}</code>\n\nAvailable: <b>${availText}</b>\nEnter the <b>amount in ${detectedCurrency} to send</b>:`, { parse_mode: "HTML" });
   }
 
-  // E. WITHDRAW AMOUNT INPUT (Checks Dedicated Currency Balance)
+  // D. WITHDRAW AMOUNT INPUT (Checks Dedicated Currency Balance)
   if (session.step === "awaiting_withdraw_amount") {
     const amount = Number(text);
     if (isNaN(amount) || amount <= 0) return ctx.reply("⚠️ Please enter a valid number.");
@@ -1289,50 +1172,6 @@ bot.on("text", async (ctx) => {
         ])
       }
     );
-  }
-});
-
-// ----------------------------------------------------
-// CONFIRM SWAP ACTION
-// ----------------------------------------------------
-bot.action("confirm_swap", async (ctx) => {
-  await ctx.answerCbQuery("Processing swap...").catch(() => {});
-  const session = await getSession(ctx.from.id);
-  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
-
-  if (!session.from_curr || !session.amount) {
-    return ctx.editMessageText("⚠️ Session expired. Please restart swap.");
-  }
-
-  const { from_curr, to_curr, amount } = session;
-  await clearSession(ctx.from.id);
-  await ctx.editMessageText(`⏳ <b>Swapping ${amount} ${from_curr} ➔ ${to_curr}...</b>`, { parse_mode: "HTML" });
-
-  try {
-    const res = await fetch(`${APP_URL}/api/wallet?action=swap`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        from_currency: from_curr,
-        to_currency: to_curr,
-        amount: amount,
-        user_id: userId,
-        username: userId,
-        telegram_id: String(ctx.from.id)
-      })
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error || "Swap failed.");
-
-    await ctx.editMessageText(
-      `✅ <b>Swap Successful!</b>\n\n` +
-      `• <b>Paid:</b> ${data.from_amount.toLocaleString()} ${data.from_currency}\n` +
-      `• <b>Received:</b> +${data.to_amount.toLocaleString()} ${data.to_currency}\n` +
-      `🆔 <b>TxID:</b> <code>${data.tx_id}</code>`,
-      { parse_mode: "HTML" }
-    );
-  } catch (err) {
-    await ctx.editMessageText(`❌ <b>Swap Failed:</b> ${err.message}`, { parse_mode: "HTML" });
   }
 });
 
