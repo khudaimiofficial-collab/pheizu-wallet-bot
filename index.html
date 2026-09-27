@@ -35,6 +35,16 @@
     }
     .balance-title { font-size: 12px; color: var(--muted); text-transform: uppercase; }
     .balance-amount { font-size: 34px; font-weight: bold; color: var(--button); margin: 6px 0; }
+    .network-tag {
+      display: inline-block;
+      font-size: 10px;
+      background: rgba(0, 208, 132, 0.15);
+      color: var(--button);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+      margin-top: 4px;
+    }
     .address-badge {
       background: #090d16;
       border: 1px solid var(--border);
@@ -133,6 +143,22 @@
       text-align: center;
       line-height: 1.4;
     }
+    .log-box {
+      background: #090d16;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 140px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 14px;
+    }
+    .log-entry { margin-bottom: 6px; line-height: 1.4; }
+    .log-success { color: var(--button); }
+    .log-error { color: #ef4444; }
+    .log-info { color: #38bdf8; }
     .hidden { display: none !important; }
     .modal-overlay {
       position: fixed;
@@ -160,7 +186,10 @@
 
   <!-- Balance Card -->
   <div class="card">
-    <div class="balance-title">⚡ Available Balance</div>
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div class="balance-title">⚡ Available Balance</div>
+      <div class="network-tag">Lightning Network</div>
+    </div>
     <div id="balanceDisplay" class="balance-amount">...</div>
     
     <div class="address-badge">
@@ -180,39 +209,49 @@
 
   <!-- Tabs -->
   <div class="tabs">
-    <button id="tabReceive" class="tab-btn active" onclick="switchTab('receive')">Receive</button>
-    <button id="tabSend" class="tab-btn" onclick="switchTab('send')">Send</button>
+    <button id="tabReceive" class="tab-btn active" onclick="switchTab('receive')">Receive (Deposit)</button>
+    <button id="tabSend" class="tab-btn" onclick="switchTab('send')">Send (Withdraw)</button>
   </div>
 
   <!-- RECEIVE PANEL -->
   <div id="receivePanel" class="card">
     <label style="font-size:12px; color:var(--muted);">Amount in Satoshis (sats):</label>
     <input type="number" id="receiveAmount" placeholder="e.g. 100" value="10" />
-    <button id="btnReceive" class="btn-action" onclick="createReceiveInvoice()">Generate Invoice QR</button>
+    <button id="btnReceive" class="btn-action" onclick="createReceiveInvoice()">Generate Lightning QR</button>
 
     <div id="qrResult" class="qr-box hidden">
       <div id="qrcode"></div>
       <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment...</p>
       <div id="invoiceString" class="invoice-text"></div>
-      <button class="btn-action" style="margin-top:10px; font-size:12px; padding:8px;" onclick="copyInvoice()">Copy Invoice</button>
+      <button class="btn-action" style="margin-top:10px; font-size:12px; padding:8px;" onclick="copyInvoice()">Copy Lightning Invoice</button>
     </div>
   </div>
 
   <!-- SEND PANEL -->
   <div id="sendPanel" class="card hidden">
-    <!-- Zero Balance Warning Banner -->
     <div id="zeroBalanceNotice" class="warning-banner hidden">
-      ⚠️ <b>Balance is 0 sats.</b><br/>You cannot send funds. Go to the "Receive" tab to deposit satoshis first.
+      ⚠️ <b>Balance is 0 sats.</b><br/>You cannot withdraw funds. Go to the "Receive" tab to deposit satoshis first.
     </div>
 
-    <label style="font-size:12px; color:var(--muted);">Destination (Address or Invoice):</label>
-    <input type="text" id="sendDest" placeholder="name@speed.app or lnbc..." />
+    <label style="font-size:12px; color:var(--muted);">Destination (Lightning Address or BOLT11 Invoice):</label>
+    <input type="text" id="sendDest" placeholder="user@speed.app or lnbc..." />
     
     <label style="font-size:12px; color:var(--muted);">Amount (sats):</label>
     <input type="number" id="sendAmount" placeholder="e.g. 5" />
     
-    <button id="btnSend" class="btn-action" onclick="sendSats()">Send From Balance</button>
+    <button id="btnSend" class="btn-action" onclick="sendSats()">Withdraw Via Lightning</button>
     <div id="sendFeedback" style="font-size:12px; margin-top:10px; text-align:center;"></div>
+  </div>
+
+  <!-- Activity & Status Log Card -->
+  <div class="card">
+    <div style="font-size:12px; color:var(--muted); display:flex; justify-content:space-between; align-items:center;">
+      <span>📜 Activity & Notification Log</span>
+      <span onclick="clearLogs()" style="cursor:pointer; font-size:10px; color:#9ca3af;">Clear</span>
+    </div>
+    <div id="activityLogs" class="log-box">
+      <div class="log-entry log-info">[Ready] Lightning Network initialized.</div>
+    </div>
   </div>
 
   <!-- SUCCESS MODAL -->
@@ -235,17 +274,19 @@
     tg.expand();
   }
 
-  // Parse user info safely from Telegram WebApp
+  // Parse user info safely and persist numeric Telegram ID
   const tgUser = tg?.initDataUnsafe?.user;
   
-  // Standardize the username: this matches the LNURL handle and Telegram handle
-  const rawUsername = tgUser?.username || (tgUser?.id ? `user${tgUser.id}` : localStorage.getItem("saved_user") || "guest");
+  // Persist numeric ID across web reloads
+  let tgNumericId = tgUser?.id ? String(tgUser.id) : (localStorage.getItem("saved_tg_id") || "");
+  if (tgUser?.id) {
+    localStorage.setItem("saved_tg_id", String(tgUser.id));
+  }
+
+  const rawUsername = tgUser?.username || (tgNumericId ? `user${tgNumericId}` : localStorage.getItem("saved_user") || "guest");
   const username = rawUsername.toLowerCase().replace(/[^a-z0-9_]/g, "");
   localStorage.setItem("saved_user", username);
 
-  // Keep both telegram numeric ID and username handle available
-  const tgNumericId = tgUser?.id ? String(tgUser.id) : "";
-  // We send the normalized username as the primary user_id so it matches LNURL deposits and bot chat
   const currentUserId = username;
   const myLightningAddress = `${username}@${DOMAIN}`;
 
@@ -253,7 +294,21 @@
 
   let activeCheckTimer = null;
   let currentActiveInvoice = "";
-  let currentLiveBalance = 0; // Tracks live balance
+  let currentLiveBalance = 0;
+
+  function addLog(msg, type = "info") {
+    const box = document.getElementById("activityLogs");
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const line = document.createElement("div");
+    line.className = `log-entry log-${type}`;
+    line.innerText = `[${time}] ${msg}`;
+    box.appendChild(line);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function clearLogs() {
+    document.getElementById("activityLogs").innerHTML = "";
+  }
 
   function haptic(type = "light") {
     try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){}
@@ -262,13 +317,12 @@
     try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){}
   }
 
-  // Load Balance & Update Zero-Balance Protection
+  // Load Balance & Update State
   async function loadBalance() {
     haptic("light");
     const el = document.getElementById("balanceDisplay");
 
     try {
-      // Sends user_id (username), telegram_id, and username so the backend matches whichever key was stored
       const res = await fetch(`/api/wallet?action=balance&user_id=${encodeURIComponent(currentUserId)}&username=${encodeURIComponent(username)}&telegram_id=${encodeURIComponent(tgNumericId)}`);
       const data = await res.json();
       if (data.success) {
@@ -287,7 +341,6 @@
     }
   }
 
-  // Enforce Zero Balance Protection
   function updateSendButtonState() {
     const sendBtn = document.getElementById("btnSend");
     const zeroNotice = document.getElementById("zeroBalanceNotice");
@@ -301,16 +354,17 @@
     }
   }
 
-  // Generate Invoice
+  // Deposit: Generate Lightning Invoice
   async function createReceiveInvoice() {
     haptic("medium");
     const amount = Number(document.getElementById("receiveAmount").value);
     const btn = document.getElementById("btnReceive");
-    if (!amount || amount <= 0) return alert("Enter amount");
+    if (!amount || amount <= 0) return alert("Enter a valid amount");
 
     btn.disabled = true;
-    btn.innerText = "Generating...";
+    btn.innerText = "Generating Invoice...";
     if (activeCheckTimer) clearInterval(activeCheckTimer);
+    addLog(`Creating ${amount} sats deposit on Lightning Network...`, "info");
 
     try {
       const res = await fetch("/api/wallet?action=create-payment", {
@@ -318,6 +372,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           amount, 
+          network: "lightning", // Explicit Lightning network
           user_id: currentUserId,
           username: username,
           telegram_id: tgNumericId 
@@ -326,11 +381,10 @@
       const data = await res.json();
 
       if (!data.success || !data.invoice) {
-        throw new Error(data.error || "Speed did not return an invoice.");
+        throw new Error(data.error || "Speed did not return a valid Lightning invoice.");
       }
 
       currentActiveInvoice = data.invoice;
-
       const qrTarget = currentActiveInvoice.toLowerCase().startsWith("lightning:") 
         ? currentActiveInvoice 
         : `lightning:${currentActiveInvoice}`;
@@ -341,23 +395,28 @@
 
       document.getElementById("invoiceString").innerText = currentActiveInvoice;
       document.getElementById("qrResult").classList.remove("hidden");
-      document.getElementById("listenNotice").innerText = "⏳ Waiting for payment...";
+      document.getElementById("listenNotice").innerText = "⏳ Waiting for Lightning payment...";
+      addLog(`Invoice ready. Listening for payment verification...`, "info");
 
       startAutoVerification(data.id, amount);
     } catch(err) {
+      addLog(`Deposit error: ${err.message}`, "error");
       alert("Error: " + err.message);
     } finally {
       btn.disabled = false;
-      btn.innerText = "Generate Invoice QR";
+      btn.innerText = "Generate Lightning QR";
     }
   }
 
-  // Auto-verify and immediately sync balance
   function startAutoVerification(paymentId, amount) {
     let attempts = 0;
     activeCheckTimer = setInterval(async () => {
       attempts++;
-      if (attempts > 80) return clearInterval(activeCheckTimer);
+      if (attempts > 80) {
+        clearInterval(activeCheckTimer);
+        addLog("Deposit poll timed out. Refresh balance if payment was sent.", "info");
+        return;
+      }
 
       try {
         const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${encodeURIComponent(currentUserId)}&username=${encodeURIComponent(username)}&telegram_id=${encodeURIComponent(tgNumericId)}`);
@@ -366,6 +425,7 @@
         if (data.is_paid) {
           clearInterval(activeCheckTimer);
           document.getElementById("listenNotice").innerText = "✅ Paid!";
+          addLog(`✅ Received ${amount} sats on Lightning Network! Bot notification dispatched.`, "success");
 
           triggerSuccessPopup(amount);
           loadBalance();
@@ -378,8 +438,8 @@
     hapticNotification("success");
     if (tg && tg.showPopup) {
       tg.showPopup({
-        title: "⚡ Payment Received!",
-        message: `+${amount} sats have been credited to your balance!`,
+        title: "⚡ Lightning Payment Received!",
+        message: `+${amount} sats credited to your balance!`,
         buttons: [{ type: "ok", text: "Awesome!" }]
       });
     }
@@ -395,14 +455,13 @@
     loadBalance();
   }
 
-  // Send Sats (Blocked if balance is 0 or insufficient)
+  // Withdraw / Send Sats: Enforces Lightning Network & Dispatches Bot Log
   async function sendSats() {
     haptic("medium");
 
-    // Zero balance guard
     if (currentLiveBalance <= 0) {
       hapticNotification("error");
-      return alert("⚠️ You cannot send: Your balance is 0 sats. Please receive sats first!");
+      return alert("⚠️ Your balance is 0 sats. Deposit first.");
     }
 
     const destination = document.getElementById("sendDest").value.trim();
@@ -411,15 +470,15 @@
     const btn = document.getElementById("btnSend");
 
     if (!destination || !amount) return alert("Fill in destination and amount");
-
     if (amount > currentLiveBalance) {
       hapticNotification("error");
-      return alert(`⚠️ Insufficient balance! You only have ${currentLiveBalance} sats.`);
+      return alert(`⚠️ Insufficient balance! You have ${currentLiveBalance} sats.`);
     }
 
     btn.disabled = true;
-    btn.innerText = "Sending...";
-    feedback.innerText = "Broadcasting across Lightning Network...";
+    btn.innerText = "Broadcasting...";
+    feedback.innerText = "Sending across Lightning Network...";
+    addLog(`Initiating withdrawal of ${amount} sats via Lightning to ${destination}...`, "info");
 
     try {
       const res = await fetch("/api/wallet?action=send", {
@@ -428,25 +487,29 @@
         body: JSON.stringify({ 
           destination, 
           amount, 
+          network: "lightning", // Explicit Lightning network matching deposit
           user_id: currentUserId,
           username: username,
-          telegram_id: tgNumericId
+          telegram_id: tgNumericId 
         })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
       hapticNotification("success");
-      feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully!</span>`;
+      feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amount} sats successfully via Lightning!</span>`;
+      addLog(`✓ Withdrawal of ${amount} sats confirmed! Telegram notification sent.`, "success");
+
       document.getElementById("sendDest").value = "";
       document.getElementById("sendAmount").value = "";
       loadBalance();
     } catch (err) {
       hapticNotification("error");
-      feedback.innerHTML = `<span style="color:#ef4444">Failed: ${err.message}</span>`;
+      feedback.innerHTML = `<span style="color:#ef4444">Withdrawal failed: ${err.message}</span>`;
+      addLog(`Withdrawal failed: ${err.message}`, "error");
     } finally {
       btn.disabled = false;
-      btn.innerText = "Send From Balance";
+      btn.innerText = "Withdraw Via Lightning";
     }
   }
 
@@ -470,7 +533,7 @@
     if (!currentActiveInvoice) return;
     navigator.clipboard.writeText(currentActiveInvoice);
     haptic("light");
-    alert("Invoice copied!");
+    alert("Lightning invoice copied!");
   }
 
   function copyAddress() {
@@ -479,7 +542,6 @@
     alert("Lightning Address copied!\n" + myLightningAddress);
   }
 
-  // Load balance immediately on start
   loadBalance();
 </script>
 </body>
