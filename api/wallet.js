@@ -44,7 +44,6 @@ function getDb() {
 const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const SAT_TO_USD = 0.00065;
 
 // Helper: Send Single Telegram Notification to User
 async function notifyTelegramUser(telegramId, message) {
@@ -271,7 +270,6 @@ async function findUserWallet(identifiers) {
   const candidateIds = Array.from(new Set(rawList));
   const collectionsToCheck = ["users", "wallets"];
 
-  // Pass 1: Find document with balance defined
   for (const col of collectionsToCheck) {
     for (const docId of candidateIds) {
       const doc = await db.collection(col).doc(docId).get();
@@ -291,7 +289,6 @@ async function findUserWallet(identifiers) {
     }
   }
 
-  // Pass 2: Find existing document even if balance is not yet set
   for (const col of collectionsToCheck) {
     for (const docId of candidateIds) {
       const doc = await db.collection(col).doc(docId).get();
@@ -307,7 +304,6 @@ async function findUserWallet(identifiers) {
     }
   }
 
-  // Pass 3: Check by telegram_id field
   for (const col of collectionsToCheck) {
     for (const cid of candidateIds) {
       const numId = cid.replace(/^user/, "");
@@ -541,7 +537,6 @@ module.exports = async function handler(req, res) {
 
       const wallet = await findUserWallet([creditTarget, targetTgId, user_id]);
 
-      // If already processed, exit without re-alerting
       if (invData && invData.is_paid) {
         return res.status(200).json({ 
           success: true, 
@@ -572,7 +567,6 @@ module.exports = async function handler(req, res) {
           }, { merge: true });
         }
 
-        // Credit to appropriate balance field
         if (finalCurr === "SATS") {
           batch.set(wallet.ref, {
             balance: admin.firestore.FieldValue.increment(finalSats),
@@ -646,141 +640,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 5. ASSET SWAP (OFFICIAL: POST https://api.tryspeed.com/balances/swap)
-    // ========================================================
-    if (action === "swap" && req.method === "POST") {
-      const { from_currency, to_currency, amount, user_id, telegram_id, username } = req.body;
-      const swapAmount = Number(amount);
-
-      if (!swapAmount || swapAmount <= 0) {
-        return res.status(400).json({ success: false, error: "Invalid swap amount." });
-      }
-
-      const wallet = await findUserWallet([user_id, username, telegram_id]);
-      if (!wallet) {
-        return res.status(400).json({ success: false, error: "User wallet not found." });
-      }
-
-      const fromCurr = (from_currency || "SATS").toUpperCase();
-      const toCurr = (to_currency || "USDT").toUpperCase();
-
-      const satsBal = Number(wallet.data.balance || 0);
-      const usdtBal = Number(wallet.data.usdt_balance || 0);
-      const usdcBal = Number(wallet.data.usdc_balance || 0);
-
-      let targetAmount = 0;
-      const updateData = { updated_at: new Date().toISOString() };
-
-      let amountStr = "";
-      let baseCurrency = "";
-      let swapOut = "";
-      let swapIn = "";
-
-      if (fromCurr === "SATS") {
-        if (swapAmount > satsBal) {
-          return res.status(400).json({ success: false, error: `Insufficient SATS! You have ${satsBal.toLocaleString()} SATS.` });
-        }
-        targetAmount = Number((swapAmount * SAT_TO_USD).toFixed(4));
-        updateData.balance = admin.firestore.FieldValue.increment(-swapAmount);
-        if (toCurr === "USDT") {
-          updateData.usdt_balance = admin.firestore.FieldValue.increment(targetAmount);
-        } else {
-          updateData.usdc_balance = admin.firestore.FieldValue.increment(targetAmount);
-        }
-
-        // Speed balances/swap specification
-        amountStr = String(Math.round(swapAmount));
-        baseCurrency = "SATS";
-        swapOut = "SATS";
-        swapIn = toCurr;
-      } else if (fromCurr === "USDT" || fromCurr === "USDC") {
-        const tokenBal = fromCurr === "USDT" ? usdtBal : usdcBal;
-        if (swapAmount > tokenBal) {
-          return res.status(400).json({ success: false, error: `Insufficient ${fromCurr}! You have ${tokenBal.toFixed(2)} ${fromCurr}.` });
-        }
-        targetAmount = Math.round(swapAmount / SAT_TO_USD);
-        if (fromCurr === "USDT") {
-          updateData.usdt_balance = admin.firestore.FieldValue.increment(-swapAmount);
-        } else {
-          updateData.usdc_balance = admin.firestore.FieldValue.increment(-swapAmount);
-        }
-        updateData.balance = admin.firestore.FieldValue.increment(targetAmount);
-
-        // Speed balances/swap specification
-        amountStr = String(swapAmount);
-        baseCurrency = "USD";
-        swapOut = fromCurr;
-        swapIn = "SATS";
-      } else {
-        return res.status(400).json({ success: false, error: "Unsupported swap currency pair." });
-      }
-
-      // EXECUTE REAL SPEED SWAP ON MERCHANT BALANCE (POST /balances/swap)
-      const apiKey = await getSpeedApiKey();
-      let speedSwapSuccess = false;
-
-      if (apiKey) {
-        try {
-          const speedSwapBody = {
-            amount: amountStr,
-            currency: baseCurrency,
-            target_currency_swap_out: swapOut,
-            target_currency_swap_in: swapIn
-          };
-
-          const { ok, status, data: swapData } = await speedRequest("balances/swap", "POST", speedSwapBody, apiKey);
-
-          if (ok && swapData) {
-            speedSwapSuccess = true;
-          } else {
-            const warnMsg = extractErrorMessage(swapData, status);
-            console.warn(`Speed /balances/swap notice (${status}): ${warnMsg}`);
-          }
-        } catch (e) {
-          console.warn("Speed balances/swap error:", e.message);
-        }
-      }
-
-      const txId = `swap_${Date.now()}`;
-      const batch = db.batch();
-      batch.set(wallet.ref, updateData, { merge: true });
-
-      batch.set(db.collection("transactions").doc(txId), {
-        id: txId,
-        tx_id: txId,
-        type: "swap",
-        user_id: wallet.id,
-        from_currency: fromCurr,
-        from_amount: swapAmount,
-        to_currency: toCurr,
-        to_amount: targetAmount,
-        speed_swapped: speedSwapSuccess,
-        status: "completed",
-        created_at: new Date().toISOString()
-      });
-
-      await batch.commit();
-
-      await forwardToLogsChannel(
-        `🔄 <b>Swap Executed</b>\n` +
-        `• User: @${wallet.id}\n` +
-        `• Swapped: ${swapAmount.toLocaleString()} ${fromCurr} ➔ ${targetAmount.toLocaleString()} ${toCurr}\n` +
-        `• Merchant Speed Swap: ${speedSwapSuccess ? "✅ Synchronized" : "⚠️ Internal Reserve"}\n` +
-        `• TxID: <code>${txId}</code>`
-      );
-
-      return res.status(200).json({
-        success: true,
-        tx_id: txId,
-        from_amount: swapAmount,
-        from_currency: fromCurr,
-        to_amount: targetAmount,
-        to_currency: toCurr
-      });
-    }
-
-    // ========================================================
-    // 6. WITHDRAW / SEND (Cross-Currency SATS-Funded Payout)
+    // 5. WITHDRAW / SEND (Cross-Currency SATS-Funded Payout)
     // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, network, currency, target_currency } = req.body;
@@ -1023,7 +883,6 @@ module.exports = async function handler(req, res) {
       const updateData = { updated_at: new Date().toISOString() };
       let remainingBal = 0;
 
-      // Deduct from the specific currency balance
       if (curr === "SATS") {
         updateData.balance = admin.firestore.FieldValue.increment(-sendAmount);
         remainingBal = currentSats - sendAmount;
