@@ -20,7 +20,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const APP_URL = process.env.WEBAPP_URL || `https://${DOMAIN}`;
-const MASTER_ADMIN_ID = "8511334182"; // Your permanent master admin ID
+const MASTER_ADMIN_ID = "8960497898"; // Your permanent master admin ID
 
 const SAT_TO_USD = 0.00065;
 const activeWatchers = new Map();
