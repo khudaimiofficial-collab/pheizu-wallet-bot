@@ -17,18 +17,94 @@ if (!admin.apps.length) {
 
 const db = admin.apps.length ? admin.firestore() : null;
 
+// Helper: Safely extract error message from Speed API responses
+function extractSpeedErrorMessage(data) {
+  if (!data) return "Unknown Speed API error";
+  if (typeof data === "string") return data;
+  if (data.message && typeof data.message === "string") return data.message;
+  if (data.error) {
+    if (typeof data.error === "string") return data.error;
+    if (data.error.message) return data.error.message;
+    if (data.error.description) return data.error.description;
+  }
+  if (Array.isArray(data.errors) && data.errors.length > 0) {
+    const first = data.errors[0];
+    if (typeof first === "string") return first;
+    if (first.message) return first.message;
+  }
+  return JSON.stringify(data);
+}
+
+// Helper: Safely extract lightning invoice or address from any Speed charge response format
+function extractInvoice(charge) {
+  if (!charge) return null;
+
+  // Direct string payment request
+  if (typeof charge.payment_request === "string" && charge.payment_request.length > 0) {
+    return charge.payment_request;
+  }
+
+  // Nested in payment_request object
+  if (charge.payment_request && typeof charge.payment_request === "object") {
+    if (charge.payment_request.lightning_invoice) return charge.payment_request.lightning_invoice;
+    if (charge.payment_request.address) return charge.payment_request.address;
+    if (charge.payment_request.payment_request) return charge.payment_request.payment_request;
+    if (charge.payment_request.url) return charge.payment_request.url;
+  }
+
+  // Nested in lightning object
+  if (charge.lightning && typeof charge.lightning === "object") {
+    if (charge.lightning.payment_request) return charge.lightning.payment_request;
+    if (charge.lightning.invoice) return charge.lightning.invoice;
+  }
+
+  // Nested in payment_method_details
+  if (charge.payment_method_details?.lightning?.payment_request) {
+    return charge.payment_method_details.lightning.payment_request;
+  }
+  if (charge.payment_method_details?.bitcoin?.address) {
+    return charge.payment_method_details.bitcoin.address;
+  }
+  if (charge.payment_method_details?.crypto?.address) {
+    return charge.payment_method_details.crypto.address;
+  }
+
+  // Root fallbacks
+  if (charge.lightning_invoice) return charge.lightning_invoice;
+  if (charge.invoice) return charge.invoice;
+  if (charge.address) return charge.address;
+  if (charge.hosted_checkout_url) return charge.hosted_checkout_url;
+  if (charge.checkout_url) return charge.checkout_url;
+  if (charge.url) return charge.url;
+
+  return null;
+}
+
 // Helper: Retrieve Speed API Key from Env or Firestore settings
 async function getSpeedApiKey() {
-  if (process.env.SPEED_API_KEY && process.env.SPEED_API_KEY.trim()) {
-    return process.env.SPEED_API_KEY.trim();
+  const envKey = process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || process.env.SPEED_KEY;
+  if (envKey && envKey.trim()) {
+    return envKey.trim();
   }
+
   if (db) {
     try {
       const snap = await db.collection("settings").doc("speed").get();
-      if (snap.exists && snap.data().api_key) {
-        return snap.data().api_key.trim();
+      if (snap.exists) {
+        const data = snap.data();
+        const key = data.api_key || data.key || data.secret_key;
+        if (key && String(key).trim()) return String(key).trim();
       }
-    } catch (e) {}
+
+      const snap2 = await db.collection("settings").doc("speed_key").get();
+      if (snap2.exists) {
+        const data = snap2.data();
+        const key = data.api_key || data.key || data.secret_key;
+        if (key && String(key).trim()) return String(key).trim();
+      }
+    } catch (e) {
+      console.error("Error fetching speed key from firestore:", e.message);
+    }
   }
   return "";
 }
@@ -69,7 +145,6 @@ async function forwardToLogsChannel(text) {
 
     const result = await res.json();
     if (!result.ok) {
-      // Plain text fallback
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -148,7 +223,7 @@ async function resolveLnAddressToInvoice(destination, amountSats) {
     const [name, host] = cleanDest.split("@");
     const res = await fetch(`https://${host}/.well-known/lnurlp/${name}`);
     const data = await res.json();
-    if (!data.callback) throw new Error("Could not resolve Lightning Address LNURL callback.");
+    if (!data.callback) throw new Error("Could not resolve Lightning Address callback.");
 
     const msats = Math.round(Number(amountSats) * 1000);
     const sep = data.callback.includes("?") ? "&" : "?";
@@ -165,7 +240,6 @@ async function resolveLnAddressToInvoice(destination, amountSats) {
 // MAIN ROUTE HANDLER
 // -------------------------------------------------------------
 module.exports = async (req, res) => {
-  // CORS Headers
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -198,7 +272,7 @@ module.exports = async (req, res) => {
   }
 
   // ===========================================================
-  // 2. CREATE PAYMENT (DEPOSIT)
+  // 2. CREATE PAYMENT (DEPOSIT - FIXED PAYLOAD & INVOICE PARSING)
   // ===========================================================
   if (action === "create-payment" && req.method === "POST") {
     try {
@@ -218,25 +292,26 @@ module.exports = async (req, res) => {
       }
 
       if (!speedKey) {
-        return res.status(500).json({ success: false, error: "Speed API Key is not configured." });
+        return res.status(500).json({
+          success: false,
+          error: "Speed API Key is missing. Configure SPEED_API_KEY in environment or via Admin Panel."
+        });
       }
 
       const selectedCurrency = (target_currency || "SATS").toUpperCase();
       const selectedMethod = (payment_method || network || "lightning").toLowerCase();
 
-      let speedPayload = {
-        amount: depositAmount,
+      // Clean payload for Speed /charges (Do NOT include target_currency here)
+      const speedPayload = {
+        amount: selectedCurrency === "SATS" ? Math.round(depositAmount) : depositAmount,
         currency: selectedCurrency,
-        target_currency: selectedCurrency,
         description: `Deposit to ${username || user_id || "wallet"}`
       };
 
       if (selectedCurrency === "SATS") {
         if (selectedMethod === "onchain" || selectedMethod === "bitcoin") {
-          speedPayload.network = "bitcoin";
           speedPayload.payment_methods = ["onchain"];
         } else {
-          speedPayload.network = "lightning";
           speedPayload.payment_methods = ["lightning"];
         }
       } else {
@@ -253,16 +328,27 @@ module.exports = async (req, res) => {
       });
 
       const charge = await speedRes.json();
-      const invoice =
-        charge.payment_request?.lightning_invoice ||
-        charge.payment_request?.address ||
-        charge.payment_request?.url;
 
-      if (!charge.id || !invoice) {
-        throw new Error(charge.message || charge.error || "Failed to generate Speed deposit invoice.");
+      if (!speedRes.ok) {
+        const errorMsg = extractSpeedErrorMessage(charge);
+        console.error("Speed /charges returned HTTP error:", speedRes.status, errorMsg);
+        return res.status(speedRes.status).json({
+          success: false,
+          error: `Speed API Error (${speedRes.status}): ${errorMsg}`
+        });
       }
 
-      // Store pending invoice in Firestore so check-status reliably tracks it
+      const invoice = extractInvoice(charge);
+
+      if (!charge.id || !invoice) {
+        const errorMsg = extractSpeedErrorMessage(charge);
+        return res.status(500).json({
+          success: false,
+          error: `Speed did not return a valid deposit invoice: ${errorMsg}`
+        });
+      }
+
+      // Save pending invoice in Firestore
       if (db) {
         await db.collection("invoices").doc(charge.id).set({
           id: charge.id,
@@ -275,7 +361,7 @@ module.exports = async (req, res) => {
           telegram_id: String(telegram_id || ""),
           is_paid: false,
           created_at: new Date().toISOString()
-        });
+        }, { merge: true });
       }
 
       return res.status(200).json({
@@ -307,7 +393,6 @@ module.exports = async (req, res) => {
         return res.status(500).json({ success: false, error: "Speed API Key missing." });
       }
 
-      // 1. Fetch charge from Speed
       const speedRes = await fetch(`https://api.tryspeed.com/charges/${payment_id}`, {
         headers: {
           "Authorization": `Basic ${Buffer.from(speedKey + ":").toString("base64")}`
@@ -322,7 +407,7 @@ module.exports = async (req, res) => {
         return res.status(200).json({ success: true, is_paid: false, status });
       }
 
-      // 2. Fetch invoice metadata from Firestore
+      // Check if already credited
       let invoiceData = null;
       let invoiceRef = null;
       if (db) {
@@ -331,7 +416,6 @@ module.exports = async (req, res) => {
         if (invSnap.exists) {
           invoiceData = invSnap.data();
           if (invoiceData.is_paid) {
-            // Already credited
             const user = await resolveUserDoc(invoiceData.user_id, invoiceData.telegram_id);
             const currentBal = Number(user.data.balance ?? 0);
             return res.status(200).json({
@@ -349,22 +433,19 @@ module.exports = async (req, res) => {
       const targetUserId = invoiceData?.user_id || username || user_id;
       const targetTgId = invoiceData?.telegram_id || telegram_id;
 
-      // 3. Credit user's balance
+      // Credit balance
       let newBalance = creditedAmount;
       if (db) {
         const user = await resolveUserDoc(targetUserId, targetTgId);
 
-        // Increment balance atomically
         await user.ref.set({
           balance: admin.firestore.FieldValue.increment(creditedAmount),
           updated_at: new Date().toISOString()
         }, { merge: true });
 
-        // Calculate latest balance
         const updatedSnap = await user.ref.get();
         newBalance = Number(updatedSnap.data().balance ?? 0);
 
-        // Mark invoice as paid
         if (invoiceRef) {
           await invoiceRef.set({
             is_paid: true,
@@ -373,7 +454,6 @@ module.exports = async (req, res) => {
           }, { merge: true });
         }
 
-        // Add record to history
         await db.collection("history").add({
           user_id: user.id,
           telegram_id: String(targetTgId || ""),
@@ -384,7 +464,6 @@ module.exports = async (req, res) => {
           created_at: new Date().toISOString()
         });
 
-        // 4. Send Confirmation to User and Logs Channel
         await notifyUser(
           targetTgId,
           `🎉 <b>Payment Received!</b>\n\n` +
@@ -444,7 +523,6 @@ module.exports = async (req, res) => {
       const selectedMethod = (withdraw_method || network || "lightning").toLowerCase();
       const selectedCurrency = (currency || target_currency || "SATS").toUpperCase();
 
-      // Check balance
       const user = await resolveUserDoc(username || user_id, telegram_id);
       const currentBalance = Number(user.data.balance ?? user.data.sats ?? 0);
 
@@ -455,13 +533,11 @@ module.exports = async (req, res) => {
         });
       }
 
-      // Resolve Lightning Address if applicable
       let recipientTarget = destination.trim();
       if (selectedMethod === "lightning") {
         recipientTarget = await resolveLnAddressToInvoice(destination, withdrawAmount);
       }
 
-      // Execute Speed Payout
       const speedRes = await fetch("https://api.tryspeed.com/payouts", {
         method: "POST",
         headers: {
@@ -480,10 +556,10 @@ module.exports = async (req, res) => {
 
       const payout = await speedRes.json();
       if (!speedRes.ok || payout.status === "failed") {
-        throw new Error(payout.message || payout.error || "Speed rejected the payout request.");
+        const errorMsg = extractSpeedErrorMessage(payout);
+        throw new Error(errorMsg);
       }
 
-      // Deduct balance
       await user.ref.update({
         balance: admin.firestore.FieldValue.increment(-withdrawAmount),
         updated_at: new Date().toISOString()
@@ -492,7 +568,6 @@ module.exports = async (req, res) => {
       const remainingBalance = currentBalance - withdrawAmount;
       const txId = payout.id || "N/A";
 
-      // Save to History
       if (db) {
         await db.collection("history").add({
           user_id: user.id,
@@ -540,7 +615,6 @@ module.exports = async (req, res) => {
       const history = [];
       snap.forEach(doc => history.push({ id: doc.id, ...doc.data() }));
 
-      // Sort descending by date
       history.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
       return res.status(200).json({ success: true, history });
