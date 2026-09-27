@@ -20,15 +20,29 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const APP_URL = process.env.WEBAPP_URL || `https://${DOMAIN}`;
-const ADMIN_IDS = (process.env.ADMIN_IDS || "").split(",").map(id => id.trim());
+
+// Parse Admin list: accepts numeric IDs or usernames, comma-separated
+const rawAdmins = (process.env.ADMIN_IDS || process.env.ADMIN_ID || "");
+const ADMIN_IDS = rawAdmins
+  .split(",")
+  .map(id => id.trim().toLowerCase().replace(/^@/, ""))
+  .filter(Boolean);
 
 const SAT_TO_USD = 0.00065;
-
-// Active watcher registry to cancel background timers immediately
 const activeWatchers = new Map();
 
+// Resilient Admin Checker (Matches numeric ID or @username)
 function isAdmin(ctx) {
-  return ADMIN_IDS.includes(String(ctx.from?.id));
+  if (!ctx || !ctx.from) return false;
+  const numericId = String(ctx.from.id).trim();
+  const username = (ctx.from.username || "").toLowerCase().replace(/^@/, "").trim();
+
+  // If no admin set, fallback to false
+  if (ADMIN_IDS.length === 0) return false;
+
+  return ADMIN_IDS.some(adminIdentifier => {
+    return adminIdentifier === numericId || (username && adminIdentifier === username);
+  });
 }
 
 function getMainKeyboard(ctx) {
@@ -173,7 +187,7 @@ function stopDepositWatcher(chatId) {
 }
 
 // Format My Wallet Screen
-async function getWalletOverviewText(userId, telegramId) {
+async function getWalletOverviewText(userId, telegramId, ctx) {
   let sats = 0;
   try {
     const res = await fetch(`${APP_URL}/api/wallet?action=balance&user_id=${encodeURIComponent(userId)}&telegram_id=${telegramId}`);
@@ -183,9 +197,11 @@ async function getWalletOverviewText(userId, telegramId) {
 
   const satsUsd = (sats * SAT_TO_USD).toFixed(2);
   const totalUsd = satsUsd;
+  const adminBadge = isAdmin(ctx) ? "👑 <b>Admin Mode:</b> Active\n" : "";
 
   return (
     `💳 <b>My Wallet</b>\n\n` +
+    adminBadge +
     `⚡ <b>SATS:</b> <code>${sats.toLocaleString()} SATS</code> (${satsUsd}$)\n` +
     `₿ <b>BTC:</b> <code>${(sats / 100000000).toFixed(8)} BTC</code> (${satsUsd}$)\n` +
     `💵 <b>USDT:</b> <code>0.0000 USDT</code> (0.00$)\n` +
@@ -216,7 +232,7 @@ function decodeBolt11Sats(invoice) {
 
 // Background poller for deposits
 function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
-  stopDepositWatcher(chatId); // Cancel any previous watcher
+  stopDepositWatcher(chatId);
   let attempts = 0;
   const maxAttempts = 60;
 
@@ -257,7 +273,51 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
 }
 
 // ----------------------------------------------------
-// 1. /START - ALWAYS DIRECTLY GOES BACK TO WALLET HOME
+// 0. /id COMMAND - CHECK ADMIN STATUS INSTANTLY
+// ----------------------------------------------------
+bot.command("id", async (ctx) => {
+  const uid = ctx.from.id;
+  const uname = ctx.from.username ? `@${ctx.from.username}` : "none";
+  const isAdm = isAdmin(ctx);
+
+  return ctx.reply(
+    `🆔 <b>Your Telegram Account Info:</b>\n\n` +
+    `• <b>Numeric ID:</b> <code>${uid}</code>\n` +
+    `• <b>Username:</b> ${uname}\n` +
+    `• <b>Admin Status:</b> ${isAdm ? "✅ <b>YES (Authorized Admin)</b>" : "❌ <b>NO (Not Admin)</b>"}\n\n` +
+    `<i>If it says 'NO', put <code>${uid}</code> into ADMIN_IDS in your Vercel Environment Variables.</i>`,
+    { parse_mode: "HTML" }
+  );
+});
+
+// ----------------------------------------------------
+// 0. /setkey COMMAND - DIRECT KEY UPDATE FOR ADMIN
+// ----------------------------------------------------
+bot.command("setkey", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    return ctx.reply("⛔ Access denied: You are not authorized.");
+  }
+
+  const parts = ctx.message.text.trim().split(" ");
+  if (parts.length < 2 || !parts[1].trim()) {
+    return ctx.reply("⚠️ Usage: <code>/setkey YOUR_SPEED_API_KEY</code>", { parse_mode: "HTML" });
+  }
+
+  const newKey = parts[1].trim();
+
+  if (db) {
+    await db.collection("settings").doc("speed").set({
+      api_key: newKey,
+      updated_at: new Date().toISOString()
+    }, { merge: true });
+  }
+
+  await clearSession(ctx.from.id);
+  return ctx.reply("✅ <b>Speed API Key saved successfully!</b>", { parse_mode: "HTML" });
+});
+
+// ----------------------------------------------------
+// 1. /START - DIRECT RETURN TO WALLET HOME
 // ----------------------------------------------------
 bot.start(async (ctx) => {
   stopDepositWatcher(ctx.from.id);
@@ -265,7 +325,7 @@ bot.start(async (ctx) => {
 
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   await ctx.replyWithChatAction("typing");
-  const walletText = await getWalletOverviewText(userId, ctx.from.id);
+  const walletText = await getWalletOverviewText(userId, ctx.from.id, ctx);
 
   await ctx.reply(walletText, {
     parse_mode: "HTML",
@@ -282,7 +342,7 @@ bot.hears("💰 Balance", async (ctx) => {
 
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   await ctx.replyWithChatAction("typing");
-  const walletText = await getWalletOverviewText(userId, ctx.from.id);
+  const walletText = await getWalletOverviewText(userId, ctx.from.id, ctx);
 
   await ctx.reply(walletText, {
     parse_mode: "HTML",
@@ -379,7 +439,7 @@ bot.hears("📤 Withdraw", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 6. 🔑 SET KEY (Admin)
+// 6. 🔑 SET KEY (Admin Button)
 // ----------------------------------------------------
 bot.hears("🔑 Set Key", async (ctx) => {
   if (!isAdmin(ctx)) {
@@ -391,7 +451,8 @@ bot.hears("🔑 Set Key", async (ctx) => {
 
   await ctx.reply(
     `🔑 <b>Set Speed API Secret Key</b>\n\n` +
-    `Paste your API key directly in this chat:`,
+    `Paste your API secret key directly in this chat\n` +
+    `<i>(Or type <code>/setkey YOUR_KEY</code>)</i>:`,
     { parse_mode: "HTML" }
   );
 });
@@ -748,13 +809,13 @@ bot.action("gateway_back", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 7. TEXT MESSAGE HANDLER (ABORTS ON /start OR MENU BUTTONS)
+// 7. TEXT MESSAGE HANDLER
 // ----------------------------------------------------
 bot.on("text", async (ctx) => {
   const text = ctx.message.text.trim();
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
 
-  // EMERGENCY ESCAPE: If user sends /start, "start", or "Home", directly return to Wallet without checking amount
+  // EMERGENCY ESCAPE: If user sends /start, "start", or "Home"
   if (
     text.startsWith("/start") ||
     text.toLowerCase() === "start" ||
@@ -764,7 +825,7 @@ bot.on("text", async (ctx) => {
     stopDepositWatcher(ctx.from.id);
     await clearSession(ctx.from.id);
     await ctx.replyWithChatAction("typing");
-    const walletText = await getWalletOverviewText(userId, ctx.from.id);
+    const walletText = await getWalletOverviewText(userId, ctx.from.id, ctx);
     return ctx.reply(walletText, {
       parse_mode: "HTML",
       ...getMainKeyboard(ctx)
@@ -899,7 +960,7 @@ bot.on("text", async (ctx) => {
       }
     }
 
-    // IF AMOUNT WAS AUTO-DETECTED (Skips asking for amount!)
+    // IF AMOUNT WAS AUTO-DETECTED
     if (detectedAmount && detectedAmount > 0) {
       if (session.balance && detectedCurrency === "SATS" && detectedAmount > session.balance) {
         await clearSession(ctx.from.id);
@@ -935,7 +996,6 @@ bot.on("text", async (ctx) => {
       );
     }
 
-    // If destination is a plain address without an embedded amount
     await setSession(ctx.from.id, {
       step: "awaiting_withdraw_amount",
       destination: text,
@@ -1062,7 +1122,6 @@ bot.action("confirm_send", async (ctx) => {
 });
 
 bot.action("cancel_send", async (ctx) => {
-  stopDepositWatcher(ctx.from.id);
   await clearSession(ctx.from.id);
   await ctx.answerCbQuery("Cancelled");
   await ctx.editMessageText("❌ Payment cancelled.");
