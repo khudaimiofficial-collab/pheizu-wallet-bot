@@ -96,7 +96,57 @@ async function getMainKeyboard(ctx) {
   return Markup.keyboard(rows).resize();
 }
 
-// Withdrawal Options Keyboard
+// ----------------------------------------------------
+// WITHDRAW KEYBOARDS (Asset -> Network Flow)
+// ----------------------------------------------------
+function getWithdrawAssetKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("⚡ Bitcoin (SATS)", "with_asset_sats")],
+    [
+      Markup.button.callback("💵 USDT", "with_asset_usdt"),
+      Markup.button.callback("💲 USDC", "with_asset_usdc")
+    ],
+    [Markup.button.callback("🔙 Back to Main Menu", "gateway_back")]
+  ]);
+}
+
+function getSatsWithdrawNetworks() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("⚡ Lightning", "with_net_sats_lightning"),
+      Markup.button.callback("₿ On-Chain", "with_net_sats_onchain")
+    ],
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+  ]);
+}
+
+function getUsdtWithdrawNetworks() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("⚡ Lightning", "with_net_usdt_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdt_ethereum")
+    ],
+    [
+      Markup.button.callback("🔴 Tron", "with_net_usdt_tron"),
+      Markup.button.callback("🟣 Solana", "with_net_usdt_solana")
+    ],
+    [Markup.button.callback("💎 TON", "with_net_usdt_ton")],
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+  ]);
+}
+
+function getUsdcWithdrawNetworks() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("⚡ Lightning", "with_net_usdc_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdc_ethereum")
+    ],
+    [Markup.button.callback("🟣 Solana", "with_net_usdc_solana")],
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+  ]);
+}
+
+// Legacy Quick Withdrawal Keyboard (Preserved for compatibility)
 function getQuickWithdrawKeyboard() {
   return Markup.inlineKeyboard([
     [
@@ -111,7 +161,9 @@ function getQuickWithdrawKeyboard() {
   ]);
 }
 
-// Deposit Asset Keyboard
+// ----------------------------------------------------
+// DEPOSIT KEYBOARDS
+// ----------------------------------------------------
 function getDepositAssetKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("⚡ Bitcoin (SATS)", "dep_asset_sats")],
@@ -123,7 +175,6 @@ function getDepositAssetKeyboard() {
   ]);
 }
 
-// Deposit Network Keyboards
 function getUsdtDepositNetworks() {
   return Markup.inlineKeyboard([
     [
@@ -241,24 +292,60 @@ function stopDepositWatcher(chatId) {
   }
 }
 
-// Forward to Telegram Logs Channel
+// Forward to Telegram Logs Channel (FIXED: Supports DB + ENV, auto -100 prefix, fallback)
 async function forwardToLogsChannel(text) {
-  if (!db || !process.env.BOT_TOKEN) return;
+  if (!process.env.BOT_TOKEN) return;
   try {
-    const snap = await db.collection("settings").doc("logs_channel").get();
-    if (snap.exists && snap.data().channel_id) {
-      const channelId = snap.data().channel_id;
+    let channelId = null;
+
+    if (db) {
+      try {
+        const snap = await db.collection("settings").doc("logs_channel").get();
+        if (snap.exists && snap.data().channel_id) {
+          channelId = snap.data().channel_id;
+        }
+      } catch (err) {}
+    }
+
+    if (!channelId) {
+      channelId = process.env.LOG_CHANNEL_ID || process.env.ADMIN_CHAT_ID;
+    }
+
+    if (!channelId) return;
+
+    channelId = String(channelId).trim();
+    if (/^\d{8,14}$/.test(channelId)) {
+      channelId = `-100${channelId}`;
+    }
+
+    const payload = {
+      chat_id: channelId,
+      text: `📋 <b>Wallet Event:</b>\n\n${text}`,
+      parse_mode: "HTML"
+    };
+
+    const res = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await res.json();
+    if (!result.ok) {
+      console.error("Logs Channel API Error:", result.description);
+      // Fallback: send as plain text without HTML to prevent formatting drops
       await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: channelId,
-          text: `📋 <b>Wallet Event:</b>\n\n${text}`,
-          parse_mode: "HTML"
+          text: `📋 Wallet Event:\n\n${text.replace(/<[^>]*>?/gm, "")}`
         })
       });
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error("forwardToLogsChannel error:", e.message);
+  }
 }
 
 // Format My Wallet Screen
@@ -333,7 +420,7 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
           { parse_mode: "HTML" }
         );
 
-        forwardToLogsChannel(
+        await forwardToLogsChannel(
           `📥 <b>Deposit Confirmed</b>\n` +
           `• User: @${targetUserId}\n` +
           `• Amount: +${amount} ${curr}\n` +
@@ -501,7 +588,7 @@ bot.hears("📥 Deposit", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 5. 📤 WITHDRAW (FIXED: ZERO LATENCY & INSTANT READY)
+// 5. 📤 WITHDRAW (NOW IDENTICAL TO DEPOSIT FLOW)
 // ----------------------------------------------------
 bot.hears("📤 Withdraw", async (ctx) => {
   stopDepositWatcher(ctx.from.id);
@@ -515,13 +602,6 @@ bot.hears("📤 Withdraw", async (ctx) => {
   await ctx.replyWithChatAction("typing");
   const balance = await getDirectBalance(userId, ctx.from.id);
 
-  // Ready session for destination input immediately
-  await setSession(ctx.from.id, {
-    step: "awaiting_withdraw_dest",
-    balance: balance,
-    target_currency: "SATS"
-  });
-
   const balanceNotice = balance <= 0
     ? `⚠️ <i>Note: Your balance is currently 0 sats. You need funds to withdraw.</i>\n\n`
     : ``;
@@ -530,13 +610,10 @@ bot.hears("📤 Withdraw", async (ctx) => {
     `📤 <b>Withdraw / Send Funds</b>\n` +
     `💰 Available Balance: <b>${balance.toLocaleString()} sats</b>\n\n` +
     balanceNotice +
-    `👉 <b>Instant Withdraw:</b>\n` +
-    `Paste any <b>Lightning Invoice</b> (<code>lnbc...</code>), <b>Lightning Address</b>, or <b>Crypto Address</b> directly here.\n` +
-    `<i>(The bot will auto-detect the network & amount)</i>\n\n` +
-    `Or choose a specific network below:`,
+    `🔥 <b>Select a Withdrawal Asset:</b> 🔥`,
     {
       parse_mode: "HTML",
-      ...getQuickWithdrawKeyboard()
+      ...getWithdrawAssetKeyboard()
     }
   );
 });
@@ -570,8 +647,41 @@ bot.command("admin", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// CALLBACK ACTIONS: WITHDRAWAL QUICK BUTTONS
+// CALLBACK ACTIONS: WITHDRAWAL SELECTIONS (Asset -> Network)
 // ----------------------------------------------------
+bot.action("with_back_to_assets", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await ctx.editMessageText(`🔥 <b>Select a Withdrawal Asset:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getWithdrawAssetKeyboard()
+  });
+});
+
+bot.action("with_asset_sats", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await ctx.editMessageText(`🔥 <b>Select Bitcoin (SATS) Withdrawal Network:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getSatsWithdrawNetworks()
+  });
+});
+
+bot.action("with_asset_usdt", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await ctx.editMessageText(`🔥 <b>Select USDT Withdrawal Network:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getUsdtWithdrawNetworks()
+  });
+});
+
+bot.action("with_asset_usdc", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await ctx.editMessageText(`🔥 <b>Select USDC Withdrawal Network:</b> 🔥`, {
+    parse_mode: "HTML",
+    ...getUsdcWithdrawNetworks()
+  });
+});
+
+// Withdrawal Networks
 bot.action("with_net_sats_lightning", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -581,7 +691,8 @@ bot.action("with_net_sats_lightning", async (ctx) => {
     step: "awaiting_withdraw_dest",
     target_currency: "SATS",
     withdraw_method: "lightning",
-    balance 
+    balance,
+    min_amount: 1
   });
 
   await ctx.editMessageText(
@@ -613,6 +724,28 @@ bot.action("with_net_sats_onchain", async (ctx) => {
   );
 });
 
+bot.action("with_net_usdt_lightning", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDT",
+    withdraw_method: "lightning",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`⚡ <b>USDT (Lightning) Withdrawal:</b>\n\nPaste recipient's Lightning Invoice or Lightning Address:`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdt_ethereum", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDT",
+    withdraw_method: "ethereum",
+    min_amount: 10
+  });
+  await ctx.editMessageText(`⛓️ <b>USDT (Ethereum - ERC20) Withdrawal:</b>\n\nPaste your Ethereum destination address (<code>0x...</code>):`, { parse_mode: "HTML" });
+});
+
 bot.action("with_net_usdt_tron", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   await setSession(ctx.from.id, { 
@@ -622,6 +755,50 @@ bot.action("with_net_usdt_tron", async (ctx) => {
     min_amount: 0.5
   });
   await ctx.editMessageText(`🔴 <b>USDT (Tron - TRC20) Withdrawal:</b>\n\nPaste your Tron destination address (<code>T...</code>):`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdt_solana", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDT",
+    withdraw_method: "solana",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`🟣 <b>USDT (Solana) Withdrawal:</b>\n\nPaste your Solana destination address:`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdt_ton", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDT",
+    withdraw_method: "ton",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`💎 <b>USDT (TON) Withdrawal:</b>\n\nPaste your TON destination address:`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdc_lightning", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDC",
+    withdraw_method: "lightning",
+    min_amount: 0.5
+  });
+  await ctx.editMessageText(`⚡ <b>USDC (Lightning) Withdrawal:</b>\n\nPaste recipient's Lightning Invoice or Lightning Address:`, { parse_mode: "HTML" });
+});
+
+bot.action("with_net_usdc_ethereum", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await setSession(ctx.from.id, { 
+    step: "awaiting_withdraw_dest",
+    target_currency: "USDC",
+    withdraw_method: "ethereum",
+    min_amount: 10
+  });
+  await ctx.editMessageText(`⛓️ <b>USDC (Ethereum) Withdrawal:</b>\n\nPaste your Ethereum destination address (<code>0x...</code>):`, { parse_mode: "HTML" });
 });
 
 bot.action("with_net_usdc_solana", async (ctx) => {
@@ -934,8 +1111,10 @@ bot.on("text", async (ctx) => {
     }
     if (session.step === "adm_input_logs_channel") {
       await clearSession(ctx.from.id);
-      let chId = text;
+      let chId = text.trim();
       if (ctx.message.forward_from_chat) chId = String(ctx.message.forward_from_chat.id);
+      // Auto-prefix -100 for channel ids
+      if (/^\d{8,14}$/.test(chId)) chId = `-100${chId}`;
       if (db) await db.collection("settings").doc("logs_channel").set({ channel_id: chId }, { merge: true });
       return ctx.reply(`✅ Logs Channel set to: <code>${chId}</code>`, { parse_mode: "HTML" });
     }
@@ -1000,6 +1179,14 @@ bot.on("text", async (ctx) => {
 
       await ctx.replyWithPhoto(qrUrl, { caption, parse_mode: "HTML" });
       startDepositWatcher(ctx.from.id, txId, amount, userId);
+
+      await forwardToLogsChannel(
+        `📥 <b>Deposit Invoice Created</b>\n` +
+        `• User: @${userId}\n` +
+        `• Expected Amount: ${amount} ${targetCurrency}\n` +
+        `• Network: ${paymentMethod.toUpperCase()}\n` +
+        `• TxID: <code>${txId}</code>`
+      );
     } catch (err) {
       ctx.reply(`❌ Failed to create deposit: ${err.message}`);
     }
@@ -1185,15 +1372,26 @@ bot.action("confirm_send", async (ctx) => {
       { parse_mode: "HTML" }
     );
 
-    forwardToLogsChannel(
+    await forwardToLogsChannel(
       `📤 <b>Withdrawal Completed</b>\n` +
       `• User: @${userId}\n` +
       `• Amount: -${amount} ${currency || "SATS"}\n` +
+      `• Method/Network: ${(withdraw_method || "lightning").toUpperCase()}\n` +
       `• Destination: <code>${displayRecipient}</code>\n` +
       `• TxID: <code>${txId}</code>`
     );
   } catch (err) {
+    const displayRecipient = destination.includes("@") ? destination : `${destination.substring(0, 24)}...`;
     await ctx.editMessageText(`❌ <b>Payment Failed:</b> ${err.message}`, { parse_mode: "HTML" });
+
+    await forwardToLogsChannel(
+      `⚠️ <b>Withdrawal Failed</b>\n` +
+      `• User: @${userId}\n` +
+      `• Amount: ${amount} ${currency || "SATS"}\n` +
+      `• Method/Network: ${(withdraw_method || "lightning").toUpperCase()}\n` +
+      `• Destination: <code>${displayRecipient}</code>\n` +
+      `• Error: <code>${err.message}</code>`
+    );
   }
 });
 
