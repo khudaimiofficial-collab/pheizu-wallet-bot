@@ -105,7 +105,6 @@
       color: var(--text);
     }
 
-    /* Button grids */
     .button-group-label {
       font-size: 11px;
       color: var(--muted);
@@ -115,7 +114,7 @@
     }
     .btn-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
       gap: 6px;
       margin-bottom: 10px;
     }
@@ -164,7 +163,6 @@
       cursor: not-allowed !important;
     }
 
-    /* QR Display */
     .qr-box {
       text-align: center;
       background: var(--bg);
@@ -192,7 +190,6 @@
       overflow-y: auto;
     }
 
-    /* History List */
     .tx-item {
       display: flex;
       justify-content: space-between;
@@ -205,7 +202,6 @@
     .tx-in { color: var(--button); font-weight: bold; }
     .tx-out { color: var(--danger); font-weight: bold; }
 
-    /* Activity Log */
     .log-box {
       background: #090d16;
       border: 1px solid var(--border);
@@ -225,7 +221,7 @@
 
     .hidden { display: none !important; }
 
-    /* Success Modal */
+    /* Guaranteed visible modal */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -233,7 +229,7 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      z-index: 999;
+      z-index: 99999;
       padding: 20px;
     }
     .modal-card {
@@ -262,7 +258,6 @@
     <div id="balanceDisplay" class="balance-amount">... sats</div>
     <div id="totalUsdDisplay" class="balance-sub">≈ $0.00 USD</div>
 
-    <!-- Assets Overview Pill Grid -->
     <div class="asset-grid">
       <div class="asset-pill">
         <div class="asset-pill-name">⚡ Bitcoin</div>
@@ -278,7 +273,6 @@
       </div>
     </div>
 
-    <!-- Lightning Address Badge -->
     <div class="address-badge">
       <div>
         <span style="font-size:9px; color:var(--muted); display:block;">LIGHTNING ADDRESS:</span>
@@ -299,7 +293,7 @@
     <button id="navTabAdmin" class="tab-btn hidden" onclick="switchNavTab('admin')">👑 Admin</button>
   </div>
 
-  <!-- 3. TAB CONTENT: WALLET / QUICK ACTIONS -->
+  <!-- 3. TAB: WALLET -->
   <div id="panelWallet" class="card">
     <div class="button-group-label">⚡ Quick Actions</div>
     <div class="btn-grid" style="grid-template-columns: 1fr 1fr;">
@@ -315,9 +309,8 @@
     </div>
   </div>
 
-  <!-- 4. TAB CONTENT: DEPOSIT (RECEIVE) -->
+  <!-- 4. TAB: DEPOSIT -->
   <div id="panelDeposit" class="card hidden">
-    <!-- Asset Selector -->
     <div class="button-group-label">1. Select Asset:</div>
     <div class="btn-grid">
       <button id="depAssetSats" class="choice-btn selected" onclick="selectDepositAsset('SATS')">⚡ SATS</button>
@@ -325,36 +318,29 @@
       <button id="depAssetUsdc" class="choice-btn" onclick="selectDepositAsset('USDC')">💲 USDC</button>
     </div>
 
-    <!-- Network Selector -->
     <div class="button-group-label">2. Select Network:</div>
     <div id="depNetworkGrid" class="btn-grid">
-      <!-- Injected dynamically based on selected asset -->
+      <!-- Injected with TON, Lightning, Tron, Ethereum, Solana -->
     </div>
 
-    <!-- Presets -->
     <div class="button-group-label">3. Select Amount:</div>
-    <div id="depPresetsGrid" class="btn-grid">
-      <!-- Injected dynamically -->
-    </div>
+    <div id="depPresetsGrid" class="btn-grid"></div>
 
-    <!-- Custom Amount Input -->
-    <label style="font-size:11px; color:var(--muted);">Or custom amount:</label>
-    <input type="number" id="depCustomAmount" placeholder="Enter custom amount" />
+    <label style="font-size:11px; color:var(--muted);">Amount to deposit:</label>
+    <input type="number" id="depCustomAmount" placeholder="e.g. 100" value="100" />
 
     <button id="btnGenerateInvoice" class="btn-action" onclick="createDepositInvoice()">⚡ Generate Deposit QR</button>
 
-    <!-- QR Code Result Section with Instant Payment Verification -->
     <div id="qrResult" class="qr-box hidden">
       <div id="qrcode"></div>
-      <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment...</p>
+      <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment from any wallet...</p>
       <div id="invoiceString" class="invoice-text"></div>
       <button class="btn-action" style="margin-top:8px; font-size:12px; padding:7px;" onclick="copyInvoice()">Copy Invoice / Address</button>
     </div>
   </div>
 
-  <!-- 5. TAB CONTENT: WITHDRAW (SEND) -->
+  <!-- 5. TAB: WITHDRAW -->
   <div id="panelWithdraw" class="card hidden">
-    <!-- Asset Selector -->
     <div class="button-group-label">1. Select Asset:</div>
     <div class="btn-grid">
       <button id="withAssetSats" class="choice-btn selected" onclick="selectWithdrawAsset('SATS')">⚡ SATS</button>
@@ -362,11 +348,8 @@
       <button id="withAssetUsdc" class="choice-btn" onclick="selectWithdrawAsset('USDC')">💲 USDC</button>
     </div>
 
-    <!-- Network Selector -->
     <div class="button-group-label">2. Select Network:</div>
-    <div id="withNetworkGrid" class="btn-grid">
-      <!-- Injected dynamically -->
-    </div>
+    <div id="withNetworkGrid" class="btn-grid"></div>
 
     <label style="font-size:11px; color:var(--muted);">Recipient Destination (Lightning Address, BOLT11, or Crypto Address):</label>
     <input type="text" id="withDest" placeholder="e.g. name@speed.app or lnbc..." />
@@ -378,7 +361,7 @@
     <div id="withFeedback" style="font-size:12px; margin-top:8px; text-align:center;"></div>
   </div>
 
-  <!-- 6. TAB CONTENT: HISTORY -->
+  <!-- 6. TAB: HISTORY -->
   <div id="panelHistory" class="card hidden">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
       <div class="button-group-label" style="margin:0;">Recent Transactions</div>
@@ -391,7 +374,7 @@
     </div>
   </div>
 
-  <!-- 7. TAB CONTENT: ADMIN PANEL -->
+  <!-- 7. TAB: ADMIN -->
   <div id="panelAdmin" class="card hidden">
     <div class="button-group-label">👑 Administrator Panel</div>
     <label style="font-size:11px; color:var(--muted);">Speed API Key:</label>
@@ -404,7 +387,7 @@
     <button class="btn-action" style="background:var(--accent-blue);" onclick="adminAddBalance()">➕ Add Balance</button>
   </div>
 
-  <!-- 8. ACTIVITY & NOTIFICATION LOG -->
+  <!-- 8. ACTIVITY LOG -->
   <div class="card">
     <div style="font-size:11px; color:var(--muted); display:flex; justify-content:space-between; align-items:center;">
       <span>📜 Live Activity Log</span>
@@ -415,7 +398,7 @@
     </div>
   </div>
 
-  <!-- 9. PAYMENT SUCCESS MODAL (DISPLAYS FOR ANY EXTERNAL WALLET PAYMENT) -->
+  <!-- 9. GUARANTEED SUCCESS POPUP MODAL -->
   <div id="successModal" class="modal-overlay hidden">
     <div class="modal-card">
       <div style="font-size:48px; margin-bottom:10px;">🎉</div>
@@ -437,7 +420,6 @@
     tg.expand();
   }
 
-  // Parse user info safely
   function getTelegramUserInfo() {
     if (tg?.initDataUnsafe?.user) return tg.initDataUnsafe.user;
     if (tg?.initData) {
@@ -469,7 +451,6 @@
   document.getElementById("displayUsername").innerText = `@${username}`;
   document.getElementById("displayTgId").innerText = tgNumericId || "N/A";
 
-  // Check Admin Access
   if (tgNumericId === MASTER_ADMIN_ID || username === "pheizu") {
     document.getElementById("navTabAdmin").classList.remove("hidden");
   }
@@ -478,7 +459,6 @@
   let activeCheckTimer = null;
   let currentActiveInvoice = "";
 
-  // Logging & Haptics
   function addLog(msg, type = "info") {
     const box = document.getElementById("activityLogs");
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -492,7 +472,6 @@
   function haptic(type = "light") { try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){} }
   function hapticNotification(type = "success") { try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){} }
 
-  // Load Balance
   async function loadBalance() {
     haptic("light");
     try {
@@ -511,12 +490,9 @@
         const totalUsd = ((liveBalances.sats * SAT_TO_USD) + liveBalances.usdt + liveBalances.usdc).toFixed(2);
         document.getElementById("totalUsdDisplay").innerText = `≈ $${totalUsd} USD`;
       }
-    } catch(e) {
-      console.warn("Could not refresh balance:", e);
-    }
+    } catch(e) {}
   }
 
-  // Navigation Tabs Switcher
   function switchNavTab(tab) {
     haptic("light");
     ["Wallet", "Deposit", "Withdraw", "History", "Admin"].forEach(t => {
@@ -535,7 +511,7 @@
   }
 
   // ==========================================
-  // DEPOSIT CONTROLLER
+  // DEPOSIT CONTROLLER (With 💎 TON)
   // ==========================================
   let selectedDepAsset = "SATS";
   let selectedDepNetwork = "lightning";
@@ -567,10 +543,13 @@
         <button class="choice-btn" onclick="setDepPreset(1000)">1,000</button>
         <button class="choice-btn" onclick="setDepPreset(5000)">5,000</button>
       `;
-    } else {
-      selectedDepNetwork = "tron";
+      document.getElementById("depCustomAmount").value = 100;
+    } else if (selectedDepAsset === "USDT") {
+      selectedDepNetwork = "ton";
       netGrid.innerHTML = `
-        <button class="choice-btn selected" onclick="setDepNetwork(this, 'tron')">🔴 Tron (TRC-20)</button>
+        <button class="choice-btn selected" onclick="setDepNetwork(this, 'ton')">💎 TON</button>
+        <button class="choice-btn" onclick="setDepNetwork(this, 'tron')">🔴 Tron (TRC-20)</button>
+        <button class="choice-btn" onclick="setDepNetwork(this, 'lightning')">⚡ Lightning</button>
         <button class="choice-btn" onclick="setDepNetwork(this, 'solana')">🟣 Solana</button>
         <button class="choice-btn" onclick="setDepNetwork(this, 'ethereum')">⛓️ Ethereum</button>
       `;
@@ -580,6 +559,21 @@
         <button class="choice-btn" onclick="setDepPreset(25)">$25</button>
         <button class="choice-btn" onclick="setDepPreset(50)">$50</button>
       `;
+      document.getElementById("depCustomAmount").value = 5;
+    } else {
+      selectedDepNetwork = "solana";
+      netGrid.innerHTML = `
+        <button class="choice-btn selected" onclick="setDepNetwork(this, 'solana')">🟣 Solana</button>
+        <button class="choice-btn" onclick="setDepNetwork(this, 'lightning')">⚡ Lightning</button>
+        <button class="choice-btn" onclick="setDepNetwork(this, 'ethereum')">⛓️ Ethereum</button>
+      `;
+      preGrid.innerHTML = `
+        <button class="choice-btn" onclick="setDepPreset(5)">$5</button>
+        <button class="choice-btn" onclick="setDepPreset(10)">$10</button>
+        <button class="choice-btn" onclick="setDepPreset(25)">$25</button>
+        <button class="choice-btn" onclick="setDepPreset(50)">$50</button>
+      `;
+      document.getElementById("depCustomAmount").value = 5;
     }
   }
 
@@ -594,17 +588,16 @@
     haptic("light");
   }
 
-  // Create Deposit Invoice & Auto-listen for Payments
   async function createDepositInvoice() {
     haptic("medium");
-    const amt = Number(document.getElementById("depCustomAmount").value) || 0;
+    const amt = Number(document.getElementById("depCustomAmount").value) || (selectedDepAsset === "SATS" ? 100 : 5);
     const btn = document.getElementById("btnGenerateInvoice");
 
     btn.disabled = true;
     btn.innerText = "Generating Invoice...";
     if (activeCheckTimer) clearInterval(activeCheckTimer);
 
-    addLog(`Creating ${amt > 0 ? amt : 'open'} ${selectedDepAsset} deposit on ${selectedDepNetwork.toUpperCase()}...`, "info");
+    addLog(`Creating ${amt} ${selectedDepAsset} deposit on ${selectedDepNetwork.toUpperCase()}...`, "info");
 
     try {
       const res = await fetch("/api/wallet?action=create-payment", {
@@ -646,19 +639,22 @@
     }
   }
 
-  // Verification Polling: Instantly detects when ANY external wallet pays
   function startVerificationPolling(paymentId, amount) {
     let attempts = 0;
+    if (activeCheckTimer) clearInterval(activeCheckTimer);
+
     activeCheckTimer = setInterval(async () => {
       attempts++;
-      if (attempts > 120) {
+      if (attempts > 180) {
         clearInterval(activeCheckTimer);
-        addLog("Deposit poll finished. Tap Refresh to check balance.", "info");
+        activeCheckTimer = null;
+        addLog("Deposit poll timed out. Tap Refresh to check balance.", "info");
         return;
       }
 
       try {
-        const res = await fetch(`/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${encodeURIComponent(currentUserId)}&username=${encodeURIComponent(username)}&telegram_id=${encodeURIComponent(tgNumericId)}`);
+        const res = await fetch(`/api/wallet?action=check-status&payment_id=${encodeURIComponent(paymentId)}&user_id=${encodeURIComponent(currentUserId)}&username=${encodeURIComponent(username)}&telegram_id=${encodeURIComponent(tgNumericId)}`);
+        if (!res.ok) return;
         const data = await res.json();
 
         const isPaid = data && (
@@ -668,9 +664,16 @@
 
         if (isPaid) {
           clearInterval(activeCheckTimer);
-          document.getElementById("listenNotice").innerText = "✅ Paid!";
-          const finalAmt = data.amount || amount;
-          addLog(`✅ Received ${finalAmt} ${selectedDepAsset}! Balance updated.`, "success");
+          activeCheckTimer = null;
+
+          const notice = document.getElementById("listenNotice");
+          if (notice) {
+            notice.innerText = "✅ Payment Confirmed!";
+            notice.style.color = "var(--button)";
+          }
+
+          const finalAmt = data.amount || amount || 100;
+          addLog(`✅ Received +${finalAmt} ${selectedDepAsset}! Balance updated.`, "success");
 
           triggerSuccessPopup(finalAmt);
           loadBalance();
@@ -681,27 +684,44 @@
 
   function triggerSuccessPopup(amount) {
     hapticNotification("success");
-    if (tg?.showPopup) {
-      tg.showPopup({
-        title: "⚡ Payment Received!",
-        message: `+${amount} ${selectedDepAsset} credited to your balance!`,
-        buttons: [{ type: "ok", text: "Awesome!" }]
-      });
-    }
 
-    document.getElementById("modalAmountText").innerText = `+${amount} ${selectedDepAsset} Credited!`;
-    document.getElementById("modalBalanceText").innerText = "Your wallet balance has been updated.";
-    document.getElementById("successModal").classList.remove("hidden");
+    try {
+      const modal = document.getElementById("successModal");
+      const amtEl = document.getElementById("modalAmountText");
+      const balEl = document.getElementById("modalBalanceText");
+
+      if (amtEl) amtEl.innerText = `+${amount} ${selectedDepAsset || 'SATS'} Credited!`;
+      if (balEl) balEl.innerText = "Your wallet balance has been updated.";
+      if (modal) {
+        modal.classList.remove("hidden");
+        modal.style.display = "flex";
+      }
+    } catch (err) {}
+
+    try {
+      if (tg && typeof tg.showPopup === "function" && tg.isVersionAtLeast && tg.isVersionAtLeast("6.2")) {
+        tg.showPopup({
+          title: "⚡ Payment Received!",
+          message: `+${amount} ${selectedDepAsset || 'SATS'} credited to your balance!`,
+          buttons: [{ type: "ok", text: "Awesome!" }]
+        });
+      }
+    } catch (e) {}
   }
 
   function closeSuccessModal() {
-    document.getElementById("successModal").classList.add("hidden");
-    document.getElementById("qrResult").classList.add("hidden");
+    const modal = document.getElementById("successModal");
+    if (modal) {
+      modal.classList.add("hidden");
+      modal.style.display = "none";
+    }
+    const qrBox = document.getElementById("qrResult");
+    if (qrBox) qrBox.classList.add("hidden");
     loadBalance();
   }
 
   // ==========================================
-  // WITHDRAWAL CONTROLLER
+  // WITHDRAWAL CONTROLLER (With 💎 TON)
   // ==========================================
   let selectedWithAsset = "SATS";
   let selectedWithNetwork = "lightning";
@@ -725,11 +745,20 @@
         <button class="choice-btn selected" onclick="setWithNetwork(this, 'lightning')">⚡ Lightning</button>
         <button class="choice-btn" onclick="setWithNetwork(this, 'onchain')">₿ On-Chain</button>
       `;
-    } else {
-      selectedWithNetwork = "tron";
+    } else if (selectedWithAsset === "USDT") {
+      selectedWithNetwork = "ton";
       netGrid.innerHTML = `
-        <button class="choice-btn selected" onclick="setWithNetwork(this, 'tron')">🔴 Tron (TRC-20)</button>
+        <button class="choice-btn selected" onclick="setWithNetwork(this, 'ton')">💎 TON</button>
+        <button class="choice-btn" onclick="setWithNetwork(this, 'tron')">🔴 Tron (TRC-20)</button>
+        <button class="choice-btn" onclick="setWithNetwork(this, 'lightning')">⚡ Lightning</button>
         <button class="choice-btn" onclick="setWithNetwork(this, 'solana')">🟣 Solana</button>
+        <button class="choice-btn" onclick="setWithNetwork(this, 'ethereum')">⛓️ Ethereum</button>
+      `;
+    } else {
+      selectedWithNetwork = "solana";
+      netGrid.innerHTML = `
+        <button class="choice-btn selected" onclick="setWithNetwork(this, 'solana')">🟣 Solana</button>
+        <button class="choice-btn" onclick="setWithNetwork(this, 'lightning')">⚡ Lightning</button>
         <button class="choice-btn" onclick="setWithNetwork(this, 'ethereum')">⛓️ Ethereum</button>
       `;
     }
@@ -791,7 +820,7 @@
   }
 
   // ==========================================
-  // TRANSACTION HISTORY CONTROLLER
+  // HISTORY & ADMIN
   // ==========================================
   async function loadHistory() {
     const list = document.getElementById("historyList");
@@ -826,9 +855,6 @@
     }
   }
 
-  // ==========================================
-  // ADMIN PANEL CONTROLLER
-  // ==========================================
   async function saveAdminSpeedKey() {
     const key = document.getElementById("adminSpeedKeyInput").value.trim();
     if (!key) return alert("Enter Speed Key");
@@ -844,7 +870,6 @@
     alert(`Success: Credited +${amt} SATS to @${target}`);
   }
 
-  // Utilities
   function copyInvoice() {
     if (!currentActiveInvoice) return;
     navigator.clipboard.writeText(currentActiveInvoice);
@@ -857,7 +882,6 @@
     alert("Lightning Address copied!\n" + myLightningAddress);
   }
 
-  // Initial Boot
   renderDepositNetworks();
   renderWithdrawNetworks();
   loadBalance();
