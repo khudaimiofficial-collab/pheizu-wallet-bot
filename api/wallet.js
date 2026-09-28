@@ -460,7 +460,6 @@ module.exports = async function handler(req, res) {
           }
         };
 
-        // For open-amount invoices, try amount: 0; otherwise pass the real amount
         if (isOpenAmount) {
           speedBody.amount = 0;
         } else {
@@ -507,10 +506,14 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      const txId = paymentData?.id || `py_${Date.now()}`;
+      // Store ALL possible Speed IDs so check-status can query whichever endpoint is correct
+      const txId = paymentData?.id || paymentData?.payrequest_id || paymentData?.invoice_id || `py_${Date.now()}`;
 
       await db.collection("invoices").doc(txId).set({
         id: txId,
+        speed_payment_id: paymentData?.id || null,
+        speed_payrequest_id: paymentData?.payrequest_id || null,
+        speed_invoice_id: paymentData?.invoice_id || null,
         invoice: invoiceString,
         payment_type: target.type,
         user_id: uid,
@@ -529,6 +532,7 @@ module.exports = async function handler(req, res) {
         `• User: @${uid}\n` +
         `• Amount: ${logAmount}\n` +
         `• Network: ${payMethod.toUpperCase()}\n` +
+        `• Type: ${target.type}\n` +
         `• TxID: <code>${txId}</code>`
       );
 
@@ -545,7 +549,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 4. CHECK DEPOSIT STATUS (SPECIFIC INVOICE CHECK)
+    // 4. CHECK DEPOSIT STATUS (MULTI-ENDPOINT LOOKUP)
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -571,14 +575,16 @@ module.exports = async function handler(req, res) {
       const curr = invData?.target_currency || "SATS";
       const creditTarget = invData?.user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
       const targetTgId = invData?.telegram_id || telegram_id;
+      const storedInvoice = invData?.invoice || "";
+      const payMethod = invData?.payment_method || "lightning";
 
       const wallet = await findUserWallet([creditTarget, targetTgId, user_id]);
 
       // Already credited earlier — return cached result
       if (invData && invData.is_paid) {
-        return res.status(200).json({ 
-          success: true, 
-          is_paid: true, 
+        return res.status(200).json({
+          success: true,
+          is_paid: true,
           tx_id: payment_id,
           amount: sats,
           balance: wallet ? wallet.balance : 0,
@@ -587,44 +593,97 @@ module.exports = async function handler(req, res) {
       }
 
       const apiKey = await getSpeedApiKey();
-      const speedId = invData?.id || payment_id;
 
-      // Try payments endpoint first
-      let { ok: payOk, data: payment } = await speedRequest(`payments/${speedId}`, "GET", null, apiKey);
+      // Prefer the ID that matches the invoice type
+      const speedId =
+        invData?.speed_payrequest_id ||
+        invData?.speed_invoice_id ||
+        invData?.speed_payment_id ||
+        invData?.id ||
+        payment_id;
 
-      // Fallback: try payrequests endpoint (for open-amount invoices)
-      if (!payOk || !payment) {
-        const prRes = await speedRequest(`payrequests/${speedId}`, "GET", null, apiKey);
-        if (prRes.ok && prRes.data) payment = prRes.data;
+      // Try ALL possible Speed endpoints — different invoice types live under different routes
+      let payment = null;
+      const endpointsToTry = [];
+
+      if (payMethod === "lightning") {
+        endpointsToTry.push(`payrequests/${speedId}`);
+        endpointsToTry.push(`invoices/${speedId}`);
+        endpointsToTry.push(`lightning_invoices/${speedId}`);
+        endpointsToTry.push(`payments/${speedId}`);
+      } else {
+        endpointsToTry.push(`payments/${speedId}`);
+        endpointsToTry.push(`invoices/${speedId}`);
+        endpointsToTry.push(`payrequests/${speedId}`);
       }
 
-      // Check multiple possible fields for status
+      for (const ep of endpointsToTry) {
+        try {
+          const r = await speedRequest(ep, "GET", null, apiKey);
+          if (r.ok && r.data && (r.data.id || r.data.status || r.data.state || r.data.paid_at)) {
+            payment = r.data;
+            console.log(`[check-status] Found payment via ${ep}`);
+            break;
+          }
+        } catch (e) {
+          console.warn(`[check-status] ${ep} failed:`, e.message);
+        }
+      }
+
+      // FALLBACK: search Speed by BOLT11 invoice string if ID lookups failed
+      if (!payment && storedInvoice) {
+        try {
+          const shortInvoice = storedInvoice.substring(0, 60);
+          const search = await speedRequest(`payments?search=${encodeURIComponent(shortInvoice)}`, "GET", null, apiKey);
+          if (search.ok && search.data) {
+            const list = search.data.data || search.data.items || search.data.results || [];
+            if (Array.isArray(list) && list.length > 0) {
+              payment = list[0];
+              console.log(`[check-status] Found payment via search fallback`);
+            }
+          }
+        } catch (e) {
+          console.warn("[check-status] Search fallback failed:", e.message);
+        }
+      }
+
+      // Interpret whatever Speed returned
       const rawStatus = String(
         payment?.status ||
         payment?.state ||
         payment?.payment_status ||
         payment?.payment?.status ||
+        payment?.invoice?.status ||
         ""
       ).toLowerCase();
 
-      // Broad list of statuses that indicate payment
       const paidStatuses = ["paid", "succeeded", "successful", "completed", "confirmed", "settled", "complete"];
       const confirmingStatuses = ["confirming", "processing", "pending", "detected", "unconfirmed", "in_progress", "in-progress"];
 
       const isPaid = paidStatuses.includes(rawStatus);
       const isConfirming = confirmingStatuses.includes(rawStatus);
 
-      // Additional check: Speed might report paid_at or amount_paid
-      const hasPaidFlag = payment?.paid === true || payment?.is_paid === true || !!payment?.paid_at;
-      const amountPaid = Number(payment?.amount_paid || payment?.amount_received || payment?.amount || 0);
+      // Check multiple "paid" indicators
+      const hasPaidFlag =
+        payment?.paid === true ||
+        payment?.is_paid === true ||
+        !!payment?.paid_at ||
+        !!payment?.completed_at ||
+        !!payment?.settled_at;
 
-      // If Speed says paid OR has paid flag → credit the wallet
+      const amountPaid = Number(
+        payment?.amount_paid ||
+        payment?.amount_received ||
+        payment?.paid_amount ||
+        payment?.amount ||
+        0
+      );
+
+      // If Speed says paid OR has a paid flag → credit wallet
       if ((isPaid || hasPaidFlag) && wallet) {
-        // Use the actual paid amount if available, otherwise fall back to stored amount
         let finalSats = amountPaid > 0 ? amountPaid : sats;
 
-        // If it's still 0 (open-amount invoice just paid but amount not yet reflected),
-        // return "processing" without crediting — user should re-check in a few seconds
+        // Open-amount invoice paid but Speed hasn't finalized amount yet
         if (finalSats <= 0) {
           return res.status(200).json({
             success: true,
@@ -700,8 +759,8 @@ module.exports = async function handler(req, res) {
           `• TxID: <code>${payment_id}</code>`
         );
 
-        return res.status(200).json({ 
-          success: true, 
+        return res.status(200).json({
+          success: true,
           is_paid: true,
           tx_id: payment_id,
           amount: finalSats,
@@ -710,13 +769,13 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Return appropriate status
+      // Not paid — return whatever status we have
       let responseStatus = "pending";
       if (isConfirming) responseStatus = "confirming";
       else if (rawStatus) responseStatus = rawStatus;
 
-      return res.status(200).json({ 
-        success: true, 
+      return res.status(200).json({
+        success: true,
         is_paid: false,
         status: responseStatus,
         tx_id: payment_id,
