@@ -492,14 +492,12 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 }
 
 // ----------------------------------------------------
-// CALLBACK ACTION: CHECK DEPOSIT STATUS BUTTON
+// CALLBACK ACTION: CHECK DEPOSIT STATUS (MODAL POPUP DIALOG)
 // ----------------------------------------------------
 bot.action(/^check_dep:(.+)$/, async (ctx) => {
   const paymentId = ctx.match[1];
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   const chatId = ctx.from.id;
-
-  await ctx.answerCbQuery("Checking payment status...").catch(() => {});
 
   try {
     const res = await fetch(`${APP_URL}/api/wallet?action=check-status&payment_id=${paymentId}&user_id=${userId}&telegram_id=${chatId}`);
@@ -507,18 +505,35 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
 
     if (data && data.is_paid) {
       stopDepositWatcher(chatId);
-      await ctx.answerCbQuery("✅ Payment Confirmed! Your balance has been credited.", { show_alert: true }).catch(() => {});
+      const amtStr = data.amount ? `+${data.amount} ${data.currency || "SATS"}` : "Funds";
 
+      // 1. POPUP ALERT: SUCCESS
+      await ctx.answerCbQuery(
+        `🎉 Payment Received!\n\n${amtStr} has been credited to your balance!\n\nTap OK to close.`,
+        { show_alert: true }
+      );
+
+      // 2. Update inline button to Confirmed
       await ctx.editMessageReplyMarkup(
         Markup.inlineKeyboard([
           [Markup.button.callback("✅ Payment Confirmed", "gateway_back")]
         ]).reply_markup
       ).catch(() => {});
     } else {
-      await ctx.answerCbQuery("⏳ Payment not detected yet. Please ensure the transfer is complete.", { show_alert: true }).catch(() => {});
+      const statusText = (data && data.status) ? String(data.status).toUpperCase() : "PENDING";
+
+      // 1. POPUP ALERT: PENDING
+      await ctx.answerCbQuery(
+        `⏳ Payment Status: ${statusText}\n\nPayment has not been detected yet.\n\nPlease complete your transfer and tap Check Status again.`,
+        { show_alert: true }
+      );
     }
   } catch (err) {
-    await ctx.answerCbQuery("⚠️ Error checking status: " + err.message, { show_alert: true }).catch(() => {});
+    // 1. POPUP ALERT: ERROR
+    await ctx.answerCbQuery(
+      `⚠️ Error Checking Status:\n\n${err.message}`,
+      { show_alert: true }
+    ).catch(() => {});
   }
 });
 
@@ -852,7 +867,6 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+):([^:]+)$/, async (ctx) => {
       [Markup.button.callback("« Back to Networks", backCallback)]
     ]);
 
-    // Safely handles deletion whether clicked from text or photo message
     try {
       await ctx.editMessageText(promptText, { parse_mode: "HTML", ...promptKeyboard });
     } catch (e) {
@@ -1257,7 +1271,7 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  // B. CUSTOM DEPOSIT AMOUNT INPUT
+  // B. CUSTOM DEPOSIT AMOUNT INPUT (Generates Invoice for Exact Amount)
   if (session.step === "awaiting_deposit_custom_amount") {
     const amount = Number(text);
     const minAmount = session.min_amount || (session.target_currency === "SATS" ? 1 : 0.5);
