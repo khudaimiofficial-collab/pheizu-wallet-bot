@@ -360,25 +360,36 @@ async function isUserBanned(userId, numericId) {
 }
 
 // ----------------------------------------------------
-// TWO-CHOICE MENU: SPECIFIC AMOUNT OR OPEN/QUICK DEPOSIT
+// DEPOSIT CHOICE MENU (Specific Amount vs Open Address)
 // ----------------------------------------------------
 function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, minAmount, networkLabel }) {
   const minText = targetCurrency === "SATS" ? `${minAmount.toLocaleString()} SATS` : `${minAmount} ${targetCurrency}`;
   const backAssetCallback = targetCurrency === "SATS" ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
+  let buttons = [
+    [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}:${minAmount}`)]
+  ];
+
+  if (paymentMethod === "lightning") {
+    buttons.push([Markup.button.callback("⚡ Lightning Address (Any Amount)", `dep_opt:lnaddr:SATS:lightning:1`)]);
+    buttons.push([Markup.button.callback("⚡ 1-SAT Test Invoice", `dep_opt:open:SATS:lightning:1`)]);
+  } else {
+    buttons.push([Markup.button.callback(`⚡ Deposit Address (Min: ${minText})`, `dep_opt:open:${targetCurrency}:${paymentMethod}:${minAmount}`)]);
+  }
+
+  buttons.push([Markup.button.callback("« Back to Networks", backAssetCallback)]);
+
   return ctx.editMessageText(
     `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
-    `Choose how you would like to generate your deposit:\n\n` +
-    `1️⃣ <b>Enter Specific Amount:</b> Generate an invoice for your exact desired amount (e.g. 5,000 sats or 20 USDT).\n` +
-    `2️⃣ <b>Quick Invoice / Any Amount:</b> Generate standard deposit details immediately.\n\n` +
-    `📌 <b>Minimum Deposit:</b> <code>${minText}</code>`,
+    `Choose your deposit method:\n\n` +
+    `1️⃣ <b>Enter Specific Amount:</b> Generate a custom invoice for your exact amount (e.g. 50, 500, 5,000 SATS).\n` +
+    (paymentMethod === "lightning"
+      ? `2️⃣ <b>Lightning Address:</b> Send any amount directly to your Lightning Address without an invoice amount restriction.\n`
+      : `2️⃣ <b>Deposit Address:</b> Generate a direct address to send funds to.\n`) +
+    `\n📌 <b>Minimum Deposit:</b> <code>${minText}</code>`,
     {
       parse_mode: "HTML",
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}:${minAmount}`)],
-        [Markup.button.callback("⚡ Quick Invoice / Any Amount", `dep_opt:open:${targetCurrency}:${paymentMethod}:${minAmount}`)],
-        [Markup.button.callback("« Back to Networks", backAssetCallback)]
-      ])
+      ...Markup.inlineKeyboard(buttons)
     }
   );
 }
@@ -400,19 +411,19 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
   }
 
   try {
-    const payload = {
-      amount: amount || minAmount, // Always passes a valid number so Speed never rejects with 400 Invalid Amount
-      target_currency: targetCurrency,
-      payment_method: paymentMethod,
-      user_id: userId,
-      username: userId,
-      telegram_id: String(ctx.from.id)
-    };
+    const finalAmount = amount || minAmount;
 
     const res = await fetch(`${APP_URL}/api/wallet?action=create-payment`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        amount: finalAmount,
+        target_currency: targetCurrency,
+        payment_method: paymentMethod,
+        user_id: userId,
+        username: userId,
+        telegram_id: String(ctx.from.id)
+      })
     });
 
     const data = await res.json();
@@ -422,10 +433,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 
     const txId = data.tx_id || data.id;
     const isLightning = paymentMethod === "lightning" || data.invoice.toLowerCase().startsWith("lnbc");
-    
-    // Pure address / invoice without any URI amount locking
-    const qrTarget = data.invoice;
-    const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(qrTarget)}&size=400&dark=00e676&light=0b0e14&margin=2&ecLevel=Q&centerImageUrl=https%3A%2F%2Fcdn-icons-png.flaticon.com%2F512%2F1198%2F1198305.png&centerImageSizeRatio=0.22`;
+    const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(data.invoice)}&size=400&dark=00e676&light=0b0e14&margin=2&ecLevel=Q&centerImageUrl=https%3A%2F%2Fcdn-icons-png.flaticon.com%2F512%2F1198%2F1198305.png&centerImageSizeRatio=0.22`;
 
     const minDepositNotice = targetCurrency === "SATS"
       ? `${minAmount.toLocaleString()} SATS`
@@ -433,33 +441,20 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 
     let caption = "";
     if (isLightning) {
-      if (isCustomAmount) {
-        caption = `⚡ <b>Lightning Deposit Details</b>\n\n` +
-          `💰 <b>Amount:</b> <code>${Number(amount).toLocaleString()} ${targetCurrency}</code>\n` +
-          `🌐 <b>Network:</b> Lightning Network (${targetCurrency})\n` +
-          `📌 <b>Minimum Deposit:</b> <code>${minDepositNotice}</code>\n\n` +
-          `<b>Invoice (tap to copy):</b>\n<code>${data.invoice}</code>\n\n` +
-          `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
-          `<i>Scan QR or copy invoice to pay. Waiting for payment...</i>`;
-      } else {
-        caption = `⚡ <b>Lightning Deposit (Any Amount)</b>\n\n` +
-          `🌐 <b>Network:</b> Lightning Network (${targetCurrency})\n` +
-          `📌 <b>Minimum Deposit:</b> <code>${minDepositNotice}</code>\n\n` +
-          `⚡ <b>Lightning Address (Send Any Amount):</b>\n<code>${userId}@${DOMAIN}</code>\n\n` +
-          `<b>Quick Invoice:</b>\n<code>${data.invoice}</code>\n\n` +
-          `💡 <i>Tip: For a custom invoice amount, choose 'Enter Specific Amount'. To send any amount directly, use your Lightning Address above.</i>\n\n` +
-          `🆔 <b>TxID:</b> <code>${txId}</code>`;
-      }
+      caption = `⚡ <b>Lightning Deposit Invoice Ready</b>\n\n` +
+        `💰 <b>Amount:</b> <code>${Number(finalAmount).toLocaleString()} ${targetCurrency}</code>\n` +
+        `🌐 <b>Network:</b> Lightning Network (${targetCurrency})\n` +
+        `📌 <b>Minimum Deposit:</b> <code>${minDepositNotice}</code>\n\n` +
+        `<b>Invoice (tap to copy):</b>\n<code>${data.invoice}</code>\n\n` +
+        `⚡ <b>Lightning Address:</b> <code>${userId}@${DOMAIN}</code>\n` +
+        `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
+        `<i>Scan QR or copy invoice to pay. Waiting for payment...</i>`;
     } else {
-      const amtLine = isCustomAmount
-        ? `💰 <b>Expected Amount:</b> <code>${amount} ${targetCurrency}</code>\n`
-        : ``;
-
       caption = `📥 <b>${targetCurrency} Deposit Details</b>\n\n` +
-        amtLine +
+        (isCustomAmount ? `💰 <b>Expected Amount:</b> <code>${finalAmount} ${targetCurrency}</code>\n` : ``) +
         `🌐 <b>Network:</b> ${networkLabel}\n` +
         `📌 <b>Minimum Deposit:</b> <code>${minDepositNotice}</code>\n\n` +
-        `👉 <b>Deposit Address (Send Any Amount):</b>\n<code>${data.invoice}</code>\n\n` +
+        `👉 <b>Deposit Address (tap to copy):</b>\n<code>${data.invoice}</code>\n\n` +
         `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
         `<i>Scan QR or transfer funds to the address above.</i>`;
     }
@@ -477,14 +472,15 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       ])
     });
 
-    startDepositWatcher(ctx.from.id, txId, amount || minAmount, userId);
+    startDepositWatcher(ctx.from.id, txId, finalAmount, userId);
   } catch (err) {
     const backCallback = targetCurrency === "SATS" ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
     await ctx.reply(
-      `❌ <b>Deposit Notice:</b> ${err.message}`,
+      `❌ <b>Deposit Error:</b> ${err.message}`,
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
+          [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}:${minAmount}`)],
           [Markup.button.callback("« Back to Networks", backCallback)]
         ])
       }
@@ -521,6 +517,34 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
   } catch (err) {
     await ctx.answerCbQuery("⚠️ Error checking status: " + err.message, { show_alert: true }).catch(() => {});
   }
+});
+
+// ----------------------------------------------------
+// CALLBACK ACTION: LIGHTNING ADDRESS DISPLAY
+// ----------------------------------------------------
+bot.action("dep_opt:lnaddr:SATS:lightning:1", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
+  const lnAddress = `${userId}@${DOMAIN}`;
+  const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(`lightning:${lnAddress}`)}&size=400&dark=00e676&light=0b0e14&margin=2&ecLevel=Q`;
+
+  await ctx.deleteMessage().catch(() => {});
+  await ctx.replyWithPhoto(qrUrl, {
+    caption:
+      `⚡ <b>Your Lightning Address (Accepts ANY Amount)</b>\n\n` +
+      `<code>${lnAddress}</code>\n\n` +
+      `👉 <b>How to pay any custom amount:</b>\n` +
+      `1. Copy your Lightning Address above.\n` +
+      `2. Open your Lightning wallet (Cash App, Binance, Strike, Phoenix, Wallet of Satoshi, Blink, etc.).\n` +
+      `3. Paste this address and <b>enter any amount you want to send</b> (1 sat to millions of sats)!\n\n` +
+      `📌 <b>Minimum Deposit:</b> 1 SAT\n` +
+      `⚡ <i>Funds credit to your balance instantly upon payment.</i>`,
+    parse_mode: "HTML",
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback("🔢 Generate Specific Invoice Instead", "dep_opt:amt:SATS:lightning:1")],
+      [Markup.button.callback("🏠 Main Menu", "gateway_back")]
+    ])
+  });
 });
 
 // ----------------------------------------------------
@@ -747,7 +771,7 @@ bot.action("dep_net_sats_onchain", async (ctx) => {
   });
 });
 
-// USDT Networks -> Choice Menu (Min: 0.5 USDT)
+// USDT Networks -> Choice Menu
 bot.action("dep_net_usdt_lightning", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   return showDepositChoiceMenu(ctx, { targetCurrency: "USDT", paymentMethod: "lightning", minAmount: 0.5, networkLabel: "Lightning" });
@@ -773,7 +797,7 @@ bot.action("dep_net_usdt_ton", async (ctx) => {
   return showDepositChoiceMenu(ctx, { targetCurrency: "USDT", paymentMethod: "ton", minAmount: 0.5, networkLabel: "TON" });
 });
 
-// USDC Networks -> Choice Menu (Min: 0.5 USDC)
+// USDC Networks -> Choice Menu
 bot.action("dep_net_usdc_lightning", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   return showDepositChoiceMenu(ctx, { targetCurrency: "USDC", paymentMethod: "lightning", minAmount: 0.5, networkLabel: "Lightning" });
@@ -790,7 +814,7 @@ bot.action("dep_net_usdc_solana", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// CALLBACK ACTIONS: OPTION 1 (CUSTOM) VS OPTION 2 (OPEN/QUICK)
+// CALLBACK ACTIONS: OPTION 1 (CUSTOM AMOUNT) VS OPTION 2 (DIRECT)
 // ----------------------------------------------------
 bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+):([^:]+)$/, async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
@@ -801,7 +825,7 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+):([^:]+)$/, async (ctx) => {
   const networkLabel = paymentMethod === "lightning" ? "Lightning Network" : paymentMethod.toUpperCase();
 
   if (mode === "amt") {
-    // Option 1: User enters custom amount
+    // Option 1: Enter exact custom amount
     await setSession(ctx.from.id, {
       step: "awaiting_deposit_custom_amount",
       target_currency: targetCurrency,
@@ -818,7 +842,7 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+):([^:]+)$/, async (ctx) => {
       `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
       `Please reply with the exact amount of <b>${targetCurrency}</b> you want to deposit:\n` +
       `📌 <b>Minimum:</b> <code>${minText}</code>\n\n` +
-      `<i>Example: <code>${exampleAmt}</code></i>\n\n` +
+      `<i>Example: <code>50</code>, <code>100</code>, <code>${exampleAmt}</code></i>\n\n` +
       `<i>Type /cancel to abort at any time.</i>`,
       {
         parse_mode: "HTML",
@@ -828,7 +852,7 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+):([^:]+)$/, async (ctx) => {
       }
     );
   } else {
-    // Option 2: Generate Quick invoice without locking to fixed custom amount
+    // Option 2: Direct generation with minimum base
     return handleGenerateDeposit(ctx, {
       targetCurrency,
       paymentMethod,
@@ -1225,7 +1249,7 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  // B. CUSTOM DEPOSIT AMOUNT INPUT
+  // B. CUSTOM DEPOSIT AMOUNT INPUT (Generates Invoice for Exact Amount)
   if (session.step === "awaiting_deposit_custom_amount") {
     const amount = Number(text);
     const minAmount = session.min_amount || (session.target_currency === "SATS" ? 1 : 0.5);
