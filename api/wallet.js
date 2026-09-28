@@ -337,7 +337,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, history: list.slice(0, 10) });
     }
 
-    // 3. CREATE DEPOSIT INVOICE
+    // 3. CREATE DEPOSIT INVOICE (STRICTLY PRESERVES AMOUNT 0)
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
@@ -354,19 +354,19 @@ module.exports = async function handler(req, res) {
       }
 
       const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
-      const isOpenAmount = !amount || Number(amount) <= 0;
+      const requestedAmount = Number(amount);
+      const isOpenAmount = !requestedAmount || requestedAmount <= 0;
 
       let paymentData = null;
       let ok = false;
       let status = 400;
       let sourceEndpoint = "payments";
 
-      // A. Open Amount Lightning -> Create Payrequest
+      // A. Open Amount Lightning -> Create Payrequest (NO payment_methods in body)
       if (isOpenAmount && payMethod === "lightning") {
         const prRes = await speedRequest("payrequests", "POST", {
           currency: baseCurr,
           target_currency: targetCurr,
-          payment_methods: ["lightning"],
           description: `Pheizu deposit for ${uid}`
         }, apiKey);
 
@@ -395,13 +395,13 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // C. Specific Amount -> Create Payment
+      // C. Specific Amount (or Fallback)
       if (!ok) {
         const speedBody = {
           currency: baseCurr,
           target_currency: targetCurr,
           payment_methods: [payMethod],
-          amount: Number(amount) || 100,
+          amount: isOpenAmount ? 0 : requestedAmount, // 🔥 NEVER defaults to 100!
           metadata: {
             user_id: uid,
             telegram_id: telegram_id ? String(telegram_id) : ""
@@ -444,7 +444,7 @@ module.exports = async function handler(req, res) {
         target_currency: targetCurr,
         payment_method: payMethod,
         telegram_id: numericChatId,
-        amount: isOpenAmount ? 0 : Number(amount),
+        amount: isOpenAmount ? 0 : requestedAmount,
         is_open_amount: isOpenAmount,
         is_paid: false,
         notified: false,
@@ -457,13 +457,13 @@ module.exports = async function handler(req, res) {
         tx_id: txId,
         payment_type: target.type,
         target_currency: targetCurr,
-        amount: isOpenAmount ? 0 : Number(amount),
+        amount: isOpenAmount ? 0 : requestedAmount, // Returns 0 for open amount
         is_open_amount: isOpenAmount,
         invoice: invoiceString
       });
     }
 
-    // 4. CHECK DEPOSIT STATUS — INSPECTS BOTH PAYMENTS & PAYREQUESTS
+    // 4. CHECK DEPOSIT STATUS
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
       if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
@@ -517,21 +517,19 @@ module.exports = async function handler(req, res) {
 
       let payment = null;
 
-      // 🔥 STEP 1: If it's a PayRequest, fetch from /payrequests/:id/payments
+      // Check /payrequests/:id/payments
       if (speedId.startsWith("pr_") || invData?.speed_source === "payrequests" || invData?.speed_payrequest_id) {
         const prId = invData?.speed_payrequest_id || speedId;
         try {
           const prPayRes = await speedRequest(`payrequests/${prId}/payments`, "GET", null, apiKey);
           if (prPayRes.ok && prPayRes.data) {
             const list = prPayRes.data.data || prPayRes.data.items || (Array.isArray(prPayRes.data) ? prPayRes.data : []);
-            if (list.length > 0) {
-              payment = list[0]; // Active/latest payment for this PayRequest
-            }
+            if (list.length > 0) payment = list[0];
           }
         } catch (e) {}
       }
 
-      // 🔥 STEP 2: If it's a Payment Address, check /payment-addresses/:id/payments
+      // Check /payment-addresses/:id/payments
       if (!payment && (speedId.startsWith("pa_") || invData?.speed_source === "payment-addresses")) {
         try {
           const paRes = await speedRequest(`payment-addresses/${speedId}/payments`, "GET", null, apiKey);
@@ -542,7 +540,7 @@ module.exports = async function handler(req, res) {
         } catch (e) {}
       }
 
-      // 🔥 STEP 3: Fallback check standard payments endpoint
+      // Check /payments/:id
       if (!payment) {
         const endpointsToTry = [
           `payments/${speedId}`,
@@ -561,7 +559,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // 🔥 STEP 4: Fallback search by invoice string
+      // Search fallback
       if (!payment && storedInvoice) {
         try {
           const search = await speedRequest(`payments?search=${encodeURIComponent(storedInvoice.substring(0, 60))}`, "GET", null, apiKey);
@@ -604,10 +602,9 @@ module.exports = async function handler(req, res) {
         sats ||
         0
       );
-      if (amountPaid <= 0 && sats > 0) amountPaid = sats;
 
       if (isPaid) {
-        let finalSats = amountPaid > 0 ? amountPaid : (sats > 0 ? sats : 100);
+        let finalSats = amountPaid > 0 ? amountPaid : (sats > 0 ? sats : 0);
         const finalCurr = curr || payment?.target_currency || "SATS";
 
         let updatedBal = 0;
@@ -655,7 +652,6 @@ module.exports = async function handler(req, res) {
           updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
         }
 
-        // 🔥 Dispatches message directly to Telegram Bot Chat
         if (targetNumericChatId) {
           await notifyTelegramUser(
             targetNumericChatId,
