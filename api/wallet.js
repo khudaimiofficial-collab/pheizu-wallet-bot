@@ -64,6 +64,7 @@ async function notifyTelegramUser(telegramId, message) {
 }
 
 // Helper: Forward Wallet Events to Telegram Logs Channel
+// (Only called on SUCCESS — deposits and withdrawals)
 async function forwardToLogsChannel(text) {
   if (!BOT_TOKEN) return;
   try {
@@ -91,7 +92,7 @@ async function forwardToLogsChannel(text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: channelId,
-        text: `📋 <b>Wallet Event:</b>\n\n${text}`,
+        text: text,
         parse_mode: "HTML"
       })
     });
@@ -103,7 +104,7 @@ async function forwardToLogsChannel(text) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: channelId,
-          text: `📋 Wallet Event:\n\n${text.replace(/<[^>]*>?/gm, "")}`
+          text: text.replace(/<[^>]*>?/gm, "")
         })
       });
     }
@@ -432,6 +433,7 @@ module.exports = async function handler(req, res) {
       let paymentData = null;
       let ok = false;
       let status = 400;
+      let sourceEndpoint = "payments";
 
       // When no custom amount is set, try Speed's payrequests for an open-amount invoice
       if (isOpenAmount) {
@@ -445,6 +447,7 @@ module.exports = async function handler(req, res) {
           ok = true;
           status = prRes.status;
           paymentData = prRes.data;
+          sourceEndpoint = "payrequests";
         }
       }
 
@@ -470,6 +473,7 @@ module.exports = async function handler(req, res) {
         ok = res1.ok;
         status = res1.status;
         paymentData = res1.data;
+        sourceEndpoint = "payments";
 
         if (!ok && (status === 400 || status === 422)) {
           const retry = await speedRequest("payments", "POST", {
@@ -514,6 +518,7 @@ module.exports = async function handler(req, res) {
         speed_payment_id: paymentData?.id || null,
         speed_payrequest_id: paymentData?.payrequest_id || null,
         speed_invoice_id: paymentData?.invoice_id || null,
+        speed_source: sourceEndpoint,
         invoice: invoiceString,
         payment_type: target.type,
         user_id: uid,
@@ -526,15 +531,7 @@ module.exports = async function handler(req, res) {
         created_at: new Date().toISOString()
       }, { merge: true });
 
-      const logAmount = isOpenAmount ? `Open Amount (${targetCurr})` : `${amount} ${targetCurr}`;
-      await forwardToLogsChannel(
-        `📥 <b>Deposit Invoice Created</b>\n` +
-        `• User: @${uid}\n` +
-        `• Amount: ${logAmount}\n` +
-        `• Network: ${payMethod.toUpperCase()}\n` +
-        `• Type: ${target.type}\n` +
-        `• TxID: <code>${txId}</code>`
-      );
+      // NO LOG here — only success logs are sent to the channel
 
       return res.status(200).json({
         success: true,
@@ -679,7 +676,7 @@ module.exports = async function handler(req, res) {
         0
       );
 
-      // If Speed says paid OR has a paid flag → credit wallet
+      // If Speed says paid OR has a paid flag → credit wallet IMMEDIATELY
       if ((isPaid || hasPaidFlag) && wallet) {
         let finalSats = amountPaid > 0 ? amountPaid : sats;
 
@@ -741,6 +738,7 @@ module.exports = async function handler(req, res) {
 
         const updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
 
+        // Notify user
         if (targetTgId) {
           await notifyTelegramUser(
             targetTgId,
@@ -751,8 +749,9 @@ module.exports = async function handler(req, res) {
           );
         }
 
+        // ✅ ONLY SUCCESS LOG — Deposit Confirmed
         await forwardToLogsChannel(
-          `📥 <b>Deposit Confirmed</b>\n` +
+          `✅ <b>Deposit Successful</b>\n` +
           `• User: @${wallet.id}\n` +
           `• Amount: +${finalSats} ${finalCurr}\n` +
           `• New Balance: ${updatedBal.toLocaleString()} sats\n` +
@@ -769,7 +768,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Not paid — return whatever status we have
+      // Not paid yet — return status so watcher retries
       let responseStatus = "pending";
       if (isConfirming) responseStatus = "confirming";
       else if (rawStatus) responseStatus = rawStatus;
@@ -935,8 +934,9 @@ module.exports = async function handler(req, res) {
           );
         }
 
+        // ✅ SUCCESS LOG — Internal Transfer
         await forwardToLogsChannel(
-          `🔄 <b>Internal Transfer Completed</b>\n` +
+          `✅ <b>Internal Transfer Successful</b>\n` +
           `• From: @${senderWallet.id}\n` +
           `• To: @${recipientWallet.id}\n` +
           `• Amount: ${sendAmount} ${curr}\n` +
@@ -1006,17 +1006,8 @@ module.exports = async function handler(req, res) {
       }
 
       if (!ok && status !== 200 && status !== 201) {
+        // ❌ NO failure log — only success logs to channel
         const errorDetail = extractErrorMessage(sendData, status);
-
-        await forwardToLogsChannel(
-          `⚠️ <b>Withdrawal Failed</b>\n` +
-          `• User: @${senderWallet.id}\n` +
-          `• Amount: ${sendAmount} ${curr}\n` +
-          `• Network: ${method.toUpperCase()}\n` +
-          `• Destination: <code>${dest}</code>\n` +
-          `• Error: <code>${errorDetail}</code>`
-        );
-
         return res.status(status || 400).json({
           success: false,
           error: `[Speed ${status}] ${errorDetail}`
@@ -1056,8 +1047,9 @@ module.exports = async function handler(req, res) {
 
       await batch.commit();
 
+      // ✅ ONLY SUCCESS LOG — Withdrawal Completed
       await forwardToLogsChannel(
-        `📤 <b>Withdrawal Completed</b>\n` +
+        `✅ <b>Withdrawal Successful</b>\n` +
         `• User: @${senderWallet.id}\n` +
         `• Amount: -${sendAmount} ${curr}\n` +
         `• Network: ${method.toUpperCase()}\n` +
