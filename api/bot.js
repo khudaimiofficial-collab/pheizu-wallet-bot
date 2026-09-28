@@ -84,134 +84,134 @@ async function getDirectBalance(userId, telegramId) {
   return { sats: 0, usdt: 0, usdc: 0 };
 }
 
-// Persistent Reply Keyboard
+// Persistent Reply Keyboard — BLUE style
 async function getMainKeyboard(ctx) {
   const rows = [
-    ["💰 Balance", "📥 Deposit"],
-    ["📤 Withdraw", "📜 History"]
+    [{ text: "💰 Balance", style: "primary" }, { text: "📥 Deposit", style: "primary" }],
+    [{ text: "📤 Withdraw", style: "primary" }, { text: "📜 History", style: "primary" }]
   ];
 
   if (await isAuthorizedAdmin(ctx)) {
-    rows.push(["👑 Admin Panel"]);
+    rows.push([{ text: "👑 Admin Panel", style: "primary" }]);
   }
 
   return Markup.keyboard(rows).resize();
 }
 
 // ----------------------------------------------------
-// KEYBOARDS: WITHDRAW, DEPOSIT & ADMIN
+// KEYBOARDS: WITHDRAW, DEPOSIT & ADMIN (BLUE STYLE)
 // ----------------------------------------------------
 function getWithdrawAssetKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("⚡ Bitcoin (SATS)", "with_asset_sats")],
+    [Markup.button.callback("⚡ Bitcoin (SATS)", "with_asset_sats", { style: "primary" })],
     [
-      Markup.button.callback("💵 USDT", "with_asset_usdt"),
-      Markup.button.callback("💲 USDC", "with_asset_usdc")
+      Markup.button.callback("💵 USDT", "with_asset_usdt", { style: "primary" }),
+      Markup.button.callback("💲 USDC", "with_asset_usdc", { style: "primary" })
     ],
-    [Markup.button.callback("🔙 Back to Main Menu", "gateway_back")]
+    [Markup.button.callback("🔙 Back to Main Menu", "gateway_back", { style: "primary" })]
   ]);
 }
 
 function getSatsWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "with_net_sats_lightning"),
-      Markup.button.callback("₿ On-Chain", "with_net_sats_onchain")
+      Markup.button.callback("⚡ Lightning", "with_net_sats_lightning", { style: "primary" }),
+      Markup.button.callback("₿ On-Chain", "with_net_sats_onchain", { style: "primary" })
     ],
-    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getUsdtWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "with_net_usdt_lightning"),
-      Markup.button.callback("⛓️ Ethereum", "with_net_usdt_ethereum")
+      Markup.button.callback("⚡ Lightning", "with_net_usdt_lightning", { style: "primary" }),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdt_ethereum", { style: "primary" })
     ],
     [
-      Markup.button.callback("🔴 Tron (TRC-20)", "with_net_usdt_tron"),
-      Markup.button.callback("🟣 Solana", "with_net_usdt_solana")
+      Markup.button.callback("🔴 Tron (TRC-20)", "with_net_usdt_tron", { style: "primary" }),
+      Markup.button.callback("🟣 Solana", "with_net_usdt_solana", { style: "primary" })
     ],
-    [Markup.button.callback("💎 TON", "with_net_usdt_ton")],
-    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+    [Markup.button.callback("💎 TON", "with_net_usdt_ton", { style: "primary" })],
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getUsdcWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "with_net_usdc_lightning"),
-      Markup.button.callback("⛓️ Ethereum", "with_net_usdc_ethereum")
+      Markup.button.callback("⚡ Lightning", "with_net_usdc_lightning", { style: "primary" }),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdc_ethereum", { style: "primary" })
     ],
     [
-      Markup.button.callback("🟣 Solana", "with_net_usdc_solana")
+      Markup.button.callback("🟣 Solana", "with_net_usdc_solana", { style: "primary" })
     ],
-    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getDepositAssetKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("⚡ Bitcoin (SATS)", "dep_asset_sats")],
+    [Markup.button.callback("⚡ Bitcoin (SATS)", "dep_asset_sats", { style: "primary" })],
     [
-      Markup.button.callback("💵 USDT", "dep_asset_usdt"),
-      Markup.button.callback("💲 USDC", "dep_asset_usdc")
+      Markup.button.callback("💵 USDT", "dep_asset_usdt", { style: "primary" }),
+      Markup.button.callback("💲 USDC", "dep_asset_usdc", { style: "primary" })
     ],
-    [Markup.button.callback("🔙 Back", "gateway_back")]
+    [Markup.button.callback("🔙 Back", "gateway_back", { style: "primary" })]
   ]);
 }
 
 function getUsdtDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "dep_net_usdt_lightning"),
-      Markup.button.callback("⛓️ Ethereum", "dep_net_usdt_ethereum")
+      Markup.button.callback("⚡ Lightning", "dep_net_usdt_lightning", { style: "primary" }),
+      Markup.button.callback("⛓️ Ethereum", "dep_net_usdt_ethereum", { style: "primary" })
     ],
     [
-      Markup.button.callback("🔴 Tron (TRC-20)", "dep_net_usdt_tron"),
-      Markup.button.callback("🟣 Solana", "dep_net_usdt_solana")
+      Markup.button.callback("🔴 Tron (TRC-20)", "dep_net_usdt_tron", { style: "primary" }),
+      Markup.button.callback("🟣 Solana", "dep_net_usdt_solana", { style: "primary" })
     ],
-    [Markup.button.callback("💎 TON", "dep_net_usdt_ton")],
-    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
+    [Markup.button.callback("💎 TON", "dep_net_usdt_ton", { style: "primary" })],
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getUsdcDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "dep_net_usdc_lightning"),
-      Markup.button.callback("⛓️ Ethereum", "dep_net_usdc_ethereum")
+      Markup.button.callback("⚡ Lightning", "dep_net_usdc_lightning", { style: "primary" }),
+      Markup.button.callback("⛓️ Ethereum", "dep_net_usdc_ethereum", { style: "primary" })
     ],
     [
-      Markup.button.callback("🟣 Solana", "dep_net_usdc_solana")
+      Markup.button.callback("🟣 Solana", "dep_net_usdc_solana", { style: "primary" })
     ],
-    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getSatsDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "dep_net_sats_lightning"),
-      Markup.button.callback("₿ On-Chain", "dep_net_sats_onchain")
+      Markup.button.callback("⚡ Lightning", "dep_net_sats_lightning", { style: "primary" }),
+      Markup.button.callback("₿ On-Chain", "dep_net_sats_onchain", { style: "primary" })
     ],
-    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getAdminDashboardKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("👤 Manage Users", "admin_users_menu"),
-      Markup.button.callback("📢 Broadcast", "admin_broadcast_prompt")
+      Markup.button.callback("👤 Manage Users", "admin_users_menu", { style: "primary" }),
+      Markup.button.callback("📢 Broadcast", "admin_broadcast_prompt", { style: "primary" })
     ],
     [
-      Markup.button.callback("📋 Logs Channel", "admin_logs_prompt"),
-      Markup.button.callback("👑 Admins (Add/Del)", "admin_admins_menu")
+      Markup.button.callback("📋 Logs Channel", "admin_logs_prompt", { style: "primary" }),
+      Markup.button.callback("👑 Admins (Add/Del)", "admin_admins_menu", { style: "primary" })
     ],
     [
-      Markup.button.callback("🔑 Set Speed Key", "admin_setkey_prompt"),
-      Markup.button.callback("❌ Close", "admin_close")
+      Markup.button.callback("🔑 Set Speed Key", "admin_setkey_prompt", { style: "primary" }),
+      Markup.button.callback("❌ Close", "admin_close", { style: "primary" })
     ]
   ]);
 }
@@ -219,16 +219,16 @@ function getAdminDashboardKeyboard() {
 function getAdminUserManagementKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("🚫 Ban User", "adm_ban_user"),
-      Markup.button.callback("✅ Unban User", "adm_unban_user")
+      Markup.button.callback("🚫 Ban User", "adm_ban_user", { style: "primary" }),
+      Markup.button.callback("✅ Unban User", "adm_unban_user", { style: "primary" })
     ],
     [
-      Markup.button.callback("➕ Add Balance", "adm_add_bal"),
-      Markup.button.callback("➖ Deduct Balance", "adm_deduct_bal")
+      Markup.button.callback("➕ Add Balance", "adm_add_bal", { style: "primary" }),
+      Markup.button.callback("➖ Deduct Balance", "adm_deduct_bal", { style: "primary" })
     ],
     [
-      Markup.button.callback("🗑️ Delete User", "adm_del_user"),
-      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard")
+      Markup.button.callback("🗑️ Delete User", "adm_del_user", { style: "primary" }),
+      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard", { style: "primary" })
     ]
   ]);
 }
@@ -236,12 +236,12 @@ function getAdminUserManagementKeyboard() {
 function getAdminAdminsKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("➕ Add Admin", "adm_add_admin"),
-      Markup.button.callback("➖ Delete Admin", "adm_del_admin")
+      Markup.button.callback("➕ Add Admin", "adm_add_admin", { style: "primary" }),
+      Markup.button.callback("➖ Delete Admin", "adm_del_admin", { style: "primary" })
     ],
     [
-      Markup.button.callback("📋 List Admins", "adm_list_admins"),
-      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard")
+      Markup.button.callback("📋 List Admins", "adm_list_admins", { style: "primary" }),
+      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard", { style: "primary" })
     ]
   ]);
 }
@@ -381,40 +381,40 @@ function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabe
 
   if (isSats && paymentMethod === "lightning") {
     buttons.push([
-      Markup.button.callback("⚡ Quick Invoice (Open Amount)", `dep_opt:open:SATS:lightning`)
+      Markup.button.callback("⚡ Quick Invoice (Open Amount)", `dep_opt:open:SATS:lightning`, { style: "primary" })
     ]);
     buttons.push([
-      Markup.button.callback("⚡ 100 SATS", `dep_preset:SATS:lightning:100`),
-      Markup.button.callback("⚡ 500 SATS", `dep_preset:SATS:lightning:500`)
+      Markup.button.callback("⚡ 100 SATS", `dep_preset:SATS:lightning:100`, { style: "primary" }),
+      Markup.button.callback("⚡ 500 SATS", `dep_preset:SATS:lightning:500`, { style: "primary" })
     ]);
     buttons.push([
-      Markup.button.callback("⚡ 1,000 SATS", `dep_preset:SATS:lightning:1000`),
-      Markup.button.callback("⚡ 5,000 SATS", `dep_preset:SATS:lightning:5000`)
+      Markup.button.callback("⚡ 1,000 SATS", `dep_preset:SATS:lightning:1000`, { style: "primary" }),
+      Markup.button.callback("⚡ 5,000 SATS", `dep_preset:SATS:lightning:5000`, { style: "primary" })
     ]);
     buttons.push([
-      Markup.button.callback("🔢 Enter Custom Amount", `dep_opt:amt:SATS:lightning`)
+      Markup.button.callback("🔢 Enter Custom Amount", `dep_opt:amt:SATS:lightning`, { style: "primary" })
     ]);
   } else if (!isSats) {
     buttons.push([
-      Markup.button.callback("⚡ Quick Deposit Address", `dep_opt:open:${targetCurrency}:${paymentMethod}`)
+      Markup.button.callback("⚡ Quick Deposit Address", `dep_opt:open:${targetCurrency}:${paymentMethod}`, { style: "primary" })
     ]);
     buttons.push([
-      Markup.button.callback(`💵 5 ${targetCurrency}`, `dep_preset:${targetCurrency}:${paymentMethod}:5`),
-      Markup.button.callback(`💵 10 ${targetCurrency}`, `dep_preset:${targetCurrency}:${paymentMethod}:10`)
+      Markup.button.callback(`💵 5 ${targetCurrency}`, `dep_preset:${targetCurrency}:${paymentMethod}:5`, { style: "primary" }),
+      Markup.button.callback(`💵 10 ${targetCurrency}`, `dep_preset:${targetCurrency}:${paymentMethod}:10`, { style: "primary" })
     ]);
     buttons.push([
-      Markup.button.callback("🔢 Enter Custom Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)
+      Markup.button.callback("🔢 Enter Custom Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`, { style: "primary" })
     ]);
   } else {
     buttons.push([
-      Markup.button.callback("⚡ Quick Deposit Address", `dep_opt:open:SATS:onchain`)
+      Markup.button.callback("⚡ Quick Deposit Address", `dep_opt:open:SATS:onchain`, { style: "primary" })
     ]);
     buttons.push([
-      Markup.button.callback("🔢 Enter Custom Amount", `dep_opt:amt:SATS:onchain`)
+      Markup.button.callback("🔢 Enter Custom Amount", `dep_opt:amt:SATS:onchain`, { style: "primary" })
     ]);
   }
 
-  buttons.push([Markup.button.callback("🔙 Back to Networks", backAssetCallback)]);
+  buttons.push([Markup.button.callback("🔙 Back to Networks", backAssetCallback, { style: "primary" })]);
 
   const lnAddressNotice = (paymentMethod === "lightning")
     ? `\n⚡ <i>Senders can also pay any amount directly to your Lightning Address:\n<code>${String(ctx.from.username || ctx.from.id).toLowerCase()}@${DOMAIN}</code></i>\n`
@@ -514,7 +514,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       caption,
       parse_mode: "HTML",
       ...Markup.inlineKeyboard([
-        [Markup.button.callback("🔄 Check Status", `check_dep:${txId}`)]
+        [Markup.button.callback("🔄 Check Status", `check_dep:${txId}`, { style: "primary" })]
       ])
     });
 
@@ -526,8 +526,8 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
-          [Markup.button.callback("🔙 Back to Networks", backCallback)]
+          [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`, { style: "primary" })],
+          [Markup.button.callback("🔙 Back to Networks", backCallback, { style: "primary" })]
         ])
       }
     );
@@ -576,7 +576,7 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
 
       await ctx.editMessageReplyMarkup(
         Markup.inlineKeyboard([
-          [Markup.button.callback("✅ Payment Confirmed", "gateway_back")]
+          [Markup.button.callback("✅ Payment Confirmed", "gateway_back", { style: "primary" })]
         ]).reply_markup
       ).catch(() => {});
     } else {
@@ -688,7 +688,7 @@ bot.hears("💰 Balance", async (ctx) => {
   await ctx.reply(walletText, {
     parse_mode: "HTML",
     ...Markup.inlineKeyboard([
-      Markup.button.webApp("📱 Open WebApp", APP_URL)
+      Markup.button.webApp("📱 Open WebApp", APP_URL, { style: "primary" })
     ])
   });
 });
@@ -908,7 +908,7 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
       `<i>Type /cancel to abort at any time.</i>`;
 
     const promptKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback("« Back to Networks", backCallback)]
+      [Markup.button.callback("« Back to Networks", backCallback, { style: "primary" })]
     ]);
 
     try {
@@ -1405,9 +1405,9 @@ bot.on("text", async (ctx) => {
         {
           parse_mode: "HTML",
           ...Markup.inlineKeyboard([
-            [Markup.button.callback(`🚀 Send ${detectedAmount.toLocaleString()} ${detectedCurrency}`, "confirm_send")],
-            [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt")],
-            [Markup.button.callback("❌ Cancel", "cancel_send")]
+            [Markup.button.callback(`🚀 Send ${detectedAmount.toLocaleString()} ${detectedCurrency}`, "confirm_send", { style: "primary" })],
+            [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt", { style: "primary" })],
+            [Markup.button.callback("❌ Cancel", "cancel_send", { style: "primary" })]
           ])
         }
       );
@@ -1462,9 +1462,9 @@ bot.on("text", async (ctx) => {
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback(`🚀 Send ${amount.toLocaleString()} ${curr}`, "confirm_send")],
-          [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt")],
-          [Markup.button.callback("❌ Cancel", "cancel_send")]
+          [Markup.button.callback(`🚀 Send ${amount.toLocaleString()} ${curr}`, "confirm_send", { style: "primary" })],
+          [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt", { style: "primary" })],
+          [Markup.button.callback("❌ Cancel", "cancel_send", { style: "primary" })]
         ])
       }
     );
