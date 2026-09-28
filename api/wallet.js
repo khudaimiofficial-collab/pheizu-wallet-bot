@@ -208,7 +208,6 @@ function extractPaymentTarget(obj) {
     }
   }
 
-  // Check nested payment_method_options (Speed official structure)
   if (obj.payment_method_options) {
     if (obj.payment_method_options.lightning?.payment_request) {
       return { type: "lightning", value: obj.payment_method_options.lightning.payment_request };
@@ -227,13 +226,12 @@ function extractPaymentTarget(obj) {
   return null;
 }
 
-// Speed amount extractor with official target_amount_paid & target_amount support
 function extractPaidAmount(payment, invData) {
   if (!payment) return Number(invData?.amount || 0);
 
   const candidates = [
-    payment.target_amount_paid,   // Official Speed API field for paid SATS
-    payment.target_amount,        // Target amount in SATS
+    payment.target_amount_paid,
+    payment.target_amount,
     payment.amount_received,
     payment.total_amount_received,
     payment.paid_amount,
@@ -381,7 +379,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, history: list.slice(0, 10) });
     }
 
-    // 3. CREATE DEPOSIT INVOICE
+    // 3. CREATE DEPOSIT INVOICE (Speed ID and TxID are strictly identical)
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
@@ -474,13 +472,16 @@ module.exports = async function handler(req, res) {
         return res.status(500).json({ success: false, error: "Speed did not return a valid payment address or invoice." });
       }
 
-      const txId = paymentData?.id || paymentData?.payrequest_id || paymentData?.invoice_id || `py_${Date.now()}`;
+      // 🔥 Speed ID and TxID are strictly identical
+      const speedId = paymentData?.id || paymentData?.payrequest_id || paymentData?.invoice_id;
+      const txId = speedId; 
       const numericChatId = await resolveNumericTelegramId(uid, telegram_id);
 
       await db.collection("invoices").doc(txId).set({
         id: txId,
-        speed_payment_id: paymentData?.id || null,
-        speed_payrequest_id: paymentData?.payrequest_id || null,
+        tx_id: txId,
+        speed_payment_id: speedId,
+        speed_payrequest_id: paymentData?.payrequest_id || (speedId.startsWith("pr_") ? speedId : null),
         speed_source: sourceEndpoint,
         invoice: invoiceString,
         payment_type: target.type,
@@ -507,7 +508,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 4. CHECK DEPOSIT STATUS — USING SPEED SEARCH API & REAL AMOUNT EXTRACTION
+    // 4. CHECK DEPOSIT STATUS
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
       if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
@@ -588,7 +589,7 @@ module.exports = async function handler(req, res) {
           try {
             const prPayRes = await speedRequest(`payrequests/${prId}/payments`, "GET", null, apiKey);
             if (prPayRes.ok && prPayRes.data) {
-              const list = prPayRes.data.data || prPayRes.data.items || (Array.isArray(prPayRes.data) ? prPayRes.data : []);
+              const list = prPayRes.data.data || prPayRes.data.items || prPayRes.data.payments || (Array.isArray(prPayRes.data) ? prPayRes.data : []);
               if (list.length > 0) {
                 payment = list[0];
                 const pAmt = extractPaidAmount(list[0], invData);
@@ -636,10 +637,8 @@ module.exports = async function handler(req, res) {
         (isLightningPayment && alreadyLandedStatuses.includes(rawStatus)) ||
         hasPaidFlag;
 
-      // Extract real paid amount
       const finalSats = detectedAmount > 0 ? detectedAmount : extractPaidAmount(payment, invData);
 
-      // Process and credit balance when paid AND amount > 0
       if (isPaid && finalSats > 0) {
         const finalCurr = curr || payment?.target_currency || "SATS";
 
@@ -647,7 +646,6 @@ module.exports = async function handler(req, res) {
         if (wallet) {
           const batch = db.batch();
 
-          // Credit the difference if previously recorded as 0
           const oldRecordedAmt = Number(invData?.amount || 0);
           const delta = finalSats - oldRecordedAmt;
 
@@ -694,7 +692,6 @@ module.exports = async function handler(req, res) {
           updatedBal = wallet.balance + (finalCurr === "SATS" ? delta : 0);
         }
 
-        // Notify user via Telegram bot chat with real sats
         if (targetNumericChatId) {
           await notifyTelegramUser(
             targetNumericChatId,
@@ -724,7 +721,6 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // If Speed detected the payment but amount is still settling
       return res.status(200).json({
         success: true,
         is_paid: false,
@@ -736,7 +732,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 5. WITHDRAW / SEND
+    // 5. WITHDRAW / SEND (Checks for already paid invoices)
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, network, currency, target_currency } = req.body;
       const sendAmount = Number(amount);
@@ -744,6 +740,37 @@ module.exports = async function handler(req, res) {
 
       if (!dest || isNaN(sendAmount) || sendAmount <= 0) {
         return res.status(400).json({ success: false, error: "Invalid parameters." });
+      }
+
+      // 🔥 ALREADY PAID CHECK: Prevent paying an already paid/settled invoice
+      if (dest.toLowerCase().startsWith("lnbc") || dest.toLowerCase().startsWith("lightning:lnbc") || dest.startsWith("bc1")) {
+        const cleanInv = dest.replace(/^lightning:/i, "").trim();
+
+        const paidInvCheck = await db.collection("invoices")
+          .where("invoice", "==", cleanInv)
+          .where("is_paid", "==", true)
+          .limit(1)
+          .get();
+
+        if (!paidInvCheck.empty) {
+          return res.status(400).json({
+            success: false,
+            error: "This invoice has already been paid and cannot be paid again."
+          });
+        }
+
+        const existingTxCheck = await db.collection("transactions")
+          .where("destination", "==", dest)
+          .where("status", "==", "completed")
+          .limit(1)
+          .get();
+
+        if (!existingTxCheck.empty) {
+          return res.status(400).json({
+            success: false,
+            error: "This destination has already been paid in a previous transaction."
+          });
+        }
       }
 
       const senderCandidates = [user_id, username, telegram_id, telegram_id ? `user${telegram_id}` : null];
@@ -817,7 +844,7 @@ module.exports = async function handler(req, res) {
         }
 
         const recipientWallet = await findUserWallet([recipientUserId]);
-        const txId = internalInvoiceDoc ? internalInvoiceDoc.id : `INT_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+        const txId = internalInvoiceDoc ? internalInvoiceDoc.id : `INT_${Date.now()}`;
 
         const batch = db.batch();
 
@@ -961,7 +988,10 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      const txId = sendData?.id || `send_${Date.now()}`;
+      // 🔥 Speed ID and TxID are strictly identical
+      const speedTxId = sendData?.id || sendData?.payment_id || sendData?.tx_id;
+      const txId = speedTxId;
+
       const updateData = { updated_at: new Date().toISOString() };
       let remainingBal = 0;
 
