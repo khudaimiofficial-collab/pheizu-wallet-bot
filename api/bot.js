@@ -367,25 +367,25 @@ function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, minAmount, 
   const backAssetCallback = targetCurrency === "SATS" ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
   let buttons = [
-    [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}:${minAmount}`)]
+    [Markup.button.callback("🔢 Generate Specific Amount / Address", `dep_opt:amt:${targetCurrency}:${paymentMethod}:${minAmount}`)]
   ];
 
   if (paymentMethod === "lightning") {
-    buttons.push([Markup.button.callback("⚡ Lightning Address (Any Amount)", `dep_opt:lnaddr:SATS:lightning:1`)]);
-    buttons.push([Markup.button.callback("⚡ 1-SAT Test Invoice", `dep_opt:open:SATS:lightning:1`)]);
+    buttons.push([Markup.button.callback("⚡ Lightning Address (Send Any Amount)", `dep_opt:lnaddr:SATS:lightning:1`)]);
+    buttons.push([Markup.button.callback("⚡ 1-SAT Quick Invoice", `dep_opt:open:SATS:lightning:1`)]);
   } else {
-    buttons.push([Markup.button.callback(`⚡ Deposit Address (Min: ${minText})`, `dep_opt:open:${targetCurrency}:${paymentMethod}:${minAmount}`)]);
+    buttons.push([Markup.button.callback(`⚡ Quick Address (Min: ${minText})`, `dep_opt:open:${targetCurrency}:${paymentMethod}:${minAmount}`)]);
   }
 
   buttons.push([Markup.button.callback("« Back to Networks", backAssetCallback)]);
 
   return ctx.editMessageText(
     `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
-    `Choose your deposit method:\n\n` +
-    `1️⃣ <b>Enter Specific Amount:</b> Generate a custom invoice for your exact amount (e.g. 50, 500, 5,000 SATS).\n` +
+    `Choose your deposit option below:\n\n` +
+    `1️⃣ <b>Generate Specific Amount / Address:</b> Set the exact amount for this deposit (e.g. 50, 500, 5,000 SATS or 25 USDT).\n` +
     (paymentMethod === "lightning"
-      ? `2️⃣ <b>Lightning Address:</b> Send any amount directly to your Lightning Address without an invoice amount restriction.\n`
-      : `2️⃣ <b>Deposit Address:</b> Generate a direct address to send funds to.\n`) +
+      ? `2️⃣ <b>Lightning Address:</b> Pay any amount directly to your Lightning Address with no locked amount restriction.\n`
+      : `2️⃣ <b>Quick Address:</b> Generate a direct address immediately.\n`) +
     `\n📌 <b>Minimum Deposit:</b> <code>${minText}</code>`,
     {
       parse_mode: "HTML",
@@ -401,13 +401,14 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   await clearSession(ctx.from.id);
 
+  let statusMsg = null;
   if (ctx.callbackQuery) {
     await ctx.editMessageText(
       `⏳ <b>Generating ${targetCurrency} (${networkLabel}) deposit details...</b>`,
       { parse_mode: "HTML" }
     ).catch(() => {});
   } else {
-    await ctx.reply(`⏳ <b>Generating deposit details...</b>`, { parse_mode: "HTML" });
+    statusMsg = await ctx.reply(`⏳ <b>Generating ${targetCurrency} (${networkLabel}) deposit details...</b>`, { parse_mode: "HTML" });
   }
 
   try {
@@ -441,7 +442,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 
     let caption = "";
     if (isLightning) {
-      caption = `⚡ <b>Lightning Deposit Invoice Ready</b>\n\n` +
+      caption = `⚡ <b>Lightning Deposit Invoice</b>\n\n` +
         `💰 <b>Amount:</b> <code>${Number(finalAmount).toLocaleString()} ${targetCurrency}</code>\n` +
         `🌐 <b>Network:</b> Lightning Network (${targetCurrency})\n` +
         `📌 <b>Minimum Deposit:</b> <code>${minDepositNotice}</code>\n\n` +
@@ -450,7 +451,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
         `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
         `<i>Scan QR or copy invoice to pay. Waiting for payment...</i>`;
     } else {
-      caption = `📥 <b>${targetCurrency} Deposit Details</b>\n\n` +
+      caption = `📥 <b>${targetCurrency} Deposit Address</b>\n\n` +
         (isCustomAmount ? `💰 <b>Expected Amount:</b> <code>${finalAmount} ${targetCurrency}</code>\n` : ``) +
         `🌐 <b>Network:</b> ${networkLabel}\n` +
         `📌 <b>Minimum Deposit:</b> <code>${minDepositNotice}</code>\n\n` +
@@ -461,6 +462,8 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 
     if (ctx.callbackQuery) {
       await ctx.deleteMessage().catch(() => {});
+    } else if (statusMsg) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
     }
 
     // ONLY the "Check Status" button is rendered
@@ -480,7 +483,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}:${minAmount}`)],
+          [Markup.button.callback("🔢 Generate Specific Amount / Address", `dep_opt:amt:${targetCurrency}:${paymentMethod}:${minAmount}`)],
           [Markup.button.callback("« Back to Networks", backCallback)]
         ])
       }
@@ -541,7 +544,8 @@ bot.action("dep_opt:lnaddr:SATS:lightning:1", async (ctx) => {
       `⚡ <i>Funds credit to your balance instantly upon payment.</i>`,
     parse_mode: "HTML",
     ...Markup.inlineKeyboard([
-      [Markup.button.callback("🔢 Generate Specific Invoice Instead", "dep_opt:amt:SATS:lightning:1")],
+      [Markup.button.callback("🔄 Check Status / Balance", "action_balance")],
+      [Markup.button.callback("🔢 Generate Specific Amount / Address", "dep_opt:amt:SATS:lightning:1")],
       [Markup.button.callback("🏠 Main Menu", "gateway_back")]
     ])
   });
@@ -838,21 +842,25 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+):([^:]+)$/, async (ctx) => {
     const exampleAmt = targetCurrency === "SATS" ? "5000" : "20";
     const backCallback = targetCurrency === "SATS" ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
-    return ctx.editMessageText(
-      `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
+    const promptText = `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
       `Please reply with the exact amount of <b>${targetCurrency}</b> you want to deposit:\n` +
       `📌 <b>Minimum:</b> <code>${minText}</code>\n\n` +
       `<i>Example: <code>50</code>, <code>100</code>, <code>${exampleAmt}</code></i>\n\n` +
-      `<i>Type /cancel to abort at any time.</i>`,
-      {
-        parse_mode: "HTML",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("« Back to Networks", backCallback)]
-        ])
-      }
-    );
+      `<i>Type /cancel to abort at any time.</i>`;
+
+    const promptKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback("« Back to Networks", backCallback)]
+    ]);
+
+    // Safely handles deletion whether clicked from text or photo message
+    try {
+      await ctx.editMessageText(promptText, { parse_mode: "HTML", ...promptKeyboard });
+    } catch (e) {
+      await ctx.deleteMessage().catch(() => {});
+      await ctx.reply(promptText, { parse_mode: "HTML", ...promptKeyboard });
+    }
   } else {
-    // Option 2: Direct generation with minimum base
+    // Option 2: Direct generation with base minimum
     return handleGenerateDeposit(ctx, {
       targetCurrency,
       paymentMethod,
@@ -1249,7 +1257,7 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  // B. CUSTOM DEPOSIT AMOUNT INPUT (Generates Invoice for Exact Amount)
+  // B. CUSTOM DEPOSIT AMOUNT INPUT
   if (session.step === "awaiting_deposit_custom_amount") {
     const amount = Number(text);
     const minAmount = session.min_amount || (session.target_currency === "SATS" ? 1 : 0.5);
