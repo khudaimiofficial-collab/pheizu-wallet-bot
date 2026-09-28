@@ -1,8 +1,34 @@
 {
   "cleanUrls": true,
+  "trailingSlash": false,
   "rewrites": [
     { "source": "/.well-known/lnurlp/(.*)", "destination": "/api/lnurlp?username=$1" },
     { "source": "/api/lnurlp/cb/(.*)", "destination": "/api/lnurlp?username=$1&callback=1" },
     { "source": "/api/speed/:path*", "destination": "https://api.tryspeed.com/:path*" }
+  ],
+  "functions": {
+    "api/bot.js": {
+      "maxDuration": 10,
+      "memory": 512
+    },
+    "api/wallet.js": {
+      "maxDuration": 10,
+      "memory": 512
+    },
+    "api/lnurlp.js": {
+      "maxDuration": 10,
+      "memory": 512
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, max-age=0" },
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" }
+      ]
+    }
   ]
 }
