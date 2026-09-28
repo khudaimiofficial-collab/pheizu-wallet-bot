@@ -40,8 +40,9 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const APP_URL = process.env.WEBAPP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `https://${DOMAIN}`);
 const MASTER_ADMIN_ID = "8960497898";
+const BOT_USERNAME = process.env.BOT_USERNAME || "pheizu_bot";
 
-// Set Telegram WebApp Menu Button (bottom-left)
+// Native Telegram WebApp Menu Button (bottom-left)
 bot.telegram.setChatMenuButton({
   menuButton: {
     type: "web_app",
@@ -54,7 +55,7 @@ bot.telegram.setChatMenuButton({
 bot.telegram.deleteMyCommands().catch(() => {});
 
 // ----------------------------------------------------
-// HELPERS: ADMIN & CHANNEL VERIFICATION
+// HELPERS: ADMIN, BALANCES & CHANNEL VERIFICATION
 // ----------------------------------------------------
 
 async function isAuthorizedAdmin(ctx) {
@@ -62,7 +63,7 @@ async function isAuthorizedAdmin(ctx) {
   const numericId = String(ctx.from.id).trim();
   const username = (ctx.from.username || "").toLowerCase().replace(/^@/, "").trim();
 
-  // 🔥 Explicitly grants admin access to Master ID and @pheizu
+  // Master ID or @pheizu
   if (numericId === MASTER_ADMIN_ID || username === "pheizu") return true;
 
   const rawAdmins = (process.env.ADMIN_IDS || process.env.ADMIN_ID || "");
@@ -88,6 +89,27 @@ async function isAuthorizedAdmin(ctx) {
   }
 
   return false;
+}
+
+// Fetch balances directly from Firestore
+async function getUserBalances(userId, telegramId) {
+  if (!db) return { sats: 0, usdt: 0, usdc: 0 };
+  try {
+    const candidates = [userId, telegramId, telegramId ? `user${telegramId}` : null].filter(Boolean);
+    for (const col of ["users", "wallets"]) {
+      for (const id of candidates) {
+        const doc = await db.collection(col).doc(String(id).toLowerCase()).get();
+        if (doc.exists) {
+          const d = doc.data();
+          const sats = Number(d.balance ?? d.sats ?? d.amount ?? 0);
+          const usdt = Number(d.usdt_balance ?? 0);
+          const usdc = Number(d.usdc_balance ?? 0);
+          return { sats, usdt, usdc };
+        }
+      }
+    }
+  } catch (e) {}
+  return { sats: 0, usdt: 0, usdc: 0 };
 }
 
 async function getRequiredChannelId() {
@@ -124,7 +146,6 @@ async function checkUserMembership(userId, channelId) {
     const member = await bot.telegram.getChatMember(channelId, userId);
     return ["creator", "administrator", "member", "restricted"].includes(member.status);
   } catch (e) {
-    console.warn("Membership check warning:", e.message);
     if (e.message.includes("user not found") || e.message.includes("PARTICIPANT_ID_INVALID")) {
       return false;
     }
@@ -148,13 +169,14 @@ async function saveUserRecord(ctx) {
 }
 
 // ----------------------------------------------------
-// UI SCREENS: JOIN CHANNEL vs WALLET LAUNCH
+// UI SCREENS: CHANNEL PROMPT, MAIN MENU & ACCOUNT DETAILS
 // ----------------------------------------------------
 
+// 1. Channel Join Prompt (If Unverified)
 async function sendJoinPrompt(ctx, channelLink) {
   const text = [
     `🔒 <b>Channel Verification Required</b>\n`,
-    `To access <b>Pheizu Lightning Wallet</b>, you must first join our official channel for transaction receipts and updates.\n`,
+    `To access <b>Pheizu Lightning Wallet</b>, you must first join our official updates and transaction receipt channel.\n`,
     `1️⃣ Click <b>📢 Join Channel</b> below.`,
     `2️⃣ Return here and click <b>✅ Verify & Start</b>.`
   ].join("\n");
@@ -171,7 +193,8 @@ async function sendJoinPrompt(ctx, channelLink) {
   }
 }
 
-async function sendWelcomeScreen(ctx) {
+// 2. Main Menu: Wallet, Account, Share & Admin (If Admin)
+async function sendMainMenu(ctx) {
   await saveUserRecord(ctx);
 
   const user = ctx.from;
@@ -182,36 +205,94 @@ async function sendWelcomeScreen(ctx) {
   const walletUrl = `${APP_URL}/?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
   const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
 
+  // Share text & URL
+  const shareText = encodeURIComponent("⚡ Pay & receive Bitcoin and Stablecoins instantly with zero fees on Pheizu Lightning Wallet!");
+  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(`https://t.me/${BOT_USERNAME}?start=ref_${username}`)}&text=${shareText}`;
+
+  // Menu Buttons Layout
   const buttons = [
-    [Markup.button.webApp("⚡ Open Pheizu Wallet", walletUrl)]
+    [Markup.button.webApp("⚡ Open Pheizu Wallet", walletUrl)],
+    [
+      Markup.button.callback("👤 Account Details", "menu_account_details"),
+      Markup.button.url("🔗 Invite Friends", shareUrl)
+    ]
   ];
 
-  // 🔥 Appends Admin Console Button if user is admin
+  // Show Admin button ONLY if authorized
   if (isAdm) {
     buttons.push([Markup.button.webApp("👑 Open Admin Console", adminUrl)]);
   }
 
   const welcomeText = [
-    `⚡ <b>Welcome to Pheizu Lightning Wallet!</b>\n`,
-    `Your fast, non-custodial crypto wallet directly inside Telegram.\n`,
+    `⚡ <b>Pheizu Lightning Wallet</b>\n`,
+    `Your high-speed non-custodial crypto wallet built directly into Telegram.\n`,
     `• <b>Assets:</b> Bitcoin (Lightning & On-Chain), USDT (TON, TRC-20, Solana, ERC-20), USDC`,
     `• <b>Lightning Address:</b> <code>${username}@${DOMAIN}</code>\n`,
-    isAdm ? `👑 <i>Administrator privileges active.</i>\n\n` : ``,
-    `Tap below to open your wallet:`
+    isAdm ? `👑 <b>Administrator Mode:</b> Active\n\n` : ``,
+    `Choose an option below to get started:`
   ].join("\n");
 
   const kb = Markup.inlineKeyboard(buttons);
 
   if (ctx.callbackQuery) {
-    await ctx.deleteMessage().catch(() => {});
-    await ctx.replyWithHTML(welcomeText, { ...kb, ...Markup.removeKeyboard() });
+    try {
+      await ctx.editMessageText(welcomeText, { parse_mode: "HTML", ...kb });
+    } catch (e) {
+      await ctx.deleteMessage().catch(() => {});
+      await ctx.replyWithHTML(welcomeText, { ...kb, ...Markup.removeKeyboard() });
+    }
   } else {
     await ctx.replyWithHTML(welcomeText, { ...kb, ...Markup.removeKeyboard() });
   }
 }
 
+// 3. Account Details Screen (Details View)
+async function sendAccountDetails(ctx) {
+  const user = ctx.from;
+  const tgId = String(user.id);
+  const username = (user.username || `user${tgId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
+  const isAdm = await isAuthorizedAdmin(ctx);
+
+  const bal = await getUserBalances(username, tgId);
+  const btcVal = (bal.sats / 100000000).toFixed(8);
+  const myLnAddress = `${username}@${DOMAIN}`;
+
+  const walletUrl = `${APP_URL}/?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
+  const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
+
+  const text = [
+    `👤 <b>Your Account Details</b>\n`,
+    `• <b>Username:</b> @${username}`,
+    `• <b>Telegram ID:</b> <code>${tgId}</code>`,
+    `• <b>Lightning Address:</b>\n<code>${myLnAddress}</code>\n`,
+    `💰 <b>Available Balances:</b>`,
+    `• ₿ <b>Bitcoin:</b> <code>${btcVal} BTC</code> (${bal.sats.toLocaleString()} SATS)`,
+    `• 💵 <b>USDT:</b> <code>$${bal.usdt.toFixed(2)}</code>`,
+    `• 💲 <b>USDC:</b> <code>$${bal.usdc.toFixed(2)}</code>\n`,
+    `⚡ <b>Settlement:</b> Pheizu Lightning Network Node`,
+    isAdm ? `👑 <b>Role:</b> Administrator` : `👤 <b>Role:</b> Standard User`
+  ].join("\n");
+
+  const buttons = [
+    [Markup.button.webApp("⚡ Launch Full Wallet", walletUrl)]
+  ];
+
+  if (isAdm) {
+    buttons.push([Markup.button.webApp("👑 Open Admin Console", adminUrl)]);
+  }
+
+  buttons.push([Markup.button.callback("🔙 Back to Main Menu", "menu_back_main")]);
+
+  await ctx.editMessageText(text, {
+    parse_mode: "HTML",
+    ...Markup.inlineKeyboard(buttons)
+  }).catch(async () => {
+    await ctx.replyWithHTML(text, Markup.inlineKeyboard(buttons));
+  });
+}
+
 // ----------------------------------------------------
-// BOT CONTROLLER
+// BOT CONTROLLER & CALLBACKS
 // ----------------------------------------------------
 
 // /start command
@@ -227,7 +308,7 @@ bot.start(async (ctx) => {
     }
   }
 
-  return sendWelcomeScreen(ctx);
+  return sendMainMenu(ctx);
 });
 
 // /admin command — direct trigger for the admin console
@@ -250,28 +331,28 @@ bot.command("admin", async (ctx) => {
   );
 });
 
-// /id command — inspect your numeric ID and admin status
+// /id command
 bot.command("id", async (ctx) => {
   const isAdm = await isAuthorizedAdmin(ctx);
   const uid = ctx.from.id;
   const uname = ctx.from.username ? `@${ctx.from.username}` : "none";
 
   await ctx.replyWithHTML(
-    `🆔 <b>Your Account Details:</b>\n\n` +
+    `🆔 <b>Your Account Info:</b>\n\n` +
     `• <b>Numeric ID:</b> <code>${uid}</code>\n` +
     `• <b>Username:</b> ${uname}\n` +
     `• <b>Admin Status:</b> ${isAdm ? "✅ <b>Authorized Admin</b>" : "❌ Regular User"}`
   );
 });
 
-// "✅ Verify & Start" Button Callback
+// "✅ Verify & Start" Button
 bot.action("verify_membership", async (ctx) => {
   const userId = ctx.from.id;
   const channelId = await getRequiredChannelId();
 
   if (!channelId) {
     await ctx.answerCbQuery("✅ Verified! Welcome.");
-    return sendWelcomeScreen(ctx);
+    return sendMainMenu(ctx);
   }
 
   const isMember = await checkUserMembership(userId, channelId);
@@ -284,14 +365,25 @@ bot.action("verify_membership", async (ctx) => {
   }
 
   await ctx.answerCbQuery("✅ Verification successful! Welcome.");
-  return sendWelcomeScreen(ctx);
+  return sendMainMenu(ctx);
 });
 
-// Fallback message handler
+// "👤 Account Details" Button Callback
+bot.action("menu_account_details", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  return sendAccountDetails(ctx);
+});
+
+// "🔙 Back to Main Menu" Button Callback
+bot.action("menu_back_main", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  return sendMainMenu(ctx);
+});
+
+// Fallback message listener
 bot.on("message", async (ctx) => {
   const text = (ctx.message?.text || "").toLowerCase().trim();
 
-  // If user typed 'admin' or '/admin'
   if (text === "/admin" || text === "admin") {
     const isAdm = await isAuthorizedAdmin(ctx);
     if (isAdm) {
@@ -317,7 +409,7 @@ bot.on("message", async (ctx) => {
     }
   }
 
-  return sendWelcomeScreen(ctx);
+  return sendMainMenu(ctx);
 });
 
 // ----------------------------------------------------
