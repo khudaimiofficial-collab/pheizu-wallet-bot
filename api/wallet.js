@@ -426,17 +426,19 @@ module.exports = async function handler(req, res) {
       if (payMethod === "on-chain" || payMethod === "on_chain" || payMethod === "bitcoin") payMethod = "onchain";
       const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
 
+      // Determine if this is an open-amount (zero) invoice
+      const isOpenAmount = !amount || Number(amount) <= 0;
+
       let paymentData = null;
       let ok = false;
       let status = 400;
 
-      // When no custom amount is set, attempt Speed's open-amount payrequests or payment addresses first
-      if (!amount) {
-        // Try Speed payrequests for zero-amount invoice (lnbc1p...)
+      // When no custom amount is set, try Speed's payrequests for an open-amount invoice (lnbc1p...)
+      if (isOpenAmount) {
         const prRes = await speedRequest("payrequests", "POST", {
           currency: baseCurr,
           target_currency: targetCurr,
-          description: `Deposit to ${uid}`
+          description: `Open deposit to ${uid}`
         }, apiKey);
 
         if (prRes.ok && prRes.data) {
@@ -446,14 +448,10 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Standard fallback to Speed payments
+      // Standard fallback to Speed payments (with amount if provided, otherwise open/zero)
       if (!ok) {
-        const defaultMin = (targetCurr === "SATS") ? 1 : 0.5;
-        const numAmount = (amount && Number(amount) > 0) ? Number(amount) : defaultMin;
-
         const speedBody = {
           currency: baseCurr,
-          amount: numAmount,
           target_currency: targetCurr,
           payment_methods: [payMethod],
           metadata: {
@@ -462,18 +460,25 @@ module.exports = async function handler(req, res) {
           }
         };
 
-        const res = await speedRequest("payments", "POST", speedBody, apiKey);
-        ok = res.ok;
-        status = res.status;
-        paymentData = res.data;
+        // For open-amount invoices, try amount: 0; otherwise pass the real amount
+        if (isOpenAmount) {
+          speedBody.amount = 0;
+        } else {
+          speedBody.amount = Number(amount);
+        }
+
+        const res1 = await speedRequest("payments", "POST", speedBody, apiKey);
+        ok = res1.ok;
+        status = res1.status;
+        paymentData = res1.data;
 
         if (!ok && (status === 400 || status === 422)) {
           const retry = await speedRequest("payments", "POST", {
             currency: baseCurr,
-            amount: numAmount,
             target_currency: targetCurr,
             payment_methods: ["onchain"],
-            metadata: speedBody.metadata
+            metadata: speedBody.metadata,
+            ...(isOpenAmount ? { amount: 0 } : { amount: Number(amount) })
           }, apiKey);
 
           if (retry.ok && retry.data) {
@@ -512,12 +517,13 @@ module.exports = async function handler(req, res) {
         target_currency: targetCurr,
         payment_method: payMethod,
         telegram_id: telegram_id ? String(telegram_id) : null,
-        amount: Number(amount || 0),
+        amount: isOpenAmount ? 0 : Number(amount),
+        is_open_amount: isOpenAmount,
         is_paid: false,
         created_at: new Date().toISOString()
       }, { merge: true });
 
-      const logAmount = amount ? `${amount} ${targetCurr}` : `Open Amount (${targetCurr})`;
+      const logAmount = isOpenAmount ? `Open Amount (${targetCurr})` : `${amount} ${targetCurr}`;
       await forwardToLogsChannel(
         `📥 <b>Deposit Invoice Created</b>\n` +
         `• User: @${uid}\n` +
@@ -532,7 +538,8 @@ module.exports = async function handler(req, res) {
         tx_id: txId,
         payment_type: target.type,
         target_currency: targetCurr,
-        amount: Number(amount || 0),
+        amount: isOpenAmount ? 0 : Number(amount),
+        is_open_amount: isOpenAmount,
         invoice: invoiceString
       });
     }
@@ -559,7 +566,8 @@ module.exports = async function handler(req, res) {
       }
 
       const invData = invDoc.exists ? invDoc.data() : null;
-      const sats = Number(invData?.amount || 0);
+      const isOpenAmount = invData?.is_open_amount || Number(invData?.amount || 0) === 0;
+      let sats = Number(invData?.amount || 0);
       const curr = invData?.target_currency || "SATS";
       const creditTarget = invData?.user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
       const targetTgId = invData?.telegram_id || telegram_id;
@@ -585,84 +593,90 @@ module.exports = async function handler(req, res) {
       const isPaid = ["paid", "succeeded", "successful", "completed"].includes(status);
 
       if (isPaid && wallet) {
+        // For open-amount invoices, use the amount that was actually paid
         const finalSats = Number(payment?.amount || sats || 0);
         const finalCurr = curr || payment?.target_currency || "SATS";
 
-        const batch = db.batch();
+        // Safety: skip crediting if amount is still 0 (shouldn't happen if Speed reports paid)
+        if (finalSats > 0) {
+          const batch = db.batch();
 
-        if (invRef) {
-          batch.set(invRef, {
-            is_paid: true,
-            paid_at: new Date().toISOString()
-          }, { merge: true });
-        }
+          if (invRef) {
+            batch.set(invRef, {
+              is_paid: true,
+              paid_at: new Date().toISOString(),
+              amount: finalSats
+            }, { merge: true });
+          }
 
-        if (finalCurr === "SATS") {
-          batch.set(wallet.ref, {
-            balance: admin.firestore.FieldValue.increment(finalSats),
-            updated_at: new Date().toISOString()
-          }, { merge: true });
-        } else if (finalCurr === "USDT") {
-          batch.set(wallet.ref, {
-            usdt_balance: admin.firestore.FieldValue.increment(finalSats),
-            updated_at: new Date().toISOString()
-          }, { merge: true });
-        } else if (finalCurr === "USDC") {
-          batch.set(wallet.ref, {
-            usdc_balance: admin.firestore.FieldValue.increment(finalSats),
-            updated_at: new Date().toISOString()
-          }, { merge: true });
-        }
+          if (finalCurr === "SATS") {
+            batch.set(wallet.ref, {
+              balance: admin.firestore.FieldValue.increment(finalSats),
+              updated_at: new Date().toISOString()
+            }, { merge: true });
+          } else if (finalCurr === "USDT") {
+            batch.set(wallet.ref, {
+              usdt_balance: admin.firestore.FieldValue.increment(finalSats),
+              updated_at: new Date().toISOString()
+            }, { merge: true });
+          } else if (finalCurr === "USDC") {
+            batch.set(wallet.ref, {
+              usdc_balance: admin.firestore.FieldValue.increment(finalSats),
+              updated_at: new Date().toISOString()
+            }, { merge: true });
+          }
 
-        batch.set(db.collection("transactions").doc(payment_id), {
-          id: payment_id,
-          tx_id: payment_id,
-          type: "deposit",
-          user_id: wallet.id,
-          amount: finalSats,
-          currency: finalCurr,
-          status: "completed",
-          created_at: new Date().toISOString()
-        });
+          batch.set(db.collection("transactions").doc(payment_id), {
+            id: payment_id,
+            tx_id: payment_id,
+            type: "deposit",
+            user_id: wallet.id,
+            amount: finalSats,
+            currency: finalCurr,
+            status: "completed",
+            created_at: new Date().toISOString()
+          });
 
-        await batch.commit();
+          await batch.commit();
 
-        const updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
+          const updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
 
-        if (targetTgId) {
-          await notifyTelegramUser(
-            targetTgId,
-            `🎉 <b>Payment Received!</b>\n\n` +
-            `⚡ <b>+${finalSats} ${finalCurr}</b> credited to your balance!\n` +
-            `💰 <b>New Balance:</b> ${updatedBal.toLocaleString()} sats\n` +
-            `🆔 <b>TxID:</b> <code>${payment_id}</code>`
+          if (targetTgId) {
+            await notifyTelegramUser(
+              targetTgId,
+              `🎉 <b>Payment Received!</b>\n\n` +
+              `⚡ <b>+${finalSats} ${finalCurr}</b> credited to your balance!\n` +
+              `💰 <b>New Balance:</b> ${updatedBal.toLocaleString()} sats\n` +
+              `🆔 <b>TxID:</b> <code>${payment_id}</code>`
+            );
+          }
+
+          await forwardToLogsChannel(
+            `📥 <b>Deposit Confirmed</b>\n` +
+            `• User: @${wallet.id}\n` +
+            `• Amount: +${finalSats} ${finalCurr}\n` +
+            `• New Balance: ${updatedBal.toLocaleString()} sats\n` +
+            `• TxID: <code>${payment_id}</code>`
           );
+
+          return res.status(200).json({ 
+            success: true, 
+            is_paid: true,
+            tx_id: payment_id,
+            amount: finalSats,
+            balance: updatedBal,
+            currency: finalCurr
+          });
         }
-
-        await forwardToLogsChannel(
-          `📥 <b>Deposit Confirmed</b>\n` +
-          `• User: @${wallet.id}\n` +
-          `• Amount: +${finalSats} ${finalCurr}\n` +
-          `• New Balance: ${updatedBal.toLocaleString()} sats\n` +
-          `• TxID: <code>${payment_id}</code>`
-        );
-
-        return res.status(200).json({ 
-          success: true, 
-          is_paid: true,
-          tx_id: payment_id,
-          amount: finalSats,
-          balance: updatedBal,
-          currency: finalCurr
-        });
       }
 
       return res.status(200).json({ 
         success: true, 
-        is_paid: isPaid,
+        is_paid: isPaid && sats > 0,
         status: status || "pending",
         tx_id: payment_id,
         amount: sats,
+        is_open_amount: isOpenAmount,
         balance: wallet ? wallet.balance : 0,
         currency: curr
       });
@@ -776,7 +790,8 @@ module.exports = async function handler(req, res) {
             is_paid: true,
             paid_at: new Date().toISOString(),
             paid_by: senderWallet.id,
-            tx_id: txId
+            tx_id: txId,
+            amount: sendAmount
           });
         }
 
