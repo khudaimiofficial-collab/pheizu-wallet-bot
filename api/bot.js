@@ -87,8 +87,8 @@ async function getDirectBalance(userId, telegramId) {
 // Persistent Reply Keyboard
 async function getMainKeyboard(ctx) {
   const rows = [
-    ["💰 Balance", "📥 Deposit"],
-    ["📤 Withdraw", "📜 History"]
+    ["💎 Balance", "📥 Deposit"],
+    ["🚀 Withdraw", "📊 History"]
   ];
 
   if (await isAuthorizedAdmin(ctx)) {
@@ -103,115 +103,115 @@ async function getMainKeyboard(ctx) {
 // ----------------------------------------------------
 function getWithdrawAssetKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("⚡ Bitcoin (SATS)", "with_asset_sats")],
+    [Markup.button.callback("⚡  Bitcoin (SATS)  ───  ₿", "with_asset_sats")],
     [
-      Markup.button.callback("💵 USDT", "with_asset_usdt"),
-      Markup.button.callback("💲 USDC", "with_asset_usdc")
+      Markup.button.callback("💵  USDT  ───  🌐", "with_asset_usdt"),
+      Markup.button.callback("💲  USDC  ───  🔷", "with_asset_usdc")
     ],
-    [Markup.button.callback("🔙 Back to Main Menu", "gateway_back")]
+    [Markup.button.callback("◀️   Back to Main Menu   ▶️", "gateway_back")]
   ]);
 }
 
 function getSatsWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "with_net_sats_lightning"),
-      Markup.button.callback("₿ On-Chain", "with_net_sats_onchain")
+      Markup.button.callback("⚡  Lightning  ───  ⚡", "with_net_sats_lightning"),
+      Markup.button.callback("₿  On-Chain  ───  🔗", "with_net_sats_onchain")
     ],
-    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+    [Markup.button.callback("◀️   Back to Assets   ▶️", "with_back_to_assets")]
   ]);
 }
 
 function getUsdtWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "with_net_usdt_lightning"),
-      Markup.button.callback("⛓️ Ethereum", "with_net_usdt_ethereum")
+      Markup.button.callback("⚡  Lightning  ───  ⚡", "with_net_usdt_lightning"),
+      Markup.button.callback("⛓️  Ethereum  ───  Ξ", "with_net_usdt_ethereum")
     ],
     [
-      Markup.button.callback("🔴 Tron (TRC-20)", "with_net_usdt_tron"),
-      Markup.button.callback("🟣 Solana", "with_net_usdt_solana")
+      Markup.button.callback("🔴  Tron (TRC-20)  ───  ⚡", "with_net_usdt_tron"),
+      Markup.button.callback("🟣  Solana  ───  ◎", "with_net_usdt_solana")
     ],
-    [Markup.button.callback("💎 TON", "with_net_usdt_ton")],
-    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+    [Markup.button.callback("💎  TON  ───  💠", "with_net_usdt_ton")],
+    [Markup.button.callback("◀️   Back to Assets   ▶️", "with_back_to_assets")]
   ]);
 }
 
 function getUsdcWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "with_net_usdc_lightning"),
-      Markup.button.callback("⛓️ Ethereum", "with_net_usdc_ethereum")
+      Markup.button.callback("⚡  Lightning  ───  ⚡", "with_net_usdc_lightning"),
+      Markup.button.callback("⛓️  Ethereum  ───  Ξ", "with_net_usdc_ethereum")
     ],
     [
-      Markup.button.callback("🟣 Solana", "with_net_usdc_solana")
+      Markup.button.callback("🟣  Solana  ───  ◎", "with_net_usdc_solana")
     ],
-    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
+    [Markup.button.callback("◀️   Back to Assets   ▶️", "with_back_to_assets")]
   ]);
 }
 
 function getDepositAssetKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("⚡ Bitcoin (SATS)", "dep_asset_sats")],
+    [Markup.button.callback("⚡  Bitcoin (SATS)  ───  ₿", "dep_asset_sats")],
     [
-      Markup.button.callback("💵 USDT", "dep_asset_usdt"),
-      Markup.button.callback("💲 USDC", "dep_asset_usdc")
+      Markup.button.callback("💵  USDT  ───  🌐", "dep_asset_usdt"),
+      Markup.button.callback("💲  USDC  ───  🔷", "dep_asset_usdc")
     ],
-    [Markup.button.callback("🔙 Back", "gateway_back")]
+    [Markup.button.callback("◀️   Back   ▶️", "gateway_back")]
   ]);
 }
 
 function getUsdtDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "dep_net_usdt_lightning"),
-      Markup.button.callback("⛓️ Ethereum", "dep_net_usdt_ethereum")
+      Markup.button.callback("⚡  Lightning  ───  ⚡", "dep_net_usdt_lightning"),
+      Markup.button.callback("⛓️  Ethereum  ───  Ξ", "dep_net_usdt_ethereum")
     ],
     [
-      Markup.button.callback("🔴 Tron (TRC-20)", "dep_net_usdt_tron"),
-      Markup.button.callback("🟣 Solana", "dep_net_usdt_solana")
+      Markup.button.callback("🔴  Tron (TRC-20)  ───  ⚡", "dep_net_usdt_tron"),
+      Markup.button.callback("🟣  Solana  ───  ◎", "dep_net_usdt_solana")
     ],
-    [Markup.button.callback("💎 TON", "dep_net_usdt_ton")],
-    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
+    [Markup.button.callback("💎  TON  ───  💠", "dep_net_usdt_ton")],
+    [Markup.button.callback("◀️   Back to Assets   ▶️", "dep_back_to_assets")]
   ]);
 }
 
 function getUsdcDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "dep_net_usdc_lightning"),
-      Markup.button.callback("⛓️ Ethereum", "dep_net_usdc_ethereum")
+      Markup.button.callback("⚡  Lightning  ───  ⚡", "dep_net_usdc_lightning"),
+      Markup.button.callback("⛓️  Ethereum  ───  Ξ", "dep_net_usdc_ethereum")
     ],
     [
-      Markup.button.callback("🟣 Solana", "dep_net_usdc_solana")
+      Markup.button.callback("🟣  Solana  ───  ◎", "dep_net_usdc_solana")
     ],
-    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
+    [Markup.button.callback("◀️   Back to Assets   ▶️", "dep_back_to_assets")]
   ]);
 }
 
 function getSatsDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "dep_net_sats_lightning"),
-      Markup.button.callback("₿ On-Chain", "dep_net_sats_onchain")
+      Markup.button.callback("⚡  Lightning  ───  ⚡", "dep_net_sats_lightning"),
+      Markup.button.callback("₿  On-Chain  ───  🔗", "dep_net_sats_onchain")
     ],
-    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
+    [Markup.button.callback("◀️   Back to Assets   ▶️", "dep_back_to_assets")]
   ]);
 }
 
 function getAdminDashboardKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("👤 Manage Users", "admin_users_menu"),
-      Markup.button.callback("📢 Broadcast", "admin_broadcast_prompt")
+      Markup.button.callback("👤  Manage Users  ───  👥", "admin_users_menu"),
+      Markup.button.callback("📢  Broadcast  ───  📡", "admin_broadcast_prompt")
     ],
     [
-      Markup.button.callback("📋 Logs Channel", "admin_logs_prompt"),
-      Markup.button.callback("👑 Admins (Add/Del)", "admin_admins_menu")
+      Markup.button.callback("📋  Logs Channel  ───  📊", "admin_logs_prompt"),
+      Markup.button.callback("👑  Admins (Add/Del)  ───  🔐", "admin_admins_menu")
     ],
     [
-      Markup.button.callback("🔑 Set Speed Key", "admin_setkey_prompt"),
-      Markup.button.callback("❌ Close", "admin_close")
+      Markup.button.callback("🔑  Set Speed Key  ───  🗝️", "admin_setkey_prompt"),
+      Markup.button.callback("❌  Close  ───  🚪", "admin_close")
     ]
   ]);
 }
@@ -219,16 +219,16 @@ function getAdminDashboardKeyboard() {
 function getAdminUserManagementKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("🚫 Ban User", "adm_ban_user"),
-      Markup.button.callback("✅ Unban User", "adm_unban_user")
+      Markup.button.callback("🚫  Ban User  ───  ⛔", "adm_ban_user"),
+      Markup.button.callback("✅  Unban User  ───  🔓", "adm_unban_user")
     ],
     [
-      Markup.button.callback("➕ Add Balance", "adm_add_bal"),
-      Markup.button.callback("➖ Deduct Balance", "adm_deduct_bal")
+      Markup.button.callback("➕  Add Balance  ───  💰", "adm_add_bal"),
+      Markup.button.callback("➖  Deduct Balance  ───  📉", "adm_deduct_bal")
     ],
     [
-      Markup.button.callback("🗑️ Delete User", "adm_del_user"),
-      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard")
+      Markup.button.callback("🗑️  Delete User  ───  ❌", "adm_del_user"),
+      Markup.button.callback("◀️   Back to Admin   ▶️", "admin_main_dashboard")
     ]
   ]);
 }
@@ -236,12 +236,12 @@ function getAdminUserManagementKeyboard() {
 function getAdminAdminsKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("➕ Add Admin", "adm_add_admin"),
-      Markup.button.callback("➖ Delete Admin", "adm_del_admin")
+      Markup.button.callback("➕  Add Admin  ───  👑", "adm_add_admin"),
+      Markup.button.callback("➖  Delete Admin  ───  🗑️", "adm_del_admin")
     ],
     [
-      Markup.button.callback("📋 List Admins", "adm_list_admins"),
-      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard")
+      Markup.button.callback("📋  List Admins  ───  📜", "adm_list_admins"),
+      Markup.button.callback("◀️   Back to Admin   ▶️", "admin_main_dashboard")
     ]
   ]);
 }
@@ -370,16 +370,18 @@ function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabe
   const backAssetCallback = isSats ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
   let buttons = [
-    [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
-    [Markup.button.callback("⚡ Quick Invoice (Open Amount)", `dep_opt:open:${targetCurrency}:${paymentMethod}`)],
-    [Markup.button.callback("« Back to Networks", backAssetCallback)]
+    [Markup.button.callback("🔢   Enter Specific Amount   ───   ✏️", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
+    [Markup.button.callback("⚡   Quick Invoice (Open Amount)   ───   🎯", `dep_opt:open:${targetCurrency}:${paymentMethod}`)],
+    [Markup.button.callback("◀️   Back to Networks   ▶️", backAssetCallback)]
   ];
 
   return ctx.editMessageText(
     `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
-    `Choose your deposit option below:\n\n` +
-    `1️⃣ <b>Enter Specific Amount:</b> Generate an invoice for your exact desired amount (e.g. 50, 500, 50,000 SATS).\n` +
-    `2️⃣ <b>Quick Invoice (Open Amount):</b> Generate an invoice where the sender can type any amount in their wallet.\n`,
+    `✨ <b>Choose your deposit option below:</b>\n\n` +
+    `1️⃣ <b>Enter Specific Amount:</b> Generate an invoice for your exact desired amount (e.g. 50, 500, 50,000 SATS).\n\n` +
+    `2️⃣ <b>Quick Invoice (Open Amount):</b> Generate an invoice where the sender can type any amount in their wallet.\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `💡 <i>Tip: Use Quick Invoice for flexible payments!</i>`,
     {
       parse_mode: "HTML",
       ...Markup.inlineKeyboard(buttons)
@@ -413,6 +415,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       telegram_id: String(ctx.from.id)
     };
 
+    // Only include amount if it's a custom amount > 0
     if (amount && Number(amount) > 0) {
       payload.amount = Number(amount);
     }
@@ -468,7 +471,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       caption,
       parse_mode: "HTML",
       ...Markup.inlineKeyboard([
-        [Markup.button.callback("🔄 Check Status", `check_dep:${txId}`)]
+        [Markup.button.callback("🔄   Check Status   ───   ✅", `check_dep:${txId}`)]
       ])
     });
 
@@ -480,8 +483,8 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
-          [Markup.button.callback("« Back to Networks", backCallback)]
+          [Markup.button.callback("🔢   Enter Specific Amount   ───   ✏️", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
+          [Markup.button.callback("◀️   Back to Networks   ▶️", backCallback)]
         ])
       }
     );
@@ -511,7 +514,7 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
 
       await ctx.editMessageReplyMarkup(
         Markup.inlineKeyboard([
-          [Markup.button.callback("✅ Payment Confirmed", "gateway_back")]
+          [Markup.button.callback("✅   Payment Confirmed   ───   🎉", "gateway_back")]
         ]).reply_markup
       ).catch(() => {});
     } else {
@@ -608,7 +611,7 @@ bot.hears("💰 Balance", async (ctx) => {
   await ctx.reply(walletText, {
     parse_mode: "HTML",
     ...Markup.inlineKeyboard([
-      Markup.button.webApp("📱 Open WebApp", APP_URL)
+      Markup.button.webApp("📱   Open WebApp   ───   🌐", APP_URL)
     ])
   });
 });
@@ -829,7 +832,7 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
       `<i>Type /cancel to abort at any time.</i>`;
 
     const promptKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback("« Back to Networks", backCallback)]
+      [Markup.button.callback("◀️   Back to Networks   ▶️", backCallback)]
     ]);
 
     try {
@@ -839,10 +842,11 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
       await ctx.reply(promptText, { parse_mode: "HTML", ...promptKeyboard });
     }
   } else {
-    // Option 2: Generate open invoice without embedding a fixed amount
+    // Option 2: Generate open invoice with amount = 0
     return handleGenerateDeposit(ctx, {
       targetCurrency,
       paymentMethod,
+      amount: 0,
       networkLabel,
       isCustomAmount: false
     });
@@ -1002,7 +1006,7 @@ bot.action("gateway_back", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   await ctx.deleteMessage().catch(() => {});
   const kb = await getMainKeyboard(ctx);
-  await ctx.reply("🔙 Returned to main menu.", kb);
+  await ctx.reply("🏠 <b>Returned to main menu.</b>", { parse_mode: "HTML", ...kb });
 });
 
 // Admin Callbacks
@@ -1132,7 +1136,7 @@ bot.on("text", async (ctx) => {
     return ctx.reply(walletText, { parse_mode: "HTML", ...kb });
   }
 
-  if (text.startsWith("/") || ["💰 Balance", "📥 Deposit", "📤 Withdraw", "📜 History", "👑 Admin Panel"].includes(text)) {
+  if (text.startsWith("/") || ["💎 Balance", "📥 Deposit", "🚀 Withdraw", "📊 History", "👑 Admin Panel", "💰 Balance", "📤 Withdraw", "📜 History"].includes(text)) {
     stopDepositWatcher(ctx.from.id);
     await clearSession(ctx.from.id);
     return;
@@ -1326,9 +1330,9 @@ bot.on("text", async (ctx) => {
         {
           parse_mode: "HTML",
           ...Markup.inlineKeyboard([
-            [Markup.button.callback(`🚀 Send ${detectedAmount.toLocaleString()} ${detectedCurrency}`, "confirm_send")],
-            [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt")],
-            [Markup.button.callback("❌ Cancel", "cancel_send")]
+            [Markup.button.callback(`🚀   Send ${detectedAmount.toLocaleString()} ${detectedCurrency}   ───   ⚡`, "confirm_send")],
+            [Markup.button.callback("✏️   Edit Amount   ───   🎯", "edit_withdraw_amt")],
+            [Markup.button.callback("❌   Cancel   ───   🚫", "cancel_send")]
           ])
         }
       );
@@ -1383,9 +1387,9 @@ bot.on("text", async (ctx) => {
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback(`🚀 Send ${amount.toLocaleString()} ${curr}`, "confirm_send")],
-          [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt")],
-          [Markup.button.callback("❌ Cancel", "cancel_send")]
+          [Markup.button.callback(`🚀   Send ${amount.toLocaleString()} ${curr}   ───   ⚡`, "confirm_send")],
+          [Markup.button.callback("✏️   Edit Amount   ───   🎯", "edit_withdraw_amt")],
+          [Markup.button.callback("❌   Cancel   ───   🚫", "cancel_send")]
         ])
       }
     );
