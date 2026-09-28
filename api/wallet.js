@@ -45,6 +45,7 @@ const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 
+// Helper: Sanitize API Key
 function sanitizeApiKey(raw) {
   if (!raw) return "";
   return String(raw)
@@ -55,6 +56,7 @@ function sanitizeApiKey(raw) {
     .trim();
 }
 
+// Helper: Resolve Numeric Telegram ID
 async function resolveNumericTelegramId(userId, candidateTgId) {
   if (candidateTgId && /^\d{6,14}$/.test(String(candidateTgId).trim())) {
     return String(candidateTgId).trim();
@@ -89,6 +91,25 @@ async function resolveNumericTelegramId(userId, candidateTgId) {
   return null;
 }
 
+// Helper: Check if user is an authorized admin
+async function isAuthorizedAdminById(telegramId, username) {
+  const numId = String(telegramId || "").trim();
+  const uname = String(username || "").toLowerCase().replace(/^@/, "").trim();
+  if (numId === "8960497898" || uname === "pheizu") return true;
+
+  if (db) {
+    try {
+      const snap = await db.collection("settings").doc("admins").get();
+      if (snap.exists) {
+        const list = (snap.data().list || []).map(a => String(a).toLowerCase().replace(/^@/, ""));
+        if (list.includes(numId) || (uname && list.includes(uname))) return true;
+      }
+    } catch(e) {}
+  }
+  return false;
+}
+
+// Helper: Send Telegram notification to user
 async function notifyTelegramUser(telegramId, message) {
   if (!BOT_TOKEN || !telegramId) return;
   try {
@@ -108,6 +129,7 @@ async function notifyTelegramUser(telegramId, message) {
   }
 }
 
+// Helper: Forward success receipts to Telegram log channel
 async function forwardToLogsChannel(text) {
   if (!BOT_TOKEN) return;
   try {
@@ -135,6 +157,7 @@ async function forwardToLogsChannel(text) {
   } catch (e) {}
 }
 
+// Helper: Get active Speed API key
 async function getSpeedApiKey() {
   if (db) {
     try {
@@ -155,6 +178,7 @@ async function getSpeedApiKey() {
   return sanitizeApiKey(process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "");
 }
 
+// Helper: Resolve LNURL-pay address to BOLT11 invoice
 async function resolveLnAddress(dest, amountSats) {
   if (dest.includes("@") && !dest.toLowerCase().includes(DOMAIN.toLowerCase())) {
     try {
@@ -173,6 +197,7 @@ async function resolveLnAddress(dest, amountSats) {
   return dest;
 }
 
+// Helper: Extract payment targets (invoice or crypto address)
 function extractPaymentTarget(obj) {
   if (!obj) return null;
 
@@ -226,6 +251,7 @@ function extractPaymentTarget(obj) {
   return null;
 }
 
+// Helper: Extract real amount received across all Speed API response formats
 function extractPaidAmount(payment, invData) {
   if (!payment) return 0;
 
@@ -260,6 +286,7 @@ function extractPaidAmount(payment, invData) {
   return 0;
 }
 
+// Speed Client Request
 async function speedRequest(path, method, body, apiKey) {
   const cleanKey = sanitizeApiKey(apiKey);
   const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
@@ -280,6 +307,7 @@ async function speedRequest(path, method, body, apiKey) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// Error extractor
 function extractErrorMessage(data, status) {
   if (!data) return `Speed API returned HTTP ${status}`;
   if (typeof data === "string") return data;
@@ -292,6 +320,7 @@ function extractErrorMessage(data, status) {
   return `Speed API error (HTTP ${status})`;
 }
 
+// User wallet resolver
 async function findUserWallet(identifiers) {
   if (!db) return null;
 
@@ -331,6 +360,7 @@ async function findUserWallet(identifiers) {
   return { ref: db.collection("users").doc(primary), id: primary, data: {}, balance: 0, collection: "users" };
 }
 
+// Main Request Handler
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -345,7 +375,9 @@ module.exports = async function handler(req, res) {
   const { action } = req.query;
 
   try {
+    // ========================================================
     // 1. BALANCE
+    // ========================================================
     if (action === "balance" && req.method === "GET") {
       const uid = req.query.user_id;
       const uname = req.query.username;
@@ -363,7 +395,9 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 2. HISTORY
+    // ========================================================
+    // 2. TRANSACTION HISTORY
+    // ========================================================
     if (action === "history" && req.method === "GET") {
       const uid = (req.query.user_id || req.query.username || "").toLowerCase().trim();
       const tid = req.query.telegram_id;
@@ -380,7 +414,9 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, history: list.slice(0, 10) });
     }
 
-    // 3. CREATE DEPOSIT INVOICE (Speed ID and TxID are strictly identical)
+    // ========================================================
+    // 3. CREATE DEPOSIT INVOICE (Speed ID and TxID are identical)
+    // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
@@ -405,7 +441,7 @@ module.exports = async function handler(req, res) {
       let status = 400;
       let sourceEndpoint = "payments";
 
-      // A. Open Amount Lightning -> Create Payrequest
+      // Open Amount Lightning -> Create Payrequest
       if (isOpenAmount && payMethod === "lightning") {
         const prRes = await speedRequest("payrequests", "POST", {
           currency: baseCurr,
@@ -421,7 +457,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // B. Open Amount On-chain -> Create Payment Address
+      // Open Amount On-chain -> Create Payment Address
       if (isOpenAmount && payMethod === "onchain") {
         const addrRes = await speedRequest("payment-addresses", "POST", {
           currency: baseCurr,
@@ -438,7 +474,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // C. Specific Amount
+      // Specific Amount or Fallback
       if (!ok) {
         const speedBody = {
           currency: baseCurr,
@@ -508,7 +544,9 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 4. CHECK DEPOSIT STATUS (Supports both Internal Bot-to-Bot & External Payments)
+    // ========================================================
+    // 4. CHECK DEPOSIT STATUS (INTERNAL BOT-TO-BOT & EXTERNAL)
+    // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
       if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
@@ -534,7 +572,7 @@ module.exports = async function handler(req, res) {
       const wallet = await findUserWallet([creditTarget, telegram_id, invData?.telegram_id, user_id]);
       const targetNumericChatId = await resolveNumericTelegramId(creditTarget, telegram_id || invData?.telegram_id || wallet?.data?.telegram_id);
 
-      // 🔥 IMMEDIATE RETURN FOR INTERNAL BOT-TO-BOT PAYMENTS OR ALREADY VERIFIED PAYMENTS
+      // Return immediately if already paid (Internal bot-to-bot or cached settled payment)
       if (invData && invData.is_paid && Number(invData.amount || 0) > 0) {
         if (!invData.notified && targetNumericChatId) {
           const fromUser = invData.paid_by ? ` from @${invData.paid_by}` : '';
@@ -644,6 +682,7 @@ module.exports = async function handler(req, res) {
         ""
       ).toLowerCase();
 
+      // Strict paid validation
       const isConfirmedPaidStatus = [
         "paid",
         "succeeded",
@@ -663,6 +702,7 @@ module.exports = async function handler(req, res) {
       const isPaid = (isConfirmedPaidStatus || hasPaidFlag || hasPayrequestFunds);
       const finalSats = detectedAmount > 0 ? detectedAmount : extractPaidAmount(payment, invData);
 
+      // Process and credit ONLY when Speed genuinely confirms payment
       if (isPaid && finalSats > 0) {
         const finalCurr = curr || payment?.target_currency || "SATS";
 
@@ -756,7 +796,9 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 5. WITHDRAW / SEND (Handles Internal Bot-to-Bot + Duplicate Detection)
+    // ========================================================
+    // 5. WITHDRAW / SEND (Prevents duplicate payout & supports internal transfer)
+    // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, network, currency, target_currency } = req.body;
       const sendAmount = Number(amount);
@@ -892,10 +934,10 @@ module.exports = async function handler(req, res) {
           const invData = (await internalInvoiceDoc.get()).data();
           recipientTgId = invData?.telegram_id;
 
-          // 🔥 Marks the invoice paid immediately so the recipient's check-status triggers success!
+          // Marks the invoice paid so the recipient's check-status triggers immediately
           batch.update(internalInvoiceDoc, {
             is_paid: true,
-            notified: false, // Allows check-status to deliver the success notification & popup
+            notified: false,
             paid_at: new Date().toISOString(),
             paid_by: senderWallet.id,
             tx_id: txId,
@@ -1069,6 +1111,216 @@ module.exports = async function handler(req, res) {
         remaining_balance: remainingBal,
         message: `Successfully sent ${sendAmount} ${curr}.`
       });
+    }
+
+    // ========================================================
+    // 6. ADMIN: GET ALL DASHBOARD DATA
+    // ========================================================
+    if (action === "admin-get-data" && req.method === "GET") {
+      const tid = req.query.telegram_id;
+      const uname = req.query.username;
+      if (!(await isAuthorizedAdminById(tid, uname))) {
+        return res.status(403).json({ success: false, error: "Unauthorized access" });
+      }
+
+      const savedKey = await getSpeedApiKey();
+      let logsChannel = "";
+      let adminsList = [];
+
+      if (db) {
+        try {
+          const chSnap = await db.collection("settings").doc("logs_channel").get();
+          if (chSnap.exists && chSnap.data().channel_id) logsChannel = chSnap.data().channel_id;
+        } catch(e) {}
+
+        try {
+          const admSnap = await db.collection("settings").doc("admins").get();
+          if (admSnap.exists && Array.isArray(admSnap.data().list)) adminsList = admSnap.data().list;
+        } catch(e) {}
+      }
+
+      const usersList = [];
+      if (db) {
+        const uSnap = await db.collection("users").get();
+        for (const doc of uSnap.docs) {
+          const d = doc.data();
+          let sats = Number(d.balance ?? d.sats ?? d.amount ?? 0);
+          let usdt = Number(d.usdt_balance ?? 0);
+          let usdc = Number(d.usdc_balance ?? 0);
+
+          try {
+            const wDoc = await db.collection("wallets").doc(doc.id).get();
+            if (wDoc.exists) {
+              const wd = wDoc.data();
+              sats = Math.max(sats, Number(wd.balance ?? wd.sats ?? wd.amount ?? 0));
+              usdt = Math.max(usdt, Number(wd.usdt_balance ?? 0));
+              usdc = Math.max(usdc, Number(wd.usdc_balance ?? 0));
+            }
+          } catch(e) {}
+
+          usersList.push({
+            user_id: doc.id,
+            username: d.username || "",
+            telegram_id: d.telegram_id || "",
+            first_name: d.first_name || "",
+            banned: Boolean(d.banned),
+            sats,
+            usdt,
+            usdc
+          });
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        speed_key: savedKey,
+        logs_channel: logsChannel,
+        admins_list: adminsList,
+        users: usersList
+      });
+    }
+
+    // ========================================================
+    // 7. ADMIN: BROADCAST TO ALL USERS
+    // ========================================================
+    if (action === "admin-broadcast" && req.method === "POST") {
+      const { text, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdminById(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized" });
+      }
+      if (!text || !text.trim()) {
+        return res.status(400).json({ success: false, error: "Broadcast message text is required." });
+      }
+      if (!BOT_TOKEN) {
+        return res.status(500).json({ success: false, error: "BOT_TOKEN is not configured." });
+      }
+
+      let sentCount = 0;
+      let failedCount = 0;
+
+      if (db) {
+        const usersSnap = await db.collection("users").get();
+        const recipientIds = new Set();
+
+        usersSnap.forEach(doc => {
+          const d = doc.data();
+          if (d.telegram_id && /^\d+$/.test(String(d.telegram_id))) {
+            recipientIds.add(String(d.telegram_id));
+          }
+        });
+
+        for (const tId of recipientIds) {
+          try {
+            const bRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: tId,
+                text: text,
+                parse_mode: "HTML"
+              })
+            });
+            const bData = await bRes.json();
+            if (bData.ok) sentCount++;
+            else failedCount++;
+          } catch(e) {
+            failedCount++;
+          }
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        sent: sentCount,
+        failed: failedCount,
+        total: sentCount + failedCount
+      });
+    }
+
+    // ========================================================
+    // 8. ADMIN: CONFIGURATION SETTINGS
+    // ========================================================
+    if (action === "admin-save-key" && req.method === "POST") {
+      const { api_key, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdminById(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized" });
+      }
+      if (!api_key) return res.status(400).json({ success: false, error: "API key is required" });
+
+      if (db) {
+        await db.collection("settings").doc("speed").set({ api_key: api_key.trim(), updated_at: new Date().toISOString() }, { merge: true });
+      }
+      return res.status(200).json({ success: true });
+    }
+
+    if (action === "admin-save-channel" && req.method === "POST") {
+      const { channel_id, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdminById(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized" });
+      }
+      let chId = String(channel_id).trim();
+      if (/^\d{8,14}$/.test(chId)) chId = `-100${chId}`;
+
+      if (db) {
+        await db.collection("settings").doc("logs_channel").set({ channel_id: chId, updated_at: new Date().toISOString() }, { merge: true });
+      }
+      return res.status(200).json({ success: true, channel_id: chId });
+    }
+
+    if (action === "admin-manage-admin" && req.method === "POST") {
+      const { task, target_admin, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdminById(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized" });
+      }
+      const adminTarget = String(target_admin).trim().toLowerCase().replace(/^@/, "");
+
+      if (db) {
+        if (task === "add") {
+          await db.collection("settings").doc("admins").set({ list: admin.firestore.FieldValue.arrayUnion(adminTarget) }, { merge: true });
+        } else if (task === "remove") {
+          await db.collection("settings").doc("admins").set({ list: admin.firestore.FieldValue.arrayRemove(adminTarget) }, { merge: true });
+        }
+      }
+      return res.status(200).json({ success: true });
+    }
+
+    if (action === "admin-adjust-balance" && req.method === "POST") {
+      const { target_user, asset, amount, type, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdminById(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized" });
+      }
+      const numAmt = Number(amount);
+      if (!numAmt || numAmt <= 0) return res.status(400).json({ success: false, error: "Invalid amount" });
+
+      const delta = (type === "deduct") ? -numAmt : numAmt;
+      const target = String(target_user).toLowerCase().replace(/^@/, "");
+
+      if (db) {
+        const field = asset === "USDT" ? "usdt_balance" : (asset === "USDC" ? "usdc_balance" : "balance");
+        await db.collection("users").doc(target).set({ [field]: admin.firestore.FieldValue.increment(delta) }, { merge: true });
+        await db.collection("wallets").doc(target).set({ [field]: admin.firestore.FieldValue.increment(delta) }, { merge: true });
+      }
+      return res.status(200).json({ success: true, credited: delta });
+    }
+
+    if (action === "admin-manage-user" && req.method === "POST") {
+      const { target_user, task, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdminById(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized" });
+      }
+      const target = String(target_user).toLowerCase().replace(/^@/, "");
+
+      if (db) {
+        if (task === "ban") {
+          await db.collection("users").doc(target).set({ banned: true }, { merge: true });
+        } else if (task === "unban") {
+          await db.collection("users").doc(target).set({ banned: false }, { merge: true });
+        } else if (task === "delete") {
+          await db.collection("users").doc(target).delete();
+          await db.collection("wallets").doc(target).delete();
+        }
+      }
+      return res.status(200).json({ success: true });
     }
 
     return res.status(400).json({ success: false, error: "Invalid action." });
