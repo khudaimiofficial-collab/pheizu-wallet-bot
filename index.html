@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>Pheizu Wallet</title>
+  <title>Pheizu Lightning Wallet</title>
   
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
   <style>
     :root {
-      --bg: #090c15;
-      --card: #111726;
-      --card-inner: #161e31;
+      --bg: #070a13;
+      --card: #0e1526;
+      --card-inner: #131c33;
       --text: #ffffff;
-      --muted: #8e9bb0;
+      --muted: #8c9cb5;
       --primary: #2563eb;
       --primary-light: #38bdf8;
       --button: #00e676;
-      --border: #1e293b;
+      --border: #1e2c4a;
       --danger: #ef4444;
     }
     
@@ -37,7 +37,7 @@
       color: var(--text);
       padding: 12px;
       user-select: none;
-      padding-bottom: 40px;
+      padding-bottom: 50px;
     }
 
     .card {
@@ -48,15 +48,29 @@
       border: 1px solid var(--border);
     }
 
+    /* Interactive Balance Card */
+    .balance-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
     .balance-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-    .balance-amount { font-size: 26px; font-weight: 800; color: #fff; margin: 4px 0; font-family: monospace; }
+    .balance-amount {
+      font-size: 28px;
+      font-weight: 800;
+      color: #fff;
+      margin: 6px 0 2px;
+      font-family: monospace;
+      cursor: pointer;
+      display: inline-block;
+    }
     .balance-sub { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
     
     .asset-grid {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
       gap: 6px;
-      margin: 10px 0;
+      margin-top: 6px;
     }
     .asset-pill {
       background: var(--card-inner);
@@ -64,7 +78,11 @@
       border-radius: 10px;
       padding: 8px 4px;
       text-align: center;
+      cursor: pointer;
+      transition: transform 0.1s ease, border-color 0.2s ease;
     }
+    .asset-pill:active { transform: scale(0.96); }
+    .asset-pill.active-pill { border-color: var(--primary-light); background: rgba(56, 189, 248, 0.08); }
     .asset-pill-name { font-size: 10px; color: var(--muted); text-transform: uppercase; }
     .asset-pill-val { font-size: 12px; font-weight: 700; margin-top: 2px; font-family: monospace; color: #fff; }
 
@@ -76,17 +94,16 @@
       padding: 3px;
       margin-bottom: 12px;
       border: 1px solid var(--border);
-      overflow-x: auto;
       gap: 2px;
     }
     .tab-btn {
       flex: 1;
-      padding: 9px 4px;
+      padding: 10px 4px;
       border: none;
       background: transparent;
       color: var(--muted);
       font-weight: 600;
-      border-radius: 8px;
+      border-radius: 9px;
       font-size: 12px;
       cursor: pointer;
       white-space: nowrap;
@@ -100,23 +117,59 @@
       border: 1px solid var(--border);
     }
 
-    /* Receive BTC Screen (Screenshot 3 Style) */
+    /* Sliding Pill Container (Horizontal Slider for Networks) */
+    .sliding-pill-container {
+      display: flex;
+      overflow-x: auto;
+      scroll-behavior: smooth;
+      white-space: nowrap;
+      gap: 6px;
+      padding: 4px 2px 8px;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .sliding-pill-container::-webkit-scrollbar { display: none; }
+
+    .net-pill-btn {
+      flex: 0 0 auto;
+      padding: 10px 14px;
+      background: var(--card-inner);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 10px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: transform 0.1s ease;
+    }
+    .net-pill-btn:active { transform: scale(0.96); }
+    .net-pill-btn.active {
+      background: #172554;
+      border-color: #3b82f6;
+      color: #fff;
+    }
+
+    /* Receive QR Card Container */
     .receive-box {
       background: var(--card);
       border-radius: 20px;
       padding: 16px;
       border: 1px solid var(--border);
+      margin-top: 10px;
     }
     
     .receive-header {
-      font-size: 17px;
+      font-size: 16px;
       font-weight: 700;
       text-align: center;
       margin-bottom: 14px;
       color: #fff;
     }
 
-    /* The White Rounded QR Frame with Pheizu Logo */
+    /* Pure White Rounded QR Frame with Center Logo */
     .qr-frame {
       background: #ffffff;
       border-radius: 20px;
@@ -128,7 +181,7 @@
       position: relative;
       width: 250px;
       height: 250px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.6);
     }
 
     #qrcode {
@@ -137,53 +190,39 @@
       align-items: center;
     }
 
-    /* Pheizu Logo Badge in Center of QR */
+    /* Pheizu Circular Electric Dragon/Wolf Logo */
     .pheizu-qr-logo {
       position: absolute;
-      width: 44px;
-      height: 44px;
-      background: #1e40af;
+      width: 48px;
+      height: 48px;
+      background: radial-gradient(circle, #0f172a 40%, #0284c7 100%);
       border: 3px solid #ffffff;
-      border-radius: 10px;
+      border-radius: 50%;
       display: flex;
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+      box-shadow: 0 0 12px rgba(14, 165, 233, 0.8);
       z-index: 10;
       pointer-events: none;
     }
 
-    .pheizu-qr-logo svg {
-      width: 20px;
-      height: 20px;
-    }
-
-    .pheizu-qr-logo span {
-      font-size: 6px;
-      font-weight: 900;
-      color: #ffffff;
-      letter-spacing: 0.5px;
-      line-height: 1;
-      margin-top: 1px;
-    }
-
-    /* Invoice Details Sheet (Screenshot 3 Style) */
+    /* Invoice Details Sheet */
     .details-sheet {
       background: var(--card-inner);
       border: 1px solid var(--border);
       border-radius: 14px;
-      padding: 12px;
-      margin-bottom: 16px;
+      padding: 10px 14px;
+      margin-bottom: 14px;
     }
 
     .details-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 8px 0;
+      padding: 9px 0;
       border-bottom: 1px solid rgba(255,255,255,0.05);
-      font-size: 13px;
+      font-size: 12px;
     }
     .details-row:last-child { border-bottom: none; }
     
@@ -194,45 +233,10 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: 12px;
-    }
-
-    /* Dual Pill Network Switcher at Bottom of Screen (Screenshot 3 Style) */
-    .network-pill-container {
-      display: flex;
-      background: #090c15;
-      border-radius: 12px;
-      padding: 4px;
-      border: 1px solid var(--border);
-      margin-bottom: 14px;
-      gap: 4px;
-    }
-
-    .net-pill-btn {
-      flex: 1;
-      padding: 11px;
-      background: transparent;
-      border: 1px solid transparent;
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 700;
-      border-radius: 9px;
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      transition: transform 0.1s ease;
     }
-    .net-pill-btn:active { transform: scale(0.97); }
+    .details-val.clickable:hover { color: var(--primary-light); }
 
-    .net-pill-btn.active {
-      background: #172554;
-      border-color: #3b82f6;
-      color: #fff;
-    }
-
-    /* Trust Footer */
     .trust-footer {
       display: flex;
       align-items: center;
@@ -244,7 +248,13 @@
       margin-top: 10px;
     }
 
-    /* Choice Buttons for Other Tabs */
+    /* Asset Buttons */
+    .btn-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
+      gap: 6px;
+      margin-bottom: 8px;
+    }
     .choice-btn {
       background: var(--card-inner);
       border: 1px solid var(--border);
@@ -260,15 +270,8 @@
     .choice-btn:active { transform: scale(0.96); }
     .choice-btn.selected {
       border-color: var(--primary-light);
-      background: rgba(56, 189, 248, 0.1);
+      background: rgba(56, 189, 248, 0.12);
       color: var(--primary-light);
-    }
-
-    .btn-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
-      gap: 6px;
-      margin-bottom: 10px;
     }
 
     input {
@@ -294,13 +297,11 @@
       font-weight: 700;
       font-size: 14px;
       cursor: pointer;
-      margin-top: 4px;
       transition: transform 0.1s ease;
     }
     .btn-action:active { transform: scale(0.98); }
-    .btn-action:disabled { opacity: 0.4 !important; cursor: not-allowed; }
 
-    /* Toast */
+    /* Floating Toast */
     .toast {
       position: fixed;
       bottom: 24px;
@@ -317,11 +318,11 @@
       box-shadow: 0 4px 20px rgba(0,0,0,0.8);
     }
 
-    /* Modal */
+    /* Modal Sheet for Input (Add Amount / Add Note) */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.88);
+      background: rgba(0, 0, 0, 0.85);
       display: flex;
       justify-content: center;
       align-items: center;
@@ -330,13 +331,12 @@
     }
     .modal-card {
       background: var(--card);
-      border: 1px solid var(--button);
+      border: 1px solid var(--border);
       border-radius: 20px;
-      padding: 24px;
-      text-align: center;
+      padding: 20px;
       max-width: 320px;
       width: 100%;
-      box-shadow: 0 10px 40px rgba(0, 230, 118, 0.2);
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     }
 
     .hidden { display: none !important; }
@@ -348,28 +348,29 @@
 
   <!-- 1. MULTI-ASSET OVERVIEW CARD -->
   <div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
-      <div class="balance-title">⚡ Available Balance</div>
+    <div class="balance-header">
+      <div class="balance-title">⚡ Available Balance (Tap to switch)</div>
       <button onclick="loadBalance()" style="background:transparent; border:none; color:var(--muted); font-size:12px; cursor:pointer;">
         🔄 Refresh
       </button>
     </div>
 
-    <div id="balanceDisplay" class="balance-amount">0.00000000 BTC</div>
+    <!-- Tapping cycles through BTC -> SATS -> USDT -> USDC -->
+    <div id="balanceDisplay" class="balance-amount" onclick="cycleBalanceMode()">0.00000000 BTC</div>
     <div id="totalUsdDisplay" class="balance-sub">≈ $0.00 USD</div>
 
     <div class="asset-grid">
-      <div class="asset-pill">
-        <div class="asset-pill-name">₿ Bitcoin</div>
+      <div id="pillBtcCard" class="asset-pill active-pill" onclick="setBalanceMode('BTC')">
+        <div class="asset-pill-name">₿ BTC</div>
         <div id="pillBtc" class="asset-pill-val">0.00000000</div>
       </div>
-      <div class="asset-pill">
+      <div id="pillSatsCard" class="asset-pill" onclick="setBalanceMode('SATS')">
+        <div class="asset-pill-name">⚡ SATS</div>
+        <div id="pillSats" class="asset-pill-val">0</div>
+      </div>
+      <div id="pillUsdtCard" class="asset-pill" onclick="setBalanceMode('USDT')">
         <div class="asset-pill-name">💵 USDT</div>
         <div id="pillUsdt" class="asset-pill-val">$0.00</div>
-      </div>
-      <div class="asset-pill">
-        <div class="asset-pill-name">💲 USDC</div>
-        <div id="pillUsdc" class="asset-pill-val">$0.00</div>
       </div>
     </div>
   </div>
@@ -383,77 +384,72 @@
     <button id="navTabAdmin" class="tab-btn hidden" onclick="switchNavTab('admin')">👑 Admin</button>
   </div>
 
-  <!-- 3. TAB: DEPOSIT (STYLE EXACTLY MATCHING SCREENSHOT 3) -->
+  <!-- 3. TAB: DEPOSIT -->
   <div id="panelDeposit">
     <!-- Asset Selector -->
-    <div class="btn-grid" style="margin-bottom:12px;">
+    <div class="btn-grid">
       <button id="depAssetBtc" class="choice-btn selected" onclick="selectDepositAsset('BTC')">₿ BTC</button>
       <button id="depAssetUsdt" class="choice-btn" onclick="selectDepositAsset('USDT')">💵 USDT</button>
       <button id="depAssetUsdc" class="choice-btn" onclick="selectDepositAsset('USDC')">💲 USDC</button>
     </div>
 
-    <!-- For USDT/USDC (Networks + Min 0.5 Input) -->
-    <div id="stableSection" class="card hidden">
-      <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">Select Network:</div>
-      <div id="stableNetworkGrid" class="btn-grid"></div>
+    <!-- Sliding Pill Bar for Networks -->
+    <div style="font-size:11px; color:var(--muted); margin: 6px 0 2px;">Slide to select network:</div>
+    <div id="depNetworkSlider" class="sliding-pill-container">
+      <!-- Injected dynamically -->
+    </div>
 
-      <div style="font-size:11px; color:var(--muted); margin-top:8px;">Amount in USD (Min $0.5):</div>
-      <input type="number" id="stableAmountInput" min="0.5" step="0.5" value="5" />
-
-      <button class="btn-action" onclick="generateStablecoinQR()">⚡ Generate Deposit Address</button>
+    <!-- USDT / USDC Deposit Config (Hidden for BTC) -->
+    <div id="stableDepositConfig" class="card hidden" style="margin-top:8px;">
+      <div style="font-size:11px; color:var(--muted); margin-bottom:4px;">Deposit Amount (Minimum $0.50):</div>
+      <input type="number" id="stableDepositAmount" min="0.5" step="0.5" value="5" placeholder="Min 0.5" />
+      <button class="btn-action" onclick="generateStablecoinDeposit()">⚡ Generate Deposit QR</button>
     </div>
 
     <!-- RECEIVE BOX (SCREENSHOT 3 STYLE) -->
-    <div class="receive-box">
+    <div id="receiveBox" class="receive-box">
       <div id="receiveTitle" class="receive-header">Receive BTC</div>
 
-      <!-- QR Card with Pheizu Logo Badge in Center -->
+      <!-- QR Card with Pheizu Wolf Logo Badge -->
       <div class="qr-frame">
         <div id="qrcode"></div>
         <div class="pheizu-qr-logo">
+          <!-- Pheizu Custom Electric Shield SVG -->
           <svg viewBox="0 0 24 24" fill="none">
-            <path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" fill="#38bdf8" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M12 2L4 6V12C4 17.5 7.5 21.5 12 22C16.5 21.5 20 17.5 20 12V6L12 2Z" fill="#0369a1"/>
+            <path d="M13 5L7 13H12L11 19L17 11H12L13 5Z" fill="#38bdf8"/>
           </svg>
-          <span>PHEIZU</span>
         </div>
       </div>
 
-      <!-- Details Sheet (Screenshot 3 Style) -->
+      <!-- Details Sheet -->
       <div class="details-sheet">
         <div class="details-row">
           <span class="details-label">Invoice</span>
-          <span class="details-val">
+          <span class="details-val clickable" onclick="copyInvoice()">
             <span id="shortInvoiceText">Generating...</span>
-            <span onclick="copyInvoice()" style="cursor:pointer; color:var(--primary-light); font-size:14px;">📋</span>
+            <span style="color:var(--primary-light); font-size:13px;">📋</span>
           </span>
         </div>
 
         <div class="details-row">
           <span class="details-label">Amount</span>
-          <span class="details-val" id="amountRowVal" style="color:var(--primary-light);">
+          <span class="details-val clickable" id="amountRowVal" onclick="openInputModal('amount')">
             Add amount ✏️
           </span>
         </div>
 
         <div class="details-row">
-          <span class="details-label">Pheizu fee ℹ️</span>
-          <span class="details-val">₿0</span>
+          <span class="details-label">Pheizu Lightning Wallet fee ℹ️</span>
+          <span class="details-val" id="feeRowVal">₿0</span>
         </div>
 
         <div class="details-row">
           <span class="details-label">Note</span>
-          <span class="details-val" style="color:var(--primary-light);">Add note ✏️</span>
+          <span class="details-val clickable" id="noteRowVal" onclick="openInputModal('note')">
+            Add note ✏️
+          </span>
         </div>
-      </div>
-
-      <!-- Dual Pill Network Switcher at Bottom (Screenshot 3 Style) -->
-      <div id="btcDualPills" class="network-pill-container">
-        <button id="pillLightning" class="net-pill-btn active" onclick="switchBtcNetwork('lightning')">
-          ⚡ Lightning
-        </button>
-        <button id="pillBitcoin" class="net-pill-btn" onclick="switchBtcNetwork('onchain')">
-          ₿ Bitcoin
-        </button>
       </div>
 
       <div class="trust-footer">
@@ -463,25 +459,28 @@
     </div>
   </div>
 
-  <!-- 4. TAB: WITHDRAW -->
+  <!-- 4. TAB: WITHDRAW (DYNAMICALLY APPLIES BTC, SATS, USDT, USDC) -->
   <div id="panelWithdraw" class="card hidden">
-    <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">Select Asset:</div>
+    <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">Select Asset to Withdraw:</div>
     <div class="btn-grid">
       <button id="withAssetBtc" class="choice-btn selected" onclick="selectWithdrawAsset('BTC')">₿ BTC</button>
+      <button id="withAssetSats" class="choice-btn" onclick="selectWithdrawAsset('SATS')">⚡ SATS</button>
       <button id="withAssetUsdt" class="choice-btn" onclick="selectWithdrawAsset('USDT')">💵 USDT</button>
       <button id="withAssetUsdc" class="choice-btn" onclick="selectWithdrawAsset('USDC')">💲 USDC</button>
     </div>
 
-    <div style="font-size:11px; color:var(--muted); margin:8px 0 4px;">Select Network:</div>
-    <div id="withNetworkGrid" class="btn-grid"></div>
+    <div style="font-size:11px; color:var(--muted); margin:8px 0 2px;">Slide to select network:</div>
+    <div id="withNetworkSlider" class="sliding-pill-container">
+      <!-- Injected dynamically -->
+    </div>
 
-    <label style="font-size:11px; color:var(--muted);">Recipient Destination (Lightning, BOLT11, or On-chain):</label>
-    <input type="text" id="withDest" placeholder="e.g. name@speed.app or lnbc..." />
+    <label style="font-size:11px; color:var(--muted); margin-top:8px; display:block;">Recipient Destination Address or Invoice:</label>
+    <input type="text" id="withDest" placeholder="Paste address or invoice" />
 
-    <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount in BTC:</label>
-    <input type="number" id="withAmount" step="any" placeholder="e.g. 0.0001" />
+    <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount to Send in BTC:</label>
+    <input type="number" id="withAmount" step="any" placeholder="Enter amount" />
 
-    <button id="btnSendFunds" class="btn-action" style="background:#2563eb;" onclick="executeWithdrawal()">🚀 Send Payment</button>
+    <button id="btnSendFunds" class="btn-action" onclick="executeWithdrawal()">🚀 Send Payment</button>
     <div id="withFeedback" style="font-size:12px; margin-top:8px; text-align:center;"></div>
   </div>
 
@@ -512,9 +511,22 @@
     <button class="btn-action" onclick="showToast('✓ Key Saved')">Save Key</button>
   </div>
 
-  <!-- 8. PAYMENT SUCCESS MODAL -->
-  <div id="successModal" class="modal-overlay hidden">
+  <!-- 8. MODAL FOR "ADD AMOUNT" & "ADD NOTE" -->
+  <div id="inputModal" class="modal-overlay hidden">
     <div class="modal-card">
+      <h3 id="inputModalTitle" style="font-size:16px; margin-bottom:8px; color:#fff;">Add Amount</h3>
+      <p id="inputModalDesc" style="font-size:11px; color:var(--muted); margin-bottom:12px;"></p>
+      <input id="inputModalField" type="text" placeholder="" />
+      <div style="display:flex; gap:8px;">
+        <button class="btn-action" style="background:#334155;" onclick="closeInputModal()">Cancel</button>
+        <button class="btn-action" style="background:var(--primary);" onclick="confirmInputModal()">Apply & Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9. PAYMENT SUCCESS MODAL -->
+  <div id="successModal" class="modal-overlay hidden">
+    <div class="modal-card" style="text-align:center;">
       <div style="font-size:48px; margin-bottom:10px;">🎉</div>
       <h3 style="color:var(--button); margin-bottom:6px;">Payment Successful!</h3>
       <p id="modalAmountText" style="font-size:15px; color:#fff; margin-bottom:12px; font-weight:bold;"></p>
@@ -570,9 +582,24 @@
   }
 
   let liveBalances = { sats: 0, usdt: 0, usdc: 0 };
+  let currentBalanceMode = 'BTC'; // 'BTC', 'SATS', 'USDT', 'USDC'
   let activeCheckTimer = null;
   let currentActiveInvoice = "";
   let toastTimer = null;
+
+  // Invoice caching for BTC (so switching networks doesn't regenerate)
+  const btcInvoiceCache = {
+    lightning: null,
+    onchain: null
+  };
+
+  // Current deposit parameters
+  let currentDepositState = {
+    asset: 'BTC',
+    network: 'lightning',
+    amount: 0,
+    note: ''
+  };
 
   function showToast(msg) {
     const toast = document.getElementById("toast");
@@ -585,7 +612,41 @@
   function haptic(type = "light") { try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){} }
   function hapticNotification(type = "success") { try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){} }
 
-  // Load Balance & Convert SATS to BTC display
+  // Balance Switcher (BTC -> SATS -> USDT -> USDC)
+  function cycleBalanceMode() {
+    const modes = ['BTC', 'SATS', 'USDT', 'USDC'];
+    let idx = (modes.indexOf(currentBalanceMode) + 1) % modes.length;
+    setBalanceMode(modes[idx]);
+  }
+
+  function setBalanceMode(mode) {
+    currentBalanceMode = mode;
+    haptic("light");
+    
+    document.querySelectorAll(".asset-pill").forEach(p => p.classList.remove("active-pill"));
+    if (mode === 'BTC') document.getElementById("pillBtcCard")?.classList.add("active-pill");
+    if (mode === 'SATS') document.getElementById("pillSatsCard")?.classList.add("active-pill");
+    if (mode === 'USDT') document.getElementById("pillUsdtCard")?.classList.add("active-pill");
+
+    updateBalanceDisplay();
+  }
+
+  function updateBalanceDisplay() {
+    const el = document.getElementById("balanceDisplay");
+    if (currentBalanceMode === 'BTC') {
+      el.innerText = `${(liveBalances.sats / 100000000).toFixed(8)} BTC`;
+    } else if (currentBalanceMode === 'SATS') {
+      el.innerText = `${liveBalances.sats.toLocaleString()} SATS`;
+    } else if (currentBalanceMode === 'USDT') {
+      el.innerText = `${liveBalances.usdt.toFixed(2)} USDT`;
+    } else if (currentBalanceMode === 'USDC') {
+      el.innerText = `${liveBalances.usdc.toFixed(2)} USDC`;
+    }
+
+    const totalUsd = ((liveBalances.sats * SAT_TO_USD) + liveBalances.usdt + liveBalances.usdc).toFixed(2);
+    document.getElementById("totalUsdDisplay").innerText = `≈ $${totalUsd} USD`;
+  }
+
   async function loadBalance() {
     haptic("light");
     try {
@@ -596,14 +657,11 @@
         liveBalances.usdt = Number(data.usdt_balance || 0);
         liveBalances.usdc = Number(data.usdc_balance || 0);
 
-        const btcValue = (liveBalances.sats / 100000000).toFixed(8);
-        document.getElementById("balanceDisplay").innerText = `${btcValue} BTC`;
-        document.getElementById("pillBtc").innerText = btcValue;
+        document.getElementById("pillBtc").innerText = (liveBalances.sats / 100000000).toFixed(8);
+        document.getElementById("pillSats").innerText = liveBalances.sats.toLocaleString();
         document.getElementById("pillUsdt").innerText = `$${liveBalances.usdt.toFixed(2)}`;
-        document.getElementById("pillUsdc").innerText = `$${liveBalances.usdc.toFixed(2)}`;
 
-        const totalUsd = ((liveBalances.sats * SAT_TO_USD) + liveBalances.usdt + liveBalances.usdc).toFixed(2);
-        document.getElementById("totalUsdDisplay").innerText = `≈ $${totalUsd} USD`;
+        updateBalanceDisplay();
       }
     } catch(e) {}
   }
@@ -626,123 +684,142 @@
   }
 
   // ==========================================
-  // DEPOSIT CONTROLLER (Screenshot 3 Style)
+  // DEPOSIT CONTROLLER (BTC Caching, Slide Networks)
   // ==========================================
-  let selectedDepAsset = "BTC";
-  let selectedDepNetwork = "lightning";
-
   function selectDepositAsset(asset) {
-    selectedDepAsset = asset;
+    currentDepositState.asset = asset;
+    currentDepositState.amount = 0;
+    currentDepositState.note = '';
+
     ["Btc", "Usdt", "Usdc"].forEach(a => document.getElementById(`depAsset${a}`).classList.remove("selected"));
     document.getElementById(`depAsset${asset.charAt(0) + asset.slice(1).toLowerCase()}`).classList.add("selected");
 
-    const stableSec = document.getElementById("stableSection");
-    const btcPills = document.getElementById("btcDualPills");
-    const receiveTitle = document.getElementById("receiveTitle");
+    const receiveBox = document.getElementById("receiveBox");
+    const stableConfig = document.getElementById("stableDepositConfig");
+    const title = document.getElementById("receiveTitle");
 
-    receiveTitle.innerText = `Receive ${asset}`;
+    title.innerText = `Receive ${asset}`;
+
+    // Reset details sheet labels
+    document.getElementById("amountRowVal").innerText = "Add amount ✏️";
+    document.getElementById("noteRowVal").innerText = "Add note ✏️";
+    document.getElementById("feeRowVal").innerText = (asset === 'BTC' ? '₿0' : '$0');
+
+    renderSlidingDepositNetworks();
 
     if (asset === "BTC") {
-      stableSec.classList.add("hidden");
-      btcPills.classList.remove("hidden");
-      switchBtcNetwork("lightning");
+      stableConfig.classList.add("hidden");
+      receiveBox.classList.remove("hidden");
+      currentDepositState.network = 'lightning';
+      loadBtcDeposit();
     } else {
-      btcPills.classList.add("hidden");
-      stableSec.classList.remove("hidden");
-      renderStableNetworks(asset);
+      // For USDT / USDC, hide the BTC QR code and invoice until generated
+      receiveBox.classList.add("hidden");
+      stableConfig.classList.remove("hidden");
     }
   }
 
-  // Dual Pills for BTC: Lightning vs On-Chain
-  function switchBtcNetwork(net) {
-    selectedDepNetwork = net;
-    haptic("light");
-    document.getElementById("pillLightning").classList.toggle("active", net === "lightning");
-    document.getElementById("pillBitcoin").classList.toggle("active", net === "onchain");
+  function renderSlidingDepositNetworks() {
+    const slider = document.getElementById("depNetworkSlider");
+    slider.innerHTML = "";
 
-    document.getElementById("amountRowVal").innerText = "Add amount ✏️";
-
-    // Direct invoice generation for Amount 0 (Open Amount)
-    generateDeposit(0);
-  }
-
-  function renderStableNetworks(asset) {
-    const grid = document.getElementById("stableNetworkGrid");
-    grid.innerHTML = "";
-    if (asset === "USDT") {
-      selectedDepNetwork = "ton";
-      grid.innerHTML = `
-        <button class="choice-btn selected" onclick="setStableNet(this, 'ton')">💎 TON</button>
-        <button class="choice-btn" onclick="setStableNet(this, 'tron')">🔴 Tron (TRC-20)</button>
-        <button class="choice-btn" onclick="setStableNet(this, 'lightning')">⚡ Lightning</button>
-        <button class="choice-btn" onclick="setStableNet(this, 'solana')">🟣 Solana</button>
-        <button class="choice-btn" onclick="setStableNet(this, 'ethereum')">⛓️ Ethereum</button>
+    if (currentDepositState.asset === "BTC") {
+      slider.innerHTML = `
+        <button class="net-pill-btn active" onclick="switchBtcDepositNet('lightning', this)">⚡ Lightning</button>
+        <button class="net-pill-btn" onclick="switchBtcDepositNet('onchain', this)">₿ Bitcoin On-Chain</button>
+      `;
+    } else if (currentDepositState.asset === "USDT") {
+      currentDepositState.network = 'ton';
+      slider.innerHTML = `
+        <button class="net-pill-btn active" onclick="switchStableDepositNet('ton', this)">💎 TON</button>
+        <button class="net-pill-btn" onclick="switchStableDepositNet('tron', this)">🔴 Tron (TRC-20)</button>
+        <button class="net-pill-btn" onclick="switchStableDepositNet('lightning', this)">⚡ Lightning</button>
+        <button class="net-pill-btn" onclick="switchStableDepositNet('solana', this)">🟣 Solana</button>
+        <button class="net-pill-btn" onclick="switchStableDepositNet('ethereum', this)">⛓️ Ethereum</button>
       `;
     } else {
-      selectedDepNetwork = "solana";
-      grid.innerHTML = `
-        <button class="choice-btn selected" onclick="setStableNet(this, 'solana')">🟣 Solana</button>
-        <button class="choice-btn" onclick="setStableNet(this, 'lightning')">⚡ Lightning</button>
-        <button class="choice-btn" onclick="setStableNet(this, 'ethereum')">⛓️ Ethereum</button>
+      currentDepositState.network = 'solana';
+      slider.innerHTML = `
+        <button class="net-pill-btn active" onclick="switchStableDepositNet('solana', this)">🟣 Solana</button>
+        <button class="net-pill-btn" onclick="switchStableDepositNet('lightning', this)">⚡ Lightning</button>
+        <button class="net-pill-btn" onclick="switchStableDepositNet('ethereum', this)">⛓️ Ethereum</button>
       `;
     }
   }
 
-  function setStableNet(el, net) {
-    selectedDepNetwork = net;
-    document.querySelectorAll("#stableNetworkGrid .choice-btn").forEach(b => b.classList.remove("selected"));
-    el.classList.add("selected");
+  function switchBtcDepositNet(net, el) {
+    currentDepositState.network = net;
+    document.querySelectorAll("#depNetworkSlider .net-pill-btn").forEach(b => b.classList.remove("active"));
+    el.classList.add("active");
+    loadBtcDeposit();
   }
 
-  function generateStablecoinQR() {
-    const amt = Number(document.getElementById("stableAmountInput").value);
-    if (amt < 0.5) return showToast("⚠️ Minimum deposit is $0.50");
+  function switchStableDepositNet(net, el) {
+    currentDepositState.network = net;
+    document.querySelectorAll("#depNetworkSlider .net-pill-btn").forEach(b => b.classList.remove("active"));
+    el.classList.add("active");
+  }
+
+  // Load BTC Deposit with Caching: Don't regenerate if already cached!
+  function loadBtcDeposit() {
+    const net = currentDepositState.network;
+    
+    // Check if cached invoice exists for this network with 0 amount & no note
+    if (currentDepositState.amount === 0 && !currentDepositState.note && btcInvoiceCache[net]) {
+      displayInvoiceOnScreen(btcInvoiceCache[net]);
+      return;
+    }
+
+    // Else generate and cache
+    generateDepositRequest(currentDepositState.amount, (invoiceData) => {
+      if (currentDepositState.amount === 0 && !currentDepositState.note) {
+        btcInvoiceCache[net] = invoiceData;
+      }
+    });
+  }
+
+  function generateStablecoinDeposit() {
+    const amt = Number(document.getElementById("stableDepositAmount").value);
+    if (!amt || amt < 0.5) return showToast("⚠️ Minimum deposit is $0.50");
+
+    currentDepositState.amount = amt;
     document.getElementById("amountRowVal").innerText = `$${amt.toFixed(2)}`;
-    generateDeposit(amt);
+    document.getElementById("receiveBox").classList.remove("hidden");
+
+    generateDepositRequest(amt);
   }
 
-  async function generateDeposit(amount) {
+  async function generateDepositRequest(amount, onComplete = null) {
     haptic("medium");
     const qrDiv = document.getElementById("qrcode");
     const shortTxt = document.getElementById("shortInvoiceText");
 
-    qrDiv.innerHTML = "<div style='font-size:11px; color:#94a3b8; padding:30px;'>Generating...</div>";
+    qrDiv.innerHTML = "<div style='font-size:11px; color:#94a3b8; padding:30px;'>Generating QR...</div>";
     shortTxt.innerText = "Loading...";
 
     if (activeCheckTimer) clearInterval(activeCheckTimer);
 
-    const targetCurr = selectedDepAsset === "BTC" ? "SATS" : selectedDepAsset;
+    const targetCurr = currentDepositState.asset === "BTC" ? "SATS" : currentDepositState.asset;
 
     try {
       const res = await fetch("/api/wallet?action=create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          amount: amount, // 0 for BTC open amount
+          amount: amount,
           target_currency: targetCurr,
-          payment_method: selectedDepNetwork,
+          payment_method: currentDepositState.network,
           user_id: currentUserId,
           username: username,
-          telegram_id: tgNumericId
+          telegram_id: tgNumericId,
+          note: currentDepositState.note || undefined
         })
       });
       const data = await res.json();
       if (!data.success || !data.invoice) throw new Error(data.error || "Failed to generate invoice.");
 
-      currentActiveInvoice = data.invoice;
-      const qrTarget = currentActiveInvoice.toLowerCase().startsWith("lightning:") || currentActiveInvoice.toLowerCase().startsWith("bitcoin:")
-        ? currentActiveInvoice
-        : (selectedDepNetwork === "lightning" ? `lightning:${currentActiveInvoice}` : currentActiveInvoice);
-
-      qrDiv.innerHTML = "";
-      new QRCode(qrDiv, { 
-        text: qrTarget, 
-        width: 220, 
-        height: 220,
-        correctLevel: QRCode.CorrectLevel.M 
-      });
-
-      shortTxt.innerText = currentActiveInvoice.substring(0, 14) + "..." + currentActiveInvoice.substring(currentActiveInvoice.length - 8);
+      displayInvoiceOnScreen(data);
+      if (onComplete) onComplete(data);
 
       startVerificationPolling(data.tx_id || data.id, amount);
     } catch(err) {
@@ -751,6 +828,89 @@
     }
   }
 
+  function displayInvoiceOnScreen(data) {
+    currentActiveInvoice = data.invoice;
+    const qrTarget = currentActiveInvoice.toLowerCase().startsWith("lightning:") || currentActiveInvoice.toLowerCase().startsWith("bitcoin:")
+      ? currentActiveInvoice
+      : (currentDepositState.network === "lightning" ? `lightning:${currentActiveInvoice}` : currentActiveInvoice);
+
+    const qrDiv = document.getElementById("qrcode");
+    qrDiv.innerHTML = "";
+    new QRCode(qrDiv, { 
+      text: qrTarget, 
+      width: 220, 
+      height: 220,
+      correctLevel: QRCode.CorrectLevel.M 
+    });
+
+    const shortTxt = document.getElementById("shortInvoiceText");
+    shortTxt.innerText = currentActiveInvoice.substring(0, 14) + "..." + currentActiveInvoice.substring(currentActiveInvoice.length - 8);
+  }
+
+  // ==========================================
+  // "ADD AMOUNT" & "ADD NOTE" MODALS (WORKING)
+  // ==========================================
+  let activeModalType = 'amount'; // 'amount' or 'note'
+
+  function openInputModal(type) {
+    activeModalType = type;
+    haptic("light");
+    const modal = document.getElementById("inputModal");
+    const title = document.getElementById("inputModalTitle");
+    const desc = document.getElementById("inputModalDesc");
+    const field = document.getElementById("inputModalField");
+
+    if (type === 'amount') {
+      title.innerText = `Set Deposit Amount (${currentDepositState.asset})`;
+      desc.innerText = currentDepositState.asset === 'BTC' ? "Enter amount in BTC (e.g. 0.0005)" : "Enter amount in USD (min 0.5)";
+      field.type = "number";
+      field.placeholder = currentDepositState.asset === 'BTC' ? "e.g. 0.0005" : "e.g. 10";
+      field.value = currentDepositState.amount > 0 ? currentDepositState.amount : "";
+    } else {
+      title.innerText = "Add Payment Note";
+      desc.innerText = "Attach an optional note/memo for this deposit.";
+      field.type = "text";
+      field.placeholder = "e.g. For dinner or Pheizu credit";
+      field.value = currentDepositState.note || "";
+    }
+
+    modal.classList.remove("hidden");
+    field.focus();
+  }
+
+  function closeInputModal() {
+    document.getElementById("inputModal").classList.add("hidden");
+  }
+
+  function confirmInputModal() {
+    const val = document.getElementById("inputModalField").value.trim();
+
+    if (activeModalType === 'amount') {
+      let num = Number(val);
+      if (isNaN(num) || num <= 0) {
+        showToast("⚠️ Enter a valid amount");
+        return;
+      }
+      if (currentDepositState.asset !== 'BTC' && num < 0.5) {
+        showToast("⚠️ Minimum amount is $0.50");
+        return;
+      }
+
+      currentDepositState.amount = num;
+      document.getElementById("amountRowVal").innerText = currentDepositState.asset === 'BTC' ? `${num} BTC ✏️` : `$${num.toFixed(2)} ✏️`;
+    } else {
+      currentDepositState.note = val;
+      document.getElementById("noteRowVal").innerText = val ? `${val.substring(0, 15)}... ✏️` : "Add note ✏️";
+    }
+
+    closeInputModal();
+    // Regenerate invoice with updated amount / note
+    generateDepositRequest(currentDepositState.amount);
+  }
+
+  // ==========================================
+  // POLLING & CELEBRATION MODAL
+  // ==========================================
   function startVerificationPolling(paymentId, amount) {
     let attempts = 0;
     if (activeCheckTimer) clearInterval(activeCheckTimer);
@@ -777,9 +937,9 @@
           clearInterval(activeCheckTimer);
           activeCheckTimer = null;
 
-          const credited = selectedDepAsset === "BTC" 
+          const credited = currentDepositState.asset === "BTC" 
             ? `${(Number(data.amount || amount || 0) / 100000000).toFixed(8)} BTC`
-            : `${data.amount || amount} ${selectedDepAsset}`;
+            : `${data.amount || amount} ${currentDepositState.asset}`;
 
           triggerSuccessPopup(credited);
           loadBalance();
@@ -797,7 +957,7 @@
       const balEl = document.getElementById("modalBalanceText");
 
       if (amtEl) amtEl.innerText = `+${creditedText} Credited!`;
-      if (balEl) balEl.innerText = "Your wallet balance has been updated.";
+      if (balEl) balEl.innerText = "Your balance has been updated.";
       if (modal) {
         modal.classList.remove("hidden");
         modal.style.display = "flex";
@@ -825,54 +985,55 @@
   }
 
   // ==========================================
-  // WITHDRAWAL CONTROLLER
+  // WITHDRAWAL CONTROLLER (BTC, SATS, USDT, USDC)
   // ==========================================
   let selectedWithAsset = "BTC";
   let selectedWithNetwork = "lightning";
 
   function selectWithdrawAsset(asset) {
     selectedWithAsset = asset;
-    ["Btc", "Usdt", "Usdc"].forEach(a => document.getElementById(`withAsset${a}`).classList.remove("selected"));
+    ["Btc", "Sats", "Usdt", "Usdc"].forEach(a => document.getElementById(`withAsset${a}`).classList.remove("selected"));
     document.getElementById(`withAsset${asset.charAt(0) + asset.slice(1).toLowerCase()}`).classList.add("selected");
 
     const label = document.getElementById("withAmountLabel");
-    label.innerText = `Amount in ${asset}:`;
-    renderWithdrawNetworks();
+    label.innerText = `Amount to Send in ${asset}:`;
+
+    renderWithdrawSlider();
   }
 
-  function renderWithdrawNetworks() {
-    const netGrid = document.getElementById("withNetworkGrid");
-    netGrid.innerHTML = "";
+  function renderWithdrawSlider() {
+    const slider = document.getElementById("withNetworkSlider");
+    slider.innerHTML = "";
 
-    if (selectedWithAsset === "BTC") {
+    if (selectedWithAsset === "BTC" || selectedWithAsset === "SATS") {
       selectedWithNetwork = "lightning";
-      netGrid.innerHTML = `
-        <button class="choice-btn selected" onclick="setWithNetwork(this, 'lightning')">⚡ Lightning</button>
-        <button class="choice-btn" onclick="setWithNetwork(this, 'onchain')">₿ On-Chain</button>
+      slider.innerHTML = `
+        <button class="net-pill-btn active" onclick="setWithNet('lightning', this)">⚡ Lightning</button>
+        <button class="net-pill-btn" onclick="setWithNet('onchain', this)">₿ On-Chain</button>
       `;
     } else if (selectedWithAsset === "USDT") {
       selectedWithNetwork = "ton";
-      netGrid.innerHTML = `
-        <button class="choice-btn selected" onclick="setWithNetwork(this, 'ton')">💎 TON</button>
-        <button class="choice-btn" onclick="setWithNetwork(this, 'tron')">🔴 Tron (TRC-20)</button>
-        <button class="choice-btn" onclick="setWithNetwork(this, 'lightning')">⚡ Lightning</button>
-        <button class="choice-btn" onclick="setWithNetwork(this, 'solana')">🟣 Solana</button>
-        <button class="choice-btn" onclick="setWithNetwork(this, 'ethereum')">⛓️ Ethereum</button>
+      slider.innerHTML = `
+        <button class="net-pill-btn active" onclick="setWithNet('ton', this)">💎 TON</button>
+        <button class="net-pill-btn" onclick="setWithNet('tron', this)">🔴 Tron (TRC-20)</button>
+        <button class="net-pill-btn" onclick="setWithNet('lightning', this)">⚡ Lightning</button>
+        <button class="net-pill-btn" onclick="setWithNet('solana', this)">🟣 Solana</button>
+        <button class="net-pill-btn" onclick="setWithNet('ethereum', this)">⛓️ Ethereum</button>
       `;
     } else {
       selectedWithNetwork = "solana";
-      netGrid.innerHTML = `
-        <button class="choice-btn selected" onclick="setWithNetwork(this, 'solana')">🟣 Solana</button>
-        <button class="choice-btn" onclick="setWithNetwork(this, 'lightning')">⚡ Lightning</button>
-        <button class="choice-btn" onclick="setWithNetwork(this, 'ethereum')">⛓️ Ethereum</button>
+      slider.innerHTML = `
+        <button class="net-pill-btn active" onclick="setWithNet('solana', this)">🟣 Solana</button>
+        <button class="net-pill-btn" onclick="setWithNet('lightning', this)">⚡ Lightning</button>
+        <button class="net-pill-btn" onclick="setWithNet('ethereum', this)">⛓️ Ethereum</button>
       `;
     }
   }
 
-  function setWithNetwork(el, net) {
+  function setWithNet(net, el) {
     selectedWithNetwork = net;
-    document.querySelectorAll("#withNetworkGrid .choice-btn").forEach(b => b.classList.remove("selected"));
-    el.classList.add("selected");
+    document.querySelectorAll("#withNetworkSlider .net-pill-btn").forEach(b => b.classList.remove("active"));
+    el.classList.add("active");
   }
 
   async function executeWithdrawal() {
@@ -882,10 +1043,11 @@
     const feedback = document.getElementById("withFeedback");
     const btn = document.getElementById("btnSendFunds");
 
-    if (!dest || !rawAmt || rawAmt <= 0) return showToast("⚠️ Enter destination and amount");
+    if (!dest || !rawAmt || rawAmt <= 0) return showToast("⚠️ Enter valid destination & amount");
 
+    // Convert units: BTC converts to satoshis; SATS passes directly
     const sendAmt = selectedWithAsset === "BTC" ? Math.round(rawAmt * 100000000) : rawAmt;
-    const targetCurr = selectedWithAsset === "BTC" ? "SATS" : selectedWithAsset;
+    const targetCurr = (selectedWithAsset === "BTC" || selectedWithAsset === "SATS") ? "SATS" : selectedWithAsset;
 
     btn.disabled = true;
     btn.innerText = "Broadcasting...";
@@ -944,7 +1106,7 @@
       list.innerHTML = data.history.map(tx => {
         const isIn = tx.type === "deposit" || tx.type === "transfer_received";
         const sign = isIn ? "+" : "-";
-        const colorClass = isIn ? "tx-in" : "tx-out";
+        const colorClass = isIn ? "style='color:var(--button)'" : "style='color:var(--danger)'";
         const dateStr = tx.created_at ? new Date(tx.created_at).toLocaleDateString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : "Recent";
         const curr = tx.currency || 'SATS';
         const displayAmt = curr === 'SATS' ? `${(Number(tx.amount)/100000000).toFixed(8)} BTC` : `${tx.amount} ${curr}`;
@@ -955,7 +1117,7 @@
               <div style="font-weight:600; text-transform:capitalize;">${tx.type.replace('_', ' ')}</div>
               <div style="font-size:10px; color:var(--muted);">${dateStr}</div>
             </div>
-            <div class="${colorClass}">${sign}${displayAmt}</div>
+            <div ${colorClass} style="font-family:monospace; font-weight:bold;">${sign}${displayAmt}</div>
           </div>
         `;
       }).join("");
@@ -971,10 +1133,11 @@
     showToast("✓ Copied to clipboard!");
   }
 
-  // Initial Boot
-  renderWithdrawNetworks();
+  // Initial Load
+  renderSlidingDepositNetworks();
+  renderWithdrawSlider();
   loadBalance();
-  switchBtcNetwork("lightning");
+  selectDepositAsset('BTC');
 </script>
 </body>
 </html>
