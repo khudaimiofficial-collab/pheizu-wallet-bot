@@ -402,13 +402,10 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 3. CREATE DEPOSIT INVOICE (POST /payments)
+    // 3. CREATE DEPOSIT INVOICE (POST /payments) - SAFEGUARDED
     // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
-      
-      // Amount is optional: if omitted, an open-amount invoice or deposit address is generated
-      const numAmount = (amount && Number(amount) > 0) ? Number(amount) : null;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
 
       if (!uid) {
@@ -429,8 +426,16 @@ module.exports = async function handler(req, res) {
       if (payMethod === "on-chain" || payMethod === "on_chain" || payMethod === "bitcoin") payMethod = "onchain";
       const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
 
+      // TrySpeed strictly requires amount > 0. If user didn't enter custom amount, default to minimum.
+      const defaultMin = (targetCurr === "SATS")
+        ? (payMethod === "onchain" ? 1000 : 1)
+        : 0.5;
+
+      const numAmount = (amount && Number(amount) > 0) ? Number(amount) : defaultMin;
+
       const speedBody = {
         currency: baseCurr,
+        amount: numAmount,
         target_currency: targetCurr,
         payment_methods: [payMethod],
         metadata: {
@@ -439,31 +444,14 @@ module.exports = async function handler(req, res) {
         }
       };
 
-      // Only pass amount if a specific amount was requested
-      if (numAmount) {
-        speedBody.amount = numAmount;
-      }
-
       let { ok, status, data: paymentData } = await speedRequest("payments", "POST", speedBody, apiKey);
 
-      // Handle cases where Speed returns 400
       if (!ok && (status === 400 || status === 422)) {
-        const errorDetail = extractErrorMessage(paymentData, status);
-        
-        // If amount was omitted and Speed API explicitly requires amount
-        if (!numAmount && (errorDetail.toLowerCase().includes("amount") && errorDetail.toLowerCase().includes("required"))) {
-          return res.status(400).json({
-            success: false,
-            error: "Speed requires a specific amount for this payment. Please choose 'Enter Specific Amount' to set your desired deposit amount."
-          });
-        }
-
-        // Retry fallback without target_currency
         const fallbackBody = {
           currency: baseCurr,
+          amount: numAmount,
           payment_methods: [payMethod]
         };
-        if (numAmount) fallbackBody.amount = numAmount;
 
         const retry = await speedRequest("payments", "POST", fallbackBody, apiKey);
         if (retry.ok || retry.status === 200 || retry.status === 201) {
@@ -501,16 +489,15 @@ module.exports = async function handler(req, res) {
         target_currency: targetCurr,
         payment_method: payMethod,
         telegram_id: telegram_id ? String(telegram_id) : null,
-        amount: numAmount || 0,
+        amount: numAmount,
         is_paid: false,
         created_at: new Date().toISOString()
       }, { merge: true });
 
-      const logAmount = numAmount ? `${numAmount} ${targetCurr}` : `Open Amount (${targetCurr})`;
       await forwardToLogsChannel(
         `📥 <b>Deposit Invoice Created</b>\n` +
         `• User: @${uid}\n` +
-        `• Amount: ${logAmount}\n` +
+        `• Amount: ${numAmount} ${targetCurr}\n` +
         `• Network: ${payMethod.toUpperCase()}\n` +
         `• TxID: <code>${txId}</code>`
       );
@@ -521,7 +508,7 @@ module.exports = async function handler(req, res) {
         tx_id: txId,
         payment_type: target.type,
         target_currency: targetCurr,
-        amount: numAmount || 0,
+        amount: numAmount,
         invoice: invoiceString
       });
     }
@@ -555,7 +542,6 @@ module.exports = async function handler(req, res) {
 
       const wallet = await findUserWallet([creditTarget, targetTgId, user_id]);
 
-      // If already processed and credited in database, exit without re-alerting
       if (invData && invData.is_paid) {
         return res.status(200).json({ 
           success: true, 
@@ -574,7 +560,7 @@ module.exports = async function handler(req, res) {
       const isPaid = ["paid", "succeeded", "completed"].includes(status);
 
       if (isPaid && wallet) {
-        // Automatically reads the real settled amount from Speed for open/any-amount deposits
+        // Reads settled amount from Speed directly
         const finalSats = Number(payment?.amount || sats || 0);
         const finalCurr = curr || payment?.target_currency || "SATS";
 
@@ -587,7 +573,6 @@ module.exports = async function handler(req, res) {
           }, { merge: true });
         }
 
-        // Credit to appropriate balance field
         if (finalCurr === "SATS") {
           batch.set(wallet.ref, {
             balance: admin.firestore.FieldValue.increment(finalSats),
@@ -701,7 +686,6 @@ module.exports = async function handler(req, res) {
       const curr = isUsdt ? "USDT" : (isUsdc ? "USDC" : "SATS");
       const targetCurr = target_currency || curr;
 
-      // Verify User Balances by Currency
       const currentSats = Number(senderWallet.data.balance || 0);
       const currentUsdt = Number(senderWallet.data.usdt_balance || 0);
       const currentUsdc = Number(senderWallet.data.usdc_balance || 0);
