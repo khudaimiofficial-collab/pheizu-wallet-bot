@@ -208,6 +208,16 @@ function extractPaymentTarget(obj) {
     }
   }
 
+  // Check nested payment_method_options (Speed official structure)
+  if (obj.payment_method_options) {
+    if (obj.payment_method_options.lightning?.payment_request) {
+      return { type: "lightning", value: obj.payment_method_options.lightning.payment_request };
+    }
+    if (obj.payment_method_options.on_chain?.address) {
+      return { type: "onchain", value: obj.payment_method_options.on_chain.address };
+    }
+  }
+
   for (const key of Object.keys(obj)) {
     const res = extractPaymentTarget(obj[key]);
     if (res) return res;
@@ -217,23 +227,22 @@ function extractPaymentTarget(obj) {
   return null;
 }
 
-// Robust amount extractor: checks all possible fields returned by Speed
+// Speed amount extractor with official target_amount_paid & target_amount support
 function extractPaidAmount(payment, invData) {
   if (!payment) return Number(invData?.amount || 0);
 
   const candidates = [
+    payment.target_amount_paid,   // Official Speed API field for paid SATS
+    payment.target_amount,        // Target amount in SATS
     payment.amount_received,
     payment.total_amount_received,
     payment.paid_amount,
     payment.amount_paid,
     payment.total_amount_paid,
-    payment.received_amount,
-    payment.target_amount,
     payment.amount,
-    payment.payments?.[0]?.amount_received,
-    payment.payments?.[0]?.amount,
+    payment.payments?.[0]?.target_amount_paid,
     payment.payments?.[0]?.target_amount,
-    payment.charges?.data?.[0]?.amount,
+    payment.payments?.[0]?.amount,
     invData?.amount
   ];
 
@@ -241,7 +250,6 @@ function extractPaidAmount(payment, invData) {
     if (val !== undefined && val !== null) {
       const num = Number(val);
       if (!isNaN(num) && num > 0) {
-        // If received in BTC decimal (< 0.01 BTC, e.g. 0.00000010 = 10 sats)
         if (num < 0.01 && (payment.currency === "BTC" || payment.target_currency === "BTC" || invData?.target_currency === "BTC")) {
           return Math.round(num * 100000000);
         }
@@ -373,7 +381,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, history: list.slice(0, 10) });
     }
 
-    // 3. CREATE DEPOSIT INVOICE (Open Amount 0 Supported)
+    // 3. CREATE DEPOSIT INVOICE
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
@@ -499,7 +507,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 4. CHECK DEPOSIT STATUS — NEVER HARDCODES OR ACCEPTS 0 SATS
+    // 4. CHECK DEPOSIT STATUS — USING SPEED SEARCH API & REAL AMOUNT EXTRACTION
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
       if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
@@ -519,12 +527,13 @@ module.exports = async function handler(req, res) {
       const curr = invData?.target_currency || "SATS";
       const creditTarget = invData?.user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
       const storedInvoice = invData?.invoice || "";
+      const cleanInvoice = storedInvoice.replace(/^lightning:/i, "").replace(/^bitcoin:/i, "").trim();
       const payMethod = invData?.payment_method || "lightning";
 
       const wallet = await findUserWallet([creditTarget, telegram_id, invData?.telegram_id, user_id]);
       const targetNumericChatId = await resolveNumericTelegramId(creditTarget, telegram_id || invData?.telegram_id || wallet?.data?.telegram_id);
 
-      // Return early ONLY if already verified AND amount > 0
+      // Return early ONLY if verified AND real amount is known
       if (invData && invData.is_paid && Number(invData.amount || 0) > 0 && invData.notified) {
         return res.status(200).json({
           success: true,
@@ -543,84 +552,61 @@ module.exports = async function handler(req, res) {
       let payment = null;
       let detectedAmount = 0;
 
-      // STEP A: If PayRequest, check /payrequests/:id/payments
-      if (speedId.startsWith("pr_") || invData?.speed_source === "payrequests" || invData?.speed_payrequest_id) {
-        const prId = invData?.speed_payrequest_id || speedId;
-        
-        try {
-          const prPayRes = await speedRequest(`payrequests/${prId}/payments`, "GET", null, apiKey);
-          if (prPayRes.ok && prPayRes.data) {
-            const list = prPayRes.data.data || prPayRes.data.items || prPayRes.data.payments || (Array.isArray(prPayRes.data) ? prPayRes.data : []);
-            if (list.length > 0) {
-              payment = list[0];
-              const pAmt = extractPaidAmount(list[0], invData);
-              if (pAmt > detectedAmount) detectedAmount = pAmt;
+      // 🔍 DISCOVERY 1: Official Speed Search API (POST /search/payments)
+      try {
+        const searchRes = await speedRequest("search/payments", "POST", {
+          query: "status:paid",
+          limit: 15
+        }, apiKey);
+
+        if (searchRes.ok && searchRes.data) {
+          const list = searchRes.data.data || searchRes.data.items || [];
+          for (const p of list) {
+            const matchesInvoice = cleanInvoice && (
+              p.invoice === cleanInvoice ||
+              p.payment_request === cleanInvoice ||
+              p.payment_method_options?.lightning?.payment_request === cleanInvoice ||
+              p.payment_method_options?.on_chain?.address === cleanInvoice ||
+              JSON.stringify(p).includes(cleanInvoice.substring(0, 35))
+            );
+            const matchesId = p.id === speedId || p.payrequest_id === speedId;
+
+            if (matchesInvoice || matchesId) {
+              payment = p;
+              const sAmt = extractPaidAmount(p, invData);
+              if (sAmt > detectedAmount) detectedAmount = sAmt;
+              if (detectedAmount > 0) break;
             }
           }
-        } catch (e) {}
+        }
+      } catch (e) {}
 
-        // Check PayRequest direct object (safely, without overwriting payment)
-        try {
-          const prDirect = await speedRequest(`payrequests/${prId}`, "GET", null, apiKey);
-          if (prDirect.ok && prDirect.data) {
-            const directAmt = extractPaidAmount(prDirect.data, invData);
-            if (directAmt > detectedAmount) detectedAmount = directAmt;
-            if (!payment) payment = prDirect.data;
-          }
-        } catch (e) {}
-      }
-
-      // STEP B: If Payment Address, check /payment-addresses/:id/payments
-      if ((!payment || detectedAmount <= 0) && (speedId.startsWith("pa_") || invData?.speed_source === "payment-addresses")) {
-        try {
-          const paRes = await speedRequest(`payment-addresses/${speedId}/payments`, "GET", null, apiKey);
-          if (paRes.ok && paRes.data) {
-            const list = paRes.data.data || paRes.data.items || (Array.isArray(paRes.data) ? paRes.data : []);
-            if (list.length > 0) {
-              payment = list[0];
-              const paAmt = extractPaidAmount(list[0], invData);
-              if (paAmt > detectedAmount) detectedAmount = paAmt;
-            }
-          }
-        } catch (e) {}
-      }
-
-      // STEP C: Check standard payments endpoints
+      // 🔍 DISCOVERY 2: Check /payrequests/:id/payments
       if (!payment || detectedAmount <= 0) {
-        const endpointsToTry = [
-          `payments/${speedId}`,
-          `checkout/sessions/${speedId}`,
-          `invoices/${speedId}`
-        ];
-
-        for (const ep of endpointsToTry) {
+        if (speedId.startsWith("pr_") || invData?.speed_source === "payrequests" || invData?.speed_payrequest_id) {
+          const prId = invData?.speed_payrequest_id || speedId;
           try {
-            const r = await speedRequest(ep, "GET", null, apiKey);
-            if (r.ok && r.data) {
-              const list = r.data.data || r.data.items || [];
-              const obj = list.length > 0 ? list[0] : r.data;
-              if (obj && (obj.id || obj.status || obj.state || obj.paid_at)) {
-                if (!payment) payment = obj;
-                const epAmt = extractPaidAmount(obj, invData);
-                if (epAmt > detectedAmount) detectedAmount = epAmt;
-                if (detectedAmount > 0) break;
+            const prPayRes = await speedRequest(`payrequests/${prId}/payments`, "GET", null, apiKey);
+            if (prPayRes.ok && prPayRes.data) {
+              const list = prPayRes.data.data || prPayRes.data.items || (Array.isArray(prPayRes.data) ? prPayRes.data : []);
+              if (list.length > 0) {
+                payment = list[0];
+                const pAmt = extractPaidAmount(list[0], invData);
+                if (pAmt > detectedAmount) detectedAmount = pAmt;
               }
             }
           } catch (e) {}
         }
       }
 
-      // STEP D: Fallback search by invoice string
-      if ((!payment || detectedAmount <= 0) && storedInvoice) {
+      // 🔍 DISCOVERY 3: Check /payments direct
+      if (!payment || detectedAmount <= 0) {
         try {
-          const search = await speedRequest(`payments?search=${encodeURIComponent(storedInvoice.substring(0, 60))}`, "GET", null, apiKey);
-          if (search.ok && search.data) {
-            const list = search.data.data || search.data.items || [];
-            if (list.length > 0) {
-              if (!payment) payment = list[0];
-              const sAmt = extractPaidAmount(list[0], invData);
-              if (sAmt > detectedAmount) detectedAmount = sAmt;
-            }
+          const directPay = await speedRequest(`payments/${speedId}`, "GET", null, apiKey);
+          if (directPay.ok && directPay.data && (directPay.data.id || directPay.data.status)) {
+            payment = directPay.data;
+            const dAmt = extractPaidAmount(directPay.data, invData);
+            if (dAmt > detectedAmount) detectedAmount = dAmt;
           }
         } catch (e) {}
       }
@@ -637,29 +623,23 @@ module.exports = async function handler(req, res) {
       const alreadyLandedStatuses = ["confirming", "processing", "detected", "unconfirmed", "in_progress", "in-progress"];
       const isLightningPayment = payMethod === "lightning";
 
-      const hasPayrequestFunds = (
-        Number(payment?.total_amount_received || 0) > 0 ||
-        Number(payment?.payment_count || 0) > 0 ||
-        detectedAmount > 0
-      );
-
       const hasPaidFlag =
         payment?.paid === true ||
         payment?.is_paid === true ||
         !!payment?.paid_at ||
         !!payment?.completed_at ||
         !!payment?.settled_at ||
-        hasPayrequestFunds;
+        detectedAmount > 0;
 
       const isPaid =
         paidStatuses.includes(rawStatus) ||
         (isLightningPayment && alreadyLandedStatuses.includes(rawStatus)) ||
         hasPaidFlag;
 
-      // Extract the real incoming amount
+      // Extract real paid amount
       const finalSats = detectedAmount > 0 ? detectedAmount : extractPaidAmount(payment, invData);
 
-      // 🔥 NEVER finalize as paid if the amount is still 0 (wait for Speed to settle the amount!)
+      // Process and credit balance when paid AND amount > 0
       if (isPaid && finalSats > 0) {
         const finalCurr = curr || payment?.target_currency || "SATS";
 
@@ -667,7 +647,7 @@ module.exports = async function handler(req, res) {
         if (wallet) {
           const batch = db.batch();
 
-          // Calculate difference if previously recorded as 0
+          // Credit the difference if previously recorded as 0
           const oldRecordedAmt = Number(invData?.amount || 0);
           const delta = finalSats - oldRecordedAmt;
 
@@ -744,7 +724,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // If Speed detected the payment but amount is still settling, return processing
+      // If Speed detected the payment but amount is still settling
       return res.status(200).json({
         success: true,
         is_paid: false,
