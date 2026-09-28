@@ -28,6 +28,49 @@ const MASTER_ADMIN_ID = "8960497898";
 const SAT_TO_USD = 0.00065;
 const activeWatchers = new Map();
 
+// Pure JS Bech32 encoder for Any-Amount LNURL invoices
+function encodeLnurl(url) {
+  const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+  const bytes = Buffer.from(url, 'utf8');
+  let acc = 0, bits = 0;
+  const words = [];
+  for (const b of bytes) {
+    acc = (acc << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      words.push((acc >> bits) & 31);
+    }
+  }
+  if (bits > 0) {
+    words.push((acc << (5 - bits)) & 31);
+  }
+  function polymod(values) {
+    const GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+    let chk = 1;
+    for (const v of values) {
+      const b = chk >> 25;
+      chk = ((chk & 0x1ffffff) << 5) ^ v;
+      for (let i = 0; i < 5; i++) {
+        if ((b >> i) & 1) chk ^= GEN[i];
+      }
+    }
+    return chk;
+  }
+  const hrp = 'lnurl';
+  const hrpExpand = [];
+  for (let i = 0; i < hrp.length; i++) hrpExpand.push(hrp.charCodeAt(i) >> 5);
+  hrpExpand.push(0);
+  for (let i = 0; i < hrp.length; i++) hrpExpand.push(hrp.charCodeAt(i) & 31);
+
+  const chk = polymod(hrpExpand.concat(words).concat([0, 0, 0, 0, 0, 0])) ^ 1;
+  const checksum = [];
+  for (let i = 0; i < 6; i++) {
+    checksum.push((chk >> ((5 - i) * 5)) & 31);
+  }
+  return hrp + '1' + words.concat(checksum).map(w => CHARSET[w]).join('');
+}
+
 // Helper: Check if user is an authorized admin
 async function isAuthorizedAdmin(ctx) {
   if (!ctx || !ctx.from) return false;
@@ -384,7 +427,7 @@ function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, minAmount, 
     `Choose your deposit option below:\n\n` +
     `1️⃣ <b>Generate Specific Amount / Address:</b> Set the exact amount for this deposit (e.g. 50, 500, 5,000 SATS or 25 USDT).\n` +
     (paymentMethod === "lightning"
-      ? `2️⃣ <b>Lightning Address:</b> Pay any amount directly to your Lightning Address with no locked amount restriction.\n`
+      ? `2️⃣ <b>Lightning Address:</b> Pay any amount directly with no locked amount restriction.\n`
       : `2️⃣ <b>Quick Address:</b> Generate a direct address immediately.\n`) +
     `\n📌 <b>Minimum Deposit:</b> <code>${minText}</code>`,
     {
@@ -395,7 +438,7 @@ function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, minAmount, 
 }
 
 // ----------------------------------------------------
-// GENERATE & DISPLAY DEPOSIT DETAILS (ONLY "CHECK STATUS" BUTTON)
+// GENERATE & DISPLAY DEPOSIT DETAILS (NO ADDRESS IN INVOICE CARD)
 // ----------------------------------------------------
 async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amount, minAmount, networkLabel, isCustomAmount }) {
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -442,12 +485,12 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 
     let caption = "";
     if (isLightning) {
+      // Clean Invoice Card: Address removed as requested
       caption = `⚡ <b>Lightning Deposit Invoice</b>\n\n` +
         `💰 <b>Amount:</b> <code>${Number(finalAmount).toLocaleString()} ${targetCurrency}</code>\n` +
         `🌐 <b>Network:</b> Lightning Network (${targetCurrency})\n` +
         `📌 <b>Minimum Deposit:</b> <code>${minDepositNotice}</code>\n\n` +
         `<b>Invoice (tap to copy):</b>\n<code>${data.invoice}</code>\n\n` +
-        `⚡ <b>Lightning Address:</b> <code>${userId}@${DOMAIN}</code>\n` +
         `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
         `<i>Scan QR or copy invoice to pay. Waiting for payment...</i>`;
     } else {
@@ -507,7 +550,7 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
       stopDepositWatcher(chatId);
       const amtStr = data.amount ? `+${data.amount} ${data.currency || "SATS"}` : "Funds";
 
-      // 1. POPUP ALERT: SUCCESS
+      // 1. POPUP MODAL: SUCCESS
       await ctx.answerCbQuery(
         `🎉 Payment Received!\n\n${amtStr} has been credited to your balance!\n\nTap OK to close.`,
         { show_alert: true }
@@ -522,14 +565,13 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
     } else {
       const statusText = (data && data.status) ? String(data.status).toUpperCase() : "PENDING";
 
-      // 1. POPUP ALERT: PENDING
+      // 1. POPUP MODAL: PENDING
       await ctx.answerCbQuery(
         `⏳ Payment Status: ${statusText}\n\nPayment has not been detected yet.\n\nPlease complete your transfer and tap Check Status again.`,
         { show_alert: true }
       );
     }
   } catch (err) {
-    // 1. POPUP ALERT: ERROR
     await ctx.answerCbQuery(
       `⚠️ Error Checking Status:\n\n${err.message}`,
       { show_alert: true }
@@ -538,32 +580,62 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
 });
 
 // ----------------------------------------------------
-// CALLBACK ACTION: LIGHTNING ADDRESS DISPLAY
+// CALLBACK ACTION: LIGHTNING ADDRESS (ANY-AMOUNT INVOICE & STATUS CHECK)
 // ----------------------------------------------------
 bot.action("dep_opt:lnaddr:SATS:lightning:1", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
   const lnAddress = `${userId}@${DOMAIN}`;
-  const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(`lightning:${lnAddress}`)}&size=400&dark=00e676&light=0b0e14&margin=2&ecLevel=Q`;
+  
+  // Any-Amount Invoice string (LNURL-pay Bech32 format)
+  const lnurlInvoice = encodeLnurl(`https://${DOMAIN}/.well-known/lnurlp/${userId}`);
+  const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(`lightning:${lnurlInvoice}`)}&size=400&dark=00e676&light=0b0e14&margin=2&ecLevel=Q`;
+
+  const bal = await getDirectBalance(userId, ctx.from.id);
 
   await ctx.deleteMessage().catch(() => {});
   await ctx.replyWithPhoto(qrUrl, {
     caption:
-      `⚡ <b>Your Lightning Address (Accepts ANY Amount)</b>\n\n` +
-      `<code>${lnAddress}</code>\n\n` +
+      `⚡ <b>Lightning Any-Amount Invoice & Address</b>\n\n` +
+      `⚡ <b>Lightning Address:</b>\n<code>${lnAddress}</code>\n\n` +
+      `📄 <b>Any-Amount Invoice (tap to copy):</b>\n<code>${lnurlInvoice}</code>\n\n` +
       `👉 <b>How to pay any custom amount:</b>\n` +
-      `1. Copy your Lightning Address above.\n` +
-      `2. Open your Lightning wallet (Cash App, Binance, Strike, Phoenix, Wallet of Satoshi, Blink, etc.).\n` +
-      `3. Paste this address and <b>enter any amount you want to send</b> (1 sat to millions of sats)!\n\n` +
+      `1. Copy the invoice or address above.\n` +
+      `2. Open your Lightning wallet (Binance, Strike, Cash App, Phoenix, Wallet of Satoshi, Blink, etc.).\n` +
+      `3. Paste it and <b>enter any amount you want to send</b> (1 sat to millions of sats)!\n\n` +
       `📌 <b>Minimum Deposit:</b> 1 SAT\n` +
       `⚡ <i>Funds credit to your balance instantly upon payment.</i>`,
     parse_mode: "HTML",
     ...Markup.inlineKeyboard([
-      [Markup.button.callback("🔄 Check Status / Balance", "action_balance")],
-      [Markup.button.callback("🔢 Generate Specific Amount / Address", "dep_opt:amt:SATS:lightning:1")],
+      [Markup.button.callback("🔄 Check Status", `check_lnaddr:${bal.sats}`)],
+      [Markup.button.callback("🔢 Generate Specific Amount Invoice", "dep_opt:amt:SATS:lightning:1")],
       [Markup.button.callback("🏠 Main Menu", "gateway_back")]
     ])
   });
+});
+
+// Popup status check specifically for Lightning Address Any-Amount screen
+bot.action(/^check_lnaddr:(.+)$/, async (ctx) => {
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
+  const initialBal = Number(ctx.match[1] || 0);
+
+  try {
+    const bal = await getDirectBalance(userId, ctx.from.id);
+    if (bal.sats > initialBal) {
+      const credited = bal.sats - initialBal;
+      await ctx.answerCbQuery(
+        `🎉 Payment Received!\n\n+${credited.toLocaleString()} SATS credited!\n💰 New Balance: ${bal.sats.toLocaleString()} SATS\n\nTap OK to close.`,
+        { show_alert: true }
+      );
+    } else {
+      await ctx.answerCbQuery(
+        `⏳ Payment Status: PENDING\n\nNo new deposit detected yet.\n💰 Current Balance: ${bal.sats.toLocaleString()} SATS\n\nPlease complete your transfer and tap Check Status again.`,
+        { show_alert: true }
+      );
+    }
+  } catch (err) {
+    await ctx.answerCbQuery(`⚠️ Error Checking Status:\n\n${err.message}`, { show_alert: true }).catch(() => {});
+  }
 });
 
 // ----------------------------------------------------
@@ -1271,7 +1343,7 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  // B. CUSTOM DEPOSIT AMOUNT INPUT (Generates Invoice for Exact Amount)
+  // B. CUSTOM DEPOSIT AMOUNT INPUT
   if (session.step === "awaiting_deposit_custom_amount") {
     const amount = Number(text);
     const minAmount = session.min_amount || (session.target_currency === "SATS" ? 1 : 0.5);
