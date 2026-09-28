@@ -470,7 +470,6 @@
     <label style="font-size:11px; color:var(--muted); margin-top:8px; display:block;">Recipient Destination Address or Invoice:</label>
     <input type="text" id="withDest" placeholder="Paste address or invoice" />
 
-    <!-- Label adapts dynamically: SATS for Lightning, BTC for On-Chain -->
     <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount to Send in SATS:</label>
     <input type="number" id="withAmount" step="1" placeholder="e.g. 500" />
 
@@ -734,7 +733,6 @@
     document.querySelectorAll("#depNetworkSlider .net-pill-btn").forEach(b => b.classList.remove("active"));
     el.classList.add("active");
     
-    // Reset amount label when switching between Lightning and On-Chain
     currentDepositState.amount = 0;
     document.getElementById("amountRowVal").innerText = "Add amount ✏️";
     loadBtcDeposit();
@@ -892,10 +890,9 @@
 
       if (currentDepositState.asset === 'BTC') {
         if (currentDepositState.network === 'lightning') {
-          currentDepositState.amount = Math.round(num); // in SATS
+          currentDepositState.amount = Math.round(num); // SATS
           document.getElementById("amountRowVal").innerText = `${currentDepositState.amount.toLocaleString()} SATS ✏️`;
         } else {
-          // On-Chain input in BTC, converted to SATS for backend
           currentDepositState.amount = Math.round(num * 100000000);
           document.getElementById("amountRowVal").innerText = `${num} BTC ✏️`;
         }
@@ -917,10 +914,12 @@
   }
 
   // ==========================================
-  // POLLING & CELEBRATION MODAL
+  // SMART POLLING & AMOUNT DISCOVERY
   // ==========================================
-  function startVerificationPolling(paymentId, amount) {
+  function startVerificationPolling(paymentId, expectedAmount) {
     let attempts = 0;
+    const initialSats = liveBalances.sats;
+
     if (activeCheckTimer) clearInterval(activeCheckTimer);
 
     activeCheckTimer = setInterval(async () => {
@@ -942,25 +941,53 @@
         );
 
         if (isPaid) {
-          const rawPaidAmt = Number(data.amount || amount || 0);
+          // 1. Extract directly reported amount from the API
+          let receivedSats = Number(data.amount || data.paid_amount || data.sats || 0);
+          let newBalance = Number(data.balance || 0);
 
-          // If paid but amount is still settling, continue polling for up to 15 attempts
-          if (rawPaidAmt <= 0 && attempts < 15) {
-            return;
+          // 2. If open-amount invoice (Amount 0), calculate differential from balance
+          if (receivedSats <= 0 && newBalance > initialSats) {
+            receivedSats = newBalance - initialSats;
           }
 
+          // 3. Fallback: Quick query to verify fresh live balance if still reading 0
+          if (receivedSats <= 0) {
+            try {
+              const balRes = await fetch(`/api/wallet?action=balance&user_id=${encodeURIComponent(currentUserId)}&username=${encodeURIComponent(username)}&telegram_id=${encodeURIComponent(tgNumericId)}`);
+              const balData = await balRes.json();
+              if (balData.success) {
+                const freshSats = Number(balData.balance || 0);
+                if (freshSats > initialSats) {
+                  receivedSats = freshSats - initialSats;
+                }
+              }
+            } catch(e) {}
+          }
+
+          // 4. Fallback to expected amount if custom specified
+          if (receivedSats <= 0 && expectedAmount > 0) {
+            receivedSats = expectedAmount;
+          }
+
+          // Stop polling
           clearInterval(activeCheckTimer);
           activeCheckTimer = null;
 
-          const finalAmt = rawPaidAmt;
+          // Format pop-up text according to asset & network
+          let creditedText = "";
+          if (currentDepositState.asset === "BTC") {
+            if (currentDepositState.network === "lightning") {
+              creditedText = `${receivedSats.toLocaleString()} SATS`;
+            } else {
+              creditedText = `${(receivedSats / 100000000).toFixed(8)} BTC`;
+            }
+          } else {
+            let receivedStable = Number(data.amount || expectedAmount || 0);
+            creditedText = `$${receivedStable.toFixed(2)} ${currentDepositState.asset}`;
+          }
 
-          const credited = currentDepositState.asset === "BTC" 
-            ? (currentDepositState.network === 'lightning' 
-                ? `${Number(finalAmt).toLocaleString()} SATS` 
-                : `${(Number(finalAmt) / 100000000).toFixed(8)} BTC`)
-            : `${finalAmt} ${currentDepositState.asset}`;
-
-          triggerSuccessPopup(credited);
+          // Fire celebration modal
+          triggerSuccessPopup(creditedText);
           loadBalance();
         }
       } catch (e) {}
@@ -1086,7 +1113,6 @@
 
     if (!dest || !rawAmt || rawAmt <= 0) return showToast("⚠️ Enter valid destination & amount");
 
-    // Unit conversion: BTC + onchain -> rawAmt is in BTC, converted to SATS for backend
     let sendAmt = rawAmt;
     let targetCurr = selectedWithAsset;
 
