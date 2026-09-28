@@ -45,7 +45,6 @@ const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 
-// Helper: Clean and format API key (strips quotes, whitespace, and prefixes)
 function sanitizeApiKey(raw) {
   if (!raw) return "";
   return String(raw)
@@ -56,7 +55,6 @@ function sanitizeApiKey(raw) {
     .trim();
 }
 
-// Helper: Always resolve to numeric Telegram Chat ID
 async function resolveNumericTelegramId(userId, candidateTgId) {
   if (candidateTgId && /^\d{6,14}$/.test(String(candidateTgId).trim())) {
     return String(candidateTgId).trim();
@@ -66,10 +64,7 @@ async function resolveNumericTelegramId(userId, candidateTgId) {
   }
 
   if (db) {
-    const ids = [userId, candidateTgId]
-      .filter(Boolean)
-      .map(s => String(s).toLowerCase().replace(/^@/, "").trim());
-
+    const ids = [userId, candidateTgId].filter(Boolean).map(s => String(s).toLowerCase().replace(/^@/, "").trim());
     for (const id of ids) {
       try {
         const uDoc = await db.collection("users").doc(id).get();
@@ -82,7 +77,6 @@ async function resolveNumericTelegramId(userId, candidateTgId) {
         }
       } catch (e) {}
     }
-
     for (const id of ids) {
       try {
         const snap = await db.collection("users").where("username", "==", id).limit(1).get();
@@ -95,7 +89,6 @@ async function resolveNumericTelegramId(userId, candidateTgId) {
   return null;
 }
 
-// Helper: Send Single Telegram Notification to User
 async function notifyTelegramUser(telegramId, message) {
   if (!BOT_TOKEN || !telegramId) return;
   try {
@@ -109,15 +102,12 @@ async function notifyTelegramUser(telegramId, message) {
       })
     });
     const data = await res.json();
-    if (!data.ok) {
-      console.warn("Telegram sendMessage failed:", data.description);
-    }
+    if (!data.ok) console.warn("Telegram sendMessage failed:", data.description);
   } catch (e) {
     console.error("Failed to notify user:", e.message);
   }
 }
 
-// Helper: Forward Wallet Events to Telegram Logs Channel
 async function forwardToLogsChannel(text) {
   if (!BOT_TOKEN) return;
   try {
@@ -125,18 +115,11 @@ async function forwardToLogsChannel(text) {
     if (db) {
       try {
         const snap = await db.collection("settings").doc("logs_channel").get();
-        if (snap.exists && snap.data().channel_id) {
-          channelId = snap.data().channel_id;
-        }
+        if (snap.exists && snap.data().channel_id) channelId = snap.data().channel_id;
       } catch (err) {}
     }
-
-    if (!channelId) {
-      channelId = process.env.LOG_CHANNEL_ID || process.env.ADMIN_CHAT_ID;
-    }
-
+    if (!channelId) channelId = process.env.LOG_CHANNEL_ID || process.env.ADMIN_CHAT_ID;
     if (!channelId) return;
-
     channelId = String(channelId).trim();
     if (/^\d{8,14}$/.test(channelId)) channelId = `-100${channelId}`;
 
@@ -145,14 +128,13 @@ async function forwardToLogsChannel(text) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: channelId,
-        text: text,
+        text,
         parse_mode: "HTML"
       })
     });
   } catch (e) {}
 }
 
-// Helper: Get active Speed API key from DB or Env
 async function getSpeedApiKey() {
   if (db) {
     try {
@@ -162,21 +144,17 @@ async function getSpeedApiKey() {
         const key = data.api_key || data.key || data.secret_key;
         if (key && sanitizeApiKey(key)) return sanitizeApiKey(key);
       }
-
       const snap2 = await db.collection("settings").doc("speed_key").get();
       if (snap2.exists) {
         const data = snap2.data();
         const key = data.api_key || data.key || data.secret_key;
         if (key && sanitizeApiKey(key)) return sanitizeApiKey(key);
       }
-    } catch (e) {
-      console.warn("Could not read API key from DB:", e.message);
-    }
+    } catch (e) {}
   }
   return sanitizeApiKey(process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "");
 }
 
-// Helper: Resolve Lightning Address to BOLT11
 async function resolveLnAddress(dest, amountSats) {
   if (dest.includes("@") && !dest.toLowerCase().includes(DOMAIN.toLowerCase())) {
     try {
@@ -195,7 +173,6 @@ async function resolveLnAddress(dest, amountSats) {
   return dest;
 }
 
-// Payment target extractor
 function extractPaymentTarget(obj) {
   if (!obj) return null;
 
@@ -207,12 +184,8 @@ function extractPaymentTarget(obj) {
     if (str.startsWith("bc1") || str.startsWith("1") || str.startsWith("3") || str.toLowerCase().startsWith("bitcoin:")) {
       return { type: "onchain", value: str.replace(/^bitcoin:/i, "") };
     }
-    if (str.startsWith("T") && str.length >= 30) {
-      return { type: "tron", value: str };
-    }
-    if (str.startsWith("0x") && str.length === 42) {
-      return { type: "ethereum", value: str };
-    }
+    if (str.startsWith("T") && str.length >= 30) return { type: "tron", value: str };
+    if (str.startsWith("0x") && str.length === 42) return { type: "ethereum", value: str };
     return null;
   }
 
@@ -240,14 +213,10 @@ function extractPaymentTarget(obj) {
     if (res) return res;
   }
 
-  if (obj.hosted_url || obj.url) {
-    return { type: "url", value: obj.hosted_url || obj.url };
-  }
-
+  if (obj.hosted_url || obj.url) return { type: "url", value: obj.hosted_url || obj.url };
   return null;
 }
 
-// Speed Client
 async function speedRequest(path, method, body, apiKey) {
   const cleanKey = sanitizeApiKey(apiKey);
   const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
@@ -280,7 +249,6 @@ function extractErrorMessage(data, status) {
   return `Speed API error (HTTP ${status})`;
 }
 
-// User wallet finder
 async function findUserWallet(identifiers) {
   if (!db) return null;
 
@@ -289,12 +257,8 @@ async function findUserWallet(identifiers) {
     if (!id) continue;
     const s = String(id).trim().toLowerCase().replace(/^@/, "");
     rawList.push(s);
-    if (s.startsWith("user") && /^\d+$/.test(s.slice(4))) {
-      rawList.push(s.slice(4));
-    }
-    if (/^\d+$/.test(s)) {
-      rawList.push(`user${s}`);
-    }
+    if (s.startsWith("user") && /^\d+$/.test(s.slice(4))) rawList.push(s.slice(4));
+    if (/^\d+$/.test(s)) rawList.push(`user${s}`);
   }
 
   const candidateIds = Array.from(new Set(rawList));
@@ -307,13 +271,7 @@ async function findUserWallet(identifiers) {
         const data = doc.data();
         const bal = data.balance ?? data.sats ?? data.amount;
         if (bal !== undefined && bal !== null) {
-          return {
-            ref: doc.ref,
-            id: doc.id,
-            data,
-            balance: Number(bal) || 0,
-            collection: col
-          };
+          return { ref: doc.ref, id: doc.id, data, balance: Number(bal) || 0, collection: col };
         }
       }
     }
@@ -322,47 +280,12 @@ async function findUserWallet(identifiers) {
   for (const col of collectionsToCheck) {
     for (const docId of candidateIds) {
       const doc = await db.collection(col).doc(docId).get();
-      if (doc.exists) {
-        return {
-          ref: doc.ref,
-          id: doc.id,
-          data: doc.data(),
-          balance: 0,
-          collection: col
-        };
-      }
-    }
-  }
-
-  for (const col of collectionsToCheck) {
-    for (const cid of candidateIds) {
-      const numId = cid.replace(/^user/, "");
-      if (/^\d+$/.test(numId)) {
-        const snap = await db.collection(col).where("telegram_id", "==", numId).limit(1).get();
-        if (!snap.empty) {
-          const doc = snap.docs[0];
-          const data = doc.data();
-          const bal = data.balance ?? data.sats ?? data.amount;
-          return {
-            ref: doc.ref,
-            id: doc.id,
-            data,
-            balance: Number(bal) || 0,
-            collection: col
-          };
-        }
-      }
+      if (doc.exists) return { ref: doc.ref, id: doc.id, data: doc.data(), balance: 0, collection: col };
     }
   }
 
   const primary = candidateIds.find(c => !c.startsWith("user") && /^\d+$/.test(c)) || candidateIds[0] || "unknown";
-  return {
-    ref: db.collection("users").doc(primary),
-    id: primary,
-    data: {},
-    balance: 0,
-    collection: "users"
-  };
+  return { ref: db.collection("users").doc(primary), id: primary, data: {}, balance: 0, collection: "users" };
 }
 
 module.exports = async function handler(req, res) {
@@ -379,9 +302,7 @@ module.exports = async function handler(req, res) {
   const { action } = req.query;
 
   try {
-    // ========================================================
     // 1. BALANCE
-    // ========================================================
     if (action === "balance" && req.method === "GET") {
       const uid = req.query.user_id;
       const uname = req.query.username;
@@ -399,9 +320,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // ========================================================
     // 2. HISTORY
-    // ========================================================
     if (action === "history" && req.method === "GET") {
       const uid = (req.query.user_id || req.query.username || "").toLowerCase().trim();
       const tid = req.query.telegram_id;
@@ -410,68 +329,107 @@ module.exports = async function handler(req, res) {
       const wallet = await findUserWallet(candidates);
       const queryUser = wallet ? wallet.id : uid;
 
-      const snap = await db.collection("transactions")
-        .where("user_id", "==", queryUser)
-        .limit(20)
-        .get();
-
+      const snap = await db.collection("transactions").where("user_id", "==", queryUser).limit(20).get();
       const list = [];
       snap.forEach(d => list.push(d.data()));
       list.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
-      return res.status(200).json({
-        success: true,
-        history: list.slice(0, 10)
-      });
+      return res.status(200).json({ success: true, history: list.slice(0, 10) });
     }
 
-    // ========================================================
-    // 3. CREATE DEPOSIT INVOICE
-    // ========================================================
+    // 3. CREATE DEPOSIT INVOICE (OPEN AMOUNT 0 SUPPORTED)
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
 
-      if (!uid) {
-        return res.status(400).json({ success: false, error: "Missing user identification." });
-      }
+      if (!uid) return res.status(400).json({ success: false, error: "Missing user identification." });
 
       const apiKey = await getSpeedApiKey();
-      if (!apiKey) {
-        return res.status(500).json({ success: false, error: "Speed API key is not configured." });
-      }
+      if (!apiKey) return res.status(500).json({ success: false, error: "Speed API key is not configured." });
 
       const targetCurr = (target_currency || "SATS").toUpperCase();
       let payMethod = (payment_method || network || "lightning").toLowerCase();
-      if (payMethod === "on-chain" || payMethod === "onchain" || payMethod === "bitcoin") {
-        payMethod = "on-chain";
+      
+      // Speed requires 'onchain' without hyphen for payments/payment_addresses
+      if (payMethod === "on-chain" || payMethod === "bitcoin" || payMethod === "onchain") {
+        payMethod = "onchain";
       }
 
       const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
-      const sendAmount = (amount && Number(amount) > 0) ? Number(amount) : (targetCurr === "SATS" ? 100 : 5);
+      const isOpenAmount = !amount || Number(amount) <= 0;
 
-      const speedBody = {
-        currency: baseCurr,
-        amount: sendAmount,
-        target_currency: targetCurr,
-        payment_methods: [payMethod],
-        metadata: {
-          user_id: uid,
-          telegram_id: telegram_id ? String(telegram_id) : ""
+      let paymentData = null;
+      let ok = false;
+      let status = 400;
+      let sourceEndpoint = "payments";
+
+      // A. Open Amount Lightning -> Create Payrequest (Amount 0)
+      if (isOpenAmount && payMethod === "lightning") {
+        const prRes = await speedRequest("payrequests", "POST", {
+          currency: baseCurr,
+          target_currency: targetCurr,
+          payment_methods: ["lightning"],
+          description: `Pheizu deposit for ${uid}`
+        }, apiKey);
+
+        if (prRes.ok && prRes.data) {
+          ok = true;
+          status = prRes.status;
+          paymentData = prRes.data;
+          sourceEndpoint = "payrequests";
         }
-      };
+      }
 
-      const res1 = await speedRequest("payments", "POST", speedBody, apiKey);
+      // B. Open Amount On-chain -> Create Payment Address
+      if (isOpenAmount && payMethod === "onchain") {
+        const addrRes = await speedRequest("payment-addresses", "POST", {
+          currency: baseCurr,
+          target_currency: targetCurr,
+          payment_method: "onchain",
+          metadata: { user_id: uid, telegram_id: telegram_id ? String(telegram_id) : "" }
+        }, apiKey);
 
-      if (!res1.ok && res1.status !== 201 && res1.status !== 200) {
-        const errorDetail = extractErrorMessage(res1.data, res1.status);
-        return res.status(res1.status || 400).json({
+        if (addrRes.ok && addrRes.data) {
+          ok = true;
+          status = addrRes.status;
+          paymentData = addrRes.data;
+          sourceEndpoint = "payment-addresses";
+        }
+      }
+
+      // C. Fallback to /payments (Specific Amount or Open)
+      if (!ok) {
+        const speedBody = {
+          currency: baseCurr,
+          target_currency: targetCurr,
+          payment_methods: [payMethod],
+          metadata: {
+            user_id: uid,
+            telegram_id: telegram_id ? String(telegram_id) : ""
+          }
+        };
+
+        if (isOpenAmount) {
+          speedBody.amount = 0;
+        } else {
+          speedBody.amount = Number(amount);
+        }
+
+        const res1 = await speedRequest("payments", "POST", speedBody, apiKey);
+        ok = res1.ok;
+        status = res1.status;
+        paymentData = res1.data;
+        sourceEndpoint = "payments";
+      }
+
+      if (!ok && status !== 201 && status !== 200) {
+        const errorDetail = extractErrorMessage(paymentData, status);
+        return res.status(status || 400).json({
           success: false,
-          error: `[Speed ${res1.status}] ${errorDetail}`
+          error: `[Speed ${status}] ${errorDetail}`
         });
       }
 
-      const paymentData = res1.data;
       const target = extractPaymentTarget(paymentData);
       const invoiceString = target ? target.value : null;
 
@@ -479,20 +437,21 @@ module.exports = async function handler(req, res) {
         return res.status(500).json({ success: false, error: "Speed did not return a valid payment address or invoice." });
       }
 
-      const txId = paymentData?.id || `py_${Date.now()}`;
+      const txId = paymentData?.id || paymentData?.payrequest_id || paymentData?.invoice_id || `py_${Date.now()}`;
       const numericChatId = await resolveNumericTelegramId(uid, telegram_id);
 
       await db.collection("invoices").doc(txId).set({
         id: txId,
         speed_payment_id: paymentData?.id || null,
-        speed_source: "payments",
+        speed_source: sourceEndpoint,
         invoice: invoiceString,
         payment_type: target.type,
         user_id: uid,
         target_currency: targetCurr,
         payment_method: payMethod,
         telegram_id: numericChatId,
-        amount: sendAmount,
+        amount: isOpenAmount ? 0 : Number(amount),
+        is_open_amount: isOpenAmount,
         is_paid: false,
         notified: false,
         created_at: new Date().toISOString()
@@ -504,20 +463,16 @@ module.exports = async function handler(req, res) {
         tx_id: txId,
         payment_type: target.type,
         target_currency: targetCurr,
-        amount: sendAmount,
+        amount: isOpenAmount ? 0 : Number(amount),
+        is_open_amount: isOpenAmount,
         invoice: invoiceString
       });
     }
 
-    // ========================================================
-    // 4. CHECK STATUS — GUARANTEED "is_paid: true" + CHAT RECEIPT
-    // ========================================================
+    // 4. CHECK DEPOSIT STATUS
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
-
-      if (!payment_id) {
-        return res.status(400).json({ success: false, error: "Missing payment_id" });
-      }
+      if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
 
       let invRef = db.collection("invoices").doc(payment_id);
       let invDoc = await invRef.get();
@@ -540,7 +495,6 @@ module.exports = async function handler(req, res) {
       const wallet = await findUserWallet([creditTarget, telegram_id, invData?.telegram_id, user_id]);
       const targetNumericChatId = await resolveNumericTelegramId(creditTarget, telegram_id || invData?.telegram_id || wallet?.data?.telegram_id);
 
-      // Return immediately if already verified in Firestore
       if (invData && invData.is_paid) {
         if (!invData.notified && targetNumericChatId) {
           await notifyTelegramUser(
@@ -568,7 +522,13 @@ module.exports = async function handler(req, res) {
       const speedId = invData?.speed_payment_id || invData?.id || payment_id;
 
       let payment = null;
-      const endpointsToTry = [`payments/${speedId}`, `checkout/sessions/${speedId}`, `invoices/${speedId}`, `payrequests/${speedId}`];
+      const endpointsToTry = [
+        `payments/${speedId}`,
+        `checkout/sessions/${speedId}`,
+        `invoices/${speedId}`,
+        `payrequests/${speedId}`,
+        `payment-addresses/${speedId}`
+      ];
 
       for (const ep of endpointsToTry) {
         try {
@@ -616,7 +576,6 @@ module.exports = async function handler(req, res) {
         !!payment?.settled_at ||
         hasPayrequestFunds;
 
-      // Evaluates to TRUE the moment funds land on Speed
       const isPaid =
         paidStatuses.includes(rawStatus) ||
         (isLightningPayment && alreadyLandedStatuses.includes(rawStatus)) ||
@@ -633,7 +592,6 @@ module.exports = async function handler(req, res) {
       );
       if (amountPaid <= 0 && sats > 0) amountPaid = sats;
 
-      // ALWAYS return is_paid: true when Speed reports paid
       if (isPaid) {
         let finalSats = amountPaid > 0 ? amountPaid : (sats > 0 ? sats : 100);
         const finalCurr = curr || payment?.target_currency || "SATS";
@@ -683,7 +641,6 @@ module.exports = async function handler(req, res) {
           updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
         }
 
-        // Deliver notification directly to user's Telegram Chat
         if (targetNumericChatId) {
           await notifyTelegramUser(
             targetNumericChatId,
@@ -724,9 +681,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // ========================================================
     // 5. WITHDRAW / SEND
-    // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, network, currency, target_currency } = req.body;
       const sendAmount = Number(amount);
@@ -744,7 +699,7 @@ module.exports = async function handler(req, res) {
       }
 
       let method = (withdraw_method || network || "").toLowerCase();
-      if (method === "on-chain" || method === "onchain" || method === "bitcoin") method = "onchain";
+      if (method === "on-chain" || method === "bitcoin" || method === "onchain") method = "onchain";
 
       if (!method) {
         if (dest.toLowerCase().startsWith("lnbc") || dest.includes("@")) {
