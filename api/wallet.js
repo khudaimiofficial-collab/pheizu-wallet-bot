@@ -45,7 +45,7 @@ const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 
-// Helper: Clean and format API key (strips quotes, whitespace, and prefixes)
+// Helper: Clean API key
 function sanitizeApiKey(raw) {
   if (!raw) return "";
   return String(raw)
@@ -56,11 +56,50 @@ function sanitizeApiKey(raw) {
     .trim();
 }
 
+// Helper: Always resolve to numeric Telegram Chat ID
+async function resolveNumericTelegramId(userId, candidateTgId) {
+  if (candidateTgId && /^\d{6,14}$/.test(String(candidateTgId).trim())) {
+    return String(candidateTgId).trim();
+  }
+  if (userId && /^\d{6,14}$/.test(String(userId).trim())) {
+    return String(userId).trim();
+  }
+
+  if (db) {
+    const ids = [userId, candidateTgId]
+      .filter(Boolean)
+      .map(s => String(s).toLowerCase().replace(/^@/, "").trim());
+
+    for (const id of ids) {
+      try {
+        const uDoc = await db.collection("users").doc(id).get();
+        if (uDoc.exists && uDoc.data().telegram_id && /^\d+$/.test(String(uDoc.data().telegram_id))) {
+          return String(uDoc.data().telegram_id);
+        }
+        const wDoc = await db.collection("wallets").doc(id).get();
+        if (wDoc.exists && wDoc.data().telegram_id && /^\d+$/.test(String(wDoc.data().telegram_id))) {
+          return String(wDoc.data().telegram_id);
+        }
+      } catch (e) {}
+    }
+
+    for (const id of ids) {
+      try {
+        const snap = await db.collection("users").where("username", "==", id).limit(1).get();
+        if (!snap.empty && snap.docs[0].data().telegram_id) {
+          return String(snap.docs[0].data().telegram_id);
+        }
+      } catch (e) {}
+    }
+  }
+  return null;
+}
+
 // Helper: Send Single Telegram Notification to User
 async function notifyTelegramUser(telegramId, message) {
   if (!BOT_TOKEN || !telegramId) return;
   try {
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -69,12 +108,16 @@ async function notifyTelegramUser(telegramId, message) {
         parse_mode: "HTML"
       })
     });
+    const data = await res.json();
+    if (!data.ok) {
+      console.warn("Telegram sendMessage failed:", data.description);
+    }
   } catch (e) {
     console.error("Failed to notify user:", e.message);
   }
 }
 
-// Helper: Forward Wallet Events to Telegram Logs Channel (SUCCESS ONLY)
+// Helper: Forward Wallet Events to Telegram Logs Channel
 async function forwardToLogsChannel(text) {
   if (!BOT_TOKEN) return;
   try {
@@ -97,7 +140,7 @@ async function forwardToLogsChannel(text) {
     channelId = String(channelId).trim();
     if (/^\d{8,14}$/.test(channelId)) channelId = `-100${channelId}`;
 
-    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -106,24 +149,10 @@ async function forwardToLogsChannel(text) {
         parse_mode: "HTML"
       })
     });
-
-    const result = await res.json();
-    if (!result.ok) {
-      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: channelId,
-          text: text.replace(/<[^>]*>?/gm, "")
-        })
-      });
-    }
-  } catch (e) {
-    console.error("forwardToLogsChannel error:", e.message);
-  }
+  } catch (e) {}
 }
 
-// Helper: Get active Speed API key from DB or Env
+// Helper: Get active Speed API key
 async function getSpeedApiKey() {
   if (db) {
     try {
@@ -140,14 +169,12 @@ async function getSpeedApiKey() {
         const key = data.api_key || data.key || data.secret_key;
         if (key && sanitizeApiKey(key)) return sanitizeApiKey(key);
       }
-    } catch (e) {
-      console.warn("Could not read API key from DB:", e.message);
-    }
+    } catch (e) {}
   }
   return sanitizeApiKey(process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "");
 }
 
-// Helper: Resolve Lightning Address (LNURL-pay) to BOLT11 invoice
+// Helper: Resolve Lightning Address to BOLT11
 async function resolveLnAddress(dest, amountSats) {
   if (dest.includes("@") && !dest.toLowerCase().includes(DOMAIN.toLowerCase())) {
     try {
@@ -161,14 +188,12 @@ async function resolveLnAddress(dest, amountSats) {
         const cbData = await cbRes.json();
         if (cbData.pr) return cbData.pr;
       }
-    } catch (e) {
-      console.warn("LNURL resolve error, passing original destination:", e.message);
-    }
+    } catch (e) {}
   }
   return dest;
 }
 
-// Universal extractor for payment targets
+// Payment target extractor
 function extractPaymentTarget(obj) {
   if (!obj) return null;
 
@@ -191,18 +216,10 @@ function extractPaymentTarget(obj) {
 
   if (typeof obj !== "object") return null;
 
-  if (obj.payment_request && typeof obj.payment_request === "string") {
-    return { type: "lightning", value: obj.payment_request };
-  }
-  if (obj.invoice && typeof obj.invoice === "string") {
-    return { type: "lightning", value: obj.invoice };
-  }
-  if (obj.address && typeof obj.address === "string") {
-    return { type: "address", value: obj.address };
-  }
-  if (obj.uri && typeof obj.uri === "string") {
-    return { type: "uri", value: obj.uri };
-  }
+  if (obj.payment_request) return { type: "lightning", value: obj.payment_request };
+  if (obj.invoice) return { type: "lightning", value: obj.invoice };
+  if (obj.address) return { type: "address", value: obj.address };
+  if (obj.uri) return { type: "uri", value: obj.uri };
 
   if (Array.isArray(obj.payment_methods)) {
     for (const pm of obj.payment_methods) {
@@ -228,14 +245,9 @@ function extractPaymentTarget(obj) {
   return null;
 }
 
-// Speed Client with proper Basic Auth
+// Speed Client
 async function speedRequest(path, method, body, apiKey) {
   const cleanKey = sanitizeApiKey(apiKey);
-  if (!cleanKey) {
-    return { ok: false, status: 401, data: { message: "No Speed API key provided" } };
-  }
-
-  // Speed API authentication: Basic Auth with API key as username and empty password
   const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
   const url = `https://api.tryspeed.com/${path.replace(/^\//, "")}`;
 
@@ -266,7 +278,7 @@ function extractErrorMessage(data, status) {
   return `Speed API error (HTTP ${status})`;
 }
 
-// Smart Wallet Resolver
+// User wallet finder
 async function findUserWallet(identifiers) {
   if (!db) return null;
 
@@ -301,21 +313,6 @@ async function findUserWallet(identifiers) {
             collection: col
           };
         }
-      }
-    }
-  }
-
-  for (const col of collectionsToCheck) {
-    for (const docId of candidateIds) {
-      const doc = await db.collection(col).doc(docId).get();
-      if (doc.exists) {
-        return {
-          ref: doc.ref,
-          id: doc.id,
-          data: doc.data(),
-          balance: 0,
-          collection: col
-        };
       }
     }
   }
@@ -356,23 +353,16 @@ module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
 
   if (!db) {
-    return res.status(500).json({ 
-      success: false, 
-      error: "Firebase connection failed. Verify FIREBASE_SERVICE_ACCOUNT variable." 
-    });
+    return res.status(500).json({ success: false, error: "Firebase connection failed." });
   }
 
   const { action } = req.query;
 
   try {
-    // ========================================================
-    // 1. GET BALANCE
-    // ========================================================
+    // 1. BALANCE
     if (action === "balance" && req.method === "GET") {
       const uid = req.query.user_id;
       const uname = req.query.username;
@@ -390,9 +380,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // ========================================================
-    // 2. TRANSACTION HISTORY
-    // ========================================================
+    // 2. HISTORY
     if (action === "history" && req.method === "GET") {
       const uid = (req.query.user_id || req.query.username || "").toLowerCase().trim();
       const tid = req.query.telegram_id;
@@ -416,9 +404,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // ========================================================
     // 3. CREATE DEPOSIT INVOICE
-    // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
@@ -429,10 +415,7 @@ module.exports = async function handler(req, res) {
 
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
-        return res.status(500).json({ 
-          success: false, 
-          error: "Speed API key is not configured. Admin can set it using '🔑 Set Speed Key'." 
-        });
+        return res.status(500).json({ success: false, error: "Speed API key is not configured." });
       }
 
       const targetCurr = (target_currency || "SATS").toUpperCase();
@@ -484,22 +467,6 @@ module.exports = async function handler(req, res) {
         status = res1.status;
         paymentData = res1.data;
         sourceEndpoint = "payments";
-
-        if (!ok && (status === 400 || status === 422)) {
-          const retry = await speedRequest("payments", "POST", {
-            currency: baseCurr,
-            target_currency: targetCurr,
-            payment_methods: ["onchain"],
-            metadata: speedBody.metadata,
-            ...(isOpenAmount ? { amount: 0 } : { amount: Number(amount) })
-          }, apiKey);
-
-          if (retry.ok && retry.data) {
-            ok = true;
-            status = retry.status;
-            paymentData = retry.data;
-          }
-        }
       }
 
       if (!ok && status !== 201 && status !== 200) {
@@ -514,16 +481,11 @@ module.exports = async function handler(req, res) {
       const invoiceString = target ? target.value : null;
 
       if (!invoiceString) {
-        return res.status(500).json({
-          success: false,
-          error: "Speed did not return a valid payment address or invoice."
-        });
+        return res.status(500).json({ success: false, error: "Speed did not return a valid payment address or invoice." });
       }
 
       const txId = paymentData?.id || paymentData?.payrequest_id || paymentData?.invoice_id || `py_${Date.now()}`;
-
-      // Save user mapping so check-status ALWAYS knows user's telegram_id
-      const finalTgId = telegram_id ? String(telegram_id) : null;
+      const numericChatId = await resolveNumericTelegramId(uid, telegram_id);
 
       await db.collection("invoices").doc(txId).set({
         id: txId,
@@ -536,7 +498,7 @@ module.exports = async function handler(req, res) {
         user_id: uid,
         target_currency: targetCurr,
         payment_method: payMethod,
-        telegram_id: finalTgId,
+        telegram_id: numericChatId,
         amount: isOpenAmount ? 0 : Number(amount),
         is_open_amount: isOpenAmount,
         is_paid: false,
@@ -556,9 +518,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // ========================================================
-    // 4. CHECK DEPOSIT STATUS — GUARANTEED TELEGRAM NOTIFICATION
-    // ========================================================
+    // 4. CHECK DEPOSIT STATUS — AUTO DISPATCHES TELEGRAM CHAT RECEIPT
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
 
@@ -582,23 +542,17 @@ module.exports = async function handler(req, res) {
       let sats = Number(invData?.amount || 0);
       const curr = invData?.target_currency || "SATS";
       const creditTarget = invData?.user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
-      
       const storedInvoice = invData?.invoice || "";
       const payMethod = invData?.payment_method || "lightning";
 
       const wallet = await findUserWallet([creditTarget, telegram_id, invData?.telegram_id, user_id]);
+      const targetNumericChatId = await resolveNumericTelegramId(creditTarget, telegram_id || invData?.telegram_id || wallet?.data?.telegram_id);
 
-      // Resolve Telegram Chat ID from all possible candidate locations
-      let targetTgId = invData?.telegram_id || telegram_id || wallet?.data?.telegram_id;
-      if (!targetTgId && wallet?.id && /^\d+$/.test(wallet.id)) {
-        targetTgId = wallet.id;
-      }
-
-      // If already credited, ensure notification was dispatched at least once
+      // Cached Paid Handling
       if (invData && invData.is_paid) {
-        if (!invData.notified && targetTgId) {
+        if (!invData.notified && targetNumericChatId) {
           await notifyTelegramUser(
-            targetTgId,
+            targetNumericChatId,
             `🎉 <b>Payment Received!</b>\n\n` +
             `⚡ <b>+${sats} ${curr}</b> credited to your balance!\n` +
             `💰 <b>New Balance:</b> ${(wallet ? wallet.balance : sats).toLocaleString()} sats\n` +
@@ -619,26 +573,15 @@ module.exports = async function handler(req, res) {
 
       const apiKey = await getSpeedApiKey();
       const speedId =
+        invData?.speed_payment_id ||
         invData?.speed_payrequest_id ||
         invData?.speed_invoice_id ||
-        invData?.speed_payment_id ||
         invData?.id ||
         payment_id;
 
-      // Try Speed endpoints
       let payment = null;
-      const endpointsToTry = [];
-
-      if (payMethod === "lightning") {
-        endpointsToTry.push(`payrequests/${speedId}`);
-        endpointsToTry.push(`invoices/${speedId}`);
-        endpointsToTry.push(`lightning_invoices/${speedId}`);
-        endpointsToTry.push(`payments/${speedId}`);
-      } else {
-        endpointsToTry.push(`payments/${speedId}`);
-        endpointsToTry.push(`invoices/${speedId}`);
-        endpointsToTry.push(`payrequests/${speedId}`);
-      }
+      // Prioritize payments first for speed
+      const endpointsToTry = [`payments/${speedId}`, `checkout/sessions/${speedId}`, `payrequests/${speedId}`, `invoices/${speedId}`];
 
       for (const ep of endpointsToTry) {
         try {
@@ -650,16 +593,12 @@ module.exports = async function handler(req, res) {
         } catch (e) {}
       }
 
-      // Fallback search by invoice
       if (!payment && storedInvoice) {
         try {
-          const shortInvoice = storedInvoice.substring(0, 60);
-          const search = await speedRequest(`payments?search=${encodeURIComponent(shortInvoice)}`, "GET", null, apiKey);
+          const search = await speedRequest(`payments?search=${encodeURIComponent(storedInvoice.substring(0, 60))}`, "GET", null, apiKey);
           if (search.ok && search.data) {
-            const list = search.data.data || search.data.items || search.data.results || [];
-            if (Array.isArray(list) && list.length > 0) {
-              payment = list[0];
-            }
+            const list = search.data.data || search.data.items || [];
+            if (list.length > 0) payment = list[0];
           }
         } catch (e) {}
       }
@@ -696,7 +635,6 @@ module.exports = async function handler(req, res) {
         0
       );
 
-      // Credit user & send bot chat message
       if ((isPaid || hasPaidFlag) && wallet) {
         let finalSats = amountPaid > 0 ? amountPaid : sats;
 
@@ -757,10 +695,10 @@ module.exports = async function handler(req, res) {
 
         const updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
 
-        // 🔥 Dispatches message to user's Telegram Chat
-        if (targetTgId) {
+        // 🔥 DELIVERS SUCCESS CONFIRMATION DIRECTLY INTO TELEGRAM BOT CHAT
+        if (targetNumericChatId) {
           await notifyTelegramUser(
-            targetTgId,
+            targetNumericChatId,
             `🎉 <b>Payment Received!</b>\n\n` +
             `⚡ <b>+${finalSats} ${finalCurr}</b> credited to your balance!\n` +
             `💰 <b>New Balance:</b> ${updatedBal.toLocaleString()} sats\n` +
@@ -798,9 +736,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // ========================================================
     // 5. WITHDRAW / SEND
-    // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, network, currency, target_currency } = req.body;
       const sendAmount = Number(amount);
@@ -937,7 +873,7 @@ module.exports = async function handler(req, res) {
 
         await batch.commit();
 
-        const targetChatId = recipientTgId || recipientWallet.data?.telegram_id;
+        const targetChatId = await resolveNumericTelegramId(recipientWallet.id, recipientTgId || recipientWallet.data?.telegram_id);
         if (targetChatId) {
           await notifyTelegramUser(
             targetChatId,
