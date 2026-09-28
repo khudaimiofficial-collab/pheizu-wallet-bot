@@ -91,7 +91,6 @@ async function isAuthorizedAdmin(ctx) {
   return false;
 }
 
-// Fetch balances directly from Firestore
 async function getUserBalances(userId, telegramId) {
   if (!db) return { sats: 0, usdt: 0, usdc: 0 };
   try {
@@ -189,7 +188,7 @@ async function sendJoinPrompt(ctx, channelLink) {
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, { parse_mode: "HTML", ...kb }).catch(() => {});
   } else {
-    await ctx.replyWithHTML(text, { ...kb, ...Markup.removeKeyboard() });
+    await ctx.replyWithHTML(text, kb);
   }
 }
 
@@ -239,14 +238,15 @@ async function sendMainMenu(ctx) {
       await ctx.editMessageText(welcomeText, { parse_mode: "HTML", ...kb });
     } catch (e) {
       await ctx.deleteMessage().catch(() => {});
-      await ctx.replyWithHTML(welcomeText, { ...kb, ...Markup.removeKeyboard() });
+      await ctx.replyWithHTML(welcomeText, kb);
     }
   } else {
-    await ctx.replyWithHTML(welcomeText, { ...kb, ...Markup.removeKeyboard() });
+    // Corrected: kb passed cleanly without any conflicting removeKeyboard
+    await ctx.replyWithHTML(welcomeText, kb);
   }
 }
 
-// 3. Account Details Screen (Details View)
+// 3. Account Details Screen
 async function sendAccountDetails(ctx) {
   const user = ctx.from;
   const tgId = String(user.id);
@@ -283,12 +283,13 @@ async function sendAccountDetails(ctx) {
 
   buttons.push([Markup.button.callback("🔙 Back to Main Menu", "menu_back_main")]);
 
-  await ctx.editMessageText(text, {
-    parse_mode: "HTML",
-    ...Markup.inlineKeyboard(buttons)
-  }).catch(async () => {
-    await ctx.replyWithHTML(text, Markup.inlineKeyboard(buttons));
-  });
+  const kb = Markup.inlineKeyboard(buttons);
+
+  try {
+    await ctx.editMessageText(text, { parse_mode: "HTML", ...kb });
+  } catch (e) {
+    await ctx.replyWithHTML(text, kb);
+  }
 }
 
 // ----------------------------------------------------
@@ -311,7 +312,7 @@ bot.start(async (ctx) => {
   return sendMainMenu(ctx);
 });
 
-// /admin command — direct trigger for the admin console
+// /admin command
 bot.command("admin", async (ctx) => {
   const isAdm = await isAuthorizedAdmin(ctx);
   if (!isAdm) {
@@ -368,13 +369,13 @@ bot.action("verify_membership", async (ctx) => {
   return sendMainMenu(ctx);
 });
 
-// "👤 Account Details" Button Callback
+// "👤 Account Details" Callback
 bot.action("menu_account_details", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   return sendAccountDetails(ctx);
 });
 
-// "🔙 Back to Main Menu" Button Callback
+// "🔙 Back to Main Menu" Callback
 bot.action("menu_back_main", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   return sendMainMenu(ctx);
