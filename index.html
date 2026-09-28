@@ -49,7 +49,6 @@
       border: 1px solid var(--border);
     }
 
-    /* Interactive Balance Card */
     .balance-header {
       display: flex;
       justify-content: space-between;
@@ -87,7 +86,6 @@
     .asset-pill-name { font-size: 10px; color: var(--muted); text-transform: uppercase; }
     .asset-pill-val { font-size: 12px; font-weight: 700; margin-top: 2px; font-family: monospace; color: #fff; }
 
-    /* Clean Navigation Tabs */
     .nav-tabs {
       display: flex;
       background: var(--card);
@@ -119,7 +117,6 @@
       border: 1px solid var(--border);
     }
 
-    /* Sliding Pill Container */
     .sliding-pill-container {
       display: flex;
       overflow-x: auto;
@@ -153,7 +150,6 @@
       color: #fff;
     }
 
-    /* QR Frame with Pheizu Logo */
     .receive-box {
       background: var(--card);
       border-radius: 20px;
@@ -290,7 +286,6 @@
     }
     .btn-action:active { transform: scale(0.98); }
 
-    /* Account Details Badge */
     .account-badge-box {
       background: var(--card-inner);
       border: 1px solid var(--border);
@@ -306,7 +301,6 @@
     }
     .account-row:last-child { border-bottom: none; }
 
-    /* Floating Toast */
     .toast {
       position: fixed;
       bottom: 24px;
@@ -323,7 +317,6 @@
       box-shadow: 0 4px 20px rgba(0,0,0,0.8);
     }
 
-    /* Modal */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -468,9 +461,9 @@
     <div id="withNetworkSlider" class="sliding-pill-container"></div>
 
     <label style="font-size:11px; color:var(--muted); margin-top:8px; display:block;">Recipient Destination Address or Invoice:</label>
-    <input type="text" id="withDest" placeholder="Paste address or invoice" />
+    <input type="text" id="withDest" placeholder="Paste address or invoice" oninput="detectInvoiceAmount(this.value)" />
 
-    <!-- Label adapts dynamically: SATS for Lightning, BTC for On-Chain -->
+    <!-- Label & Input Auto-Detected or Manually Filled -->
     <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount to Send in SATS:</label>
     <input type="number" id="withAmount" step="1" placeholder="e.g. 500" />
 
@@ -894,7 +887,6 @@
           currentDepositState.amount = Math.round(num); // SATS
           document.getElementById("amountRowVal").innerText = `${currentDepositState.amount.toLocaleString()} SATS ✏️`;
         } else {
-          // On-Chain input in BTC, converted to SATS for backend
           currentDepositState.amount = Math.round(num * 100000000);
           document.getElementById("amountRowVal").innerText = `${num} BTC ✏️`;
         }
@@ -952,7 +944,7 @@
             receivedSats = newBalance - initialSats;
           }
 
-          // 3. Fallback: Quick query to verify fresh live balance if still reading 0
+          // 3. Fallback: Query live balance directly if still 0
           if (receivedSats <= 0) {
             try {
               const balRes = await fetch(`/api/wallet?action=balance&user_id=${encodeURIComponent(currentUserId)}&username=${encodeURIComponent(username)}&telegram_id=${encodeURIComponent(tgNumericId)}`);
@@ -988,7 +980,10 @@
             creditedText = `$${receivedStable.toFixed(2)} ${currentDepositState.asset}`;
           }
 
-          // Fire celebration modal
+          // 🔥 Clear invoice cache so spent invoice is never shown again
+          btcInvoiceCache[currentDepositState.network] = null;
+
+          // Trigger celebration modal
           triggerSuccessPopup(creditedText);
           loadBalance();
         }
@@ -1023,6 +1018,7 @@
     } catch (e) {}
   }
 
+  // Closes modal and automatically generates a fresh invoice so you never see a spent one
   function closeSuccessModal() {
     const modal = document.getElementById("successModal");
     if (modal) {
@@ -1030,13 +1026,57 @@
       modal.style.display = "none";
     }
     loadBalance();
+
+    // Automatically generate a fresh new invoice for the current network
+    if (currentDepositState.asset === "BTC") {
+      generateDepositRequest(currentDepositState.amount);
+    }
   }
 
   // ==========================================
-  // WITHDRAWAL CONTROLLER
+  // WITHDRAWAL CONTROLLER (With BOLT11 Auto-Detection)
   // ==========================================
   let selectedWithAsset = "BTC";
   let selectedWithNetwork = "lightning";
+
+  function decodeBolt11Sats(invoice) {
+    if (!invoice) return null;
+    const clean = invoice.trim().toLowerCase().replace(/^lightning:/i, "");
+    const match = clean.match(/^ln(?:bc|tb|bcrt)([0-9]+)([munp]?)1/);
+    if (!match) return null;
+
+    const num = parseInt(match[1], 10);
+    const mult = match[2];
+
+    if (!mult) return num * 100000000;
+    if (mult === "m") return Math.round(num * 100000);
+    if (mult === "u") return Math.round(num * 100);
+    if (mult === "n") return Math.round(num * 0.1);
+    if (mult === "p") return Math.round(num * 0.0001);
+    return null;
+  }
+
+  // Auto-detects encoded amount when pasting invoices
+  function detectInvoiceAmount(dest) {
+    if (!dest) return;
+    const clean = dest.trim().toLowerCase();
+
+    if (clean.startsWith("lnbc") || clean.startsWith("lightning:lnbc") || clean.startsWith("lntb")) {
+      const sats = decodeBolt11Sats(clean);
+      if (sats && sats > 0) {
+        const withAmtInput = document.getElementById("withAmount");
+        if (selectedWithAsset === "BTC") {
+          if (selectedWithNetwork === "lightning") {
+            withAmtInput.value = sats;
+            showToast(`⚡ Auto-detected: ${sats.toLocaleString()} SATS`);
+          } else {
+            withAmtInput.value = (sats / 100000000).toFixed(8);
+            showToast(`⚡ Auto-detected: ${(sats / 100000000).toFixed(8)} BTC`);
+          }
+        }
+      }
+    }
+  }
 
   function selectWithdrawAsset(asset) {
     selectedWithAsset = asset;
@@ -1083,6 +1123,9 @@
     document.querySelectorAll("#withNetworkSlider .net-pill-btn").forEach(b => b.classList.remove("active"));
     el.classList.add("active");
     updateWithdrawLabels();
+
+    // Re-trigger auto-detection with updated network
+    detectInvoiceAmount(document.getElementById("withDest").value);
   }
 
   function updateWithdrawLabels() {
@@ -1115,7 +1158,6 @@
 
     if (!dest || !rawAmt || rawAmt <= 0) return showToast("⚠️ Enter valid destination & amount");
 
-    // Unit conversion: BTC + onchain -> rawAmt is in BTC, converted to SATS for backend
     let sendAmt = rawAmt;
     let targetCurr = selectedWithAsset;
 
@@ -1159,8 +1201,8 @@
       loadBalance();
     } catch (err) {
       hapticNotification("error");
-      feedback.innerHTML = `<span style="color:var(--danger)">Failed: ${err.message}</span>`;
-      showToast("Failed: " + err.message);
+      feedback.innerHTML = `<span style="color:var(--danger)">⚠️ ${err.message}</span>`;
+      showToast("⚠️ " + err.message);
     } finally {
       btn.disabled = false;
       btn.innerText = "🚀 Send Payment";
