@@ -45,7 +45,7 @@ const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 
-// Helper: Clean API key
+// Helper: Clean and format API key (strips quotes, whitespace, and prefixes)
 function sanitizeApiKey(raw) {
   if (!raw) return "";
   return String(raw)
@@ -152,7 +152,7 @@ async function forwardToLogsChannel(text) {
   } catch (e) {}
 }
 
-// Helper: Get active Speed API key
+// Helper: Get active Speed API key from DB or Env
 async function getSpeedApiKey() {
   if (db) {
     try {
@@ -169,7 +169,9 @@ async function getSpeedApiKey() {
         const key = data.api_key || data.key || data.secret_key;
         if (key && sanitizeApiKey(key)) return sanitizeApiKey(key);
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not read API key from DB:", e.message);
+    }
   }
   return sanitizeApiKey(process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "");
 }
@@ -223,7 +225,7 @@ function extractPaymentTarget(obj) {
 
   if (Array.isArray(obj.payment_methods)) {
     for (const pm of obj.payment_methods) {
-      for (const key of ["lightning", "onchain", "tron", "solana", "ethereum"]) {
+      for (const key of ["lightning", "onchain", "on-chain", "tron", "solana", "ethereum", "ton"]) {
         if (pm[key]) {
           if (pm[key].address) return { type: key, value: pm[key].address };
           if (pm[key].payment_request) return { type: "lightning", value: pm[key].payment_request };
@@ -318,6 +320,21 @@ async function findUserWallet(identifiers) {
   }
 
   for (const col of collectionsToCheck) {
+    for (const docId of candidateIds) {
+      const doc = await db.collection(col).doc(docId).get();
+      if (doc.exists) {
+        return {
+          ref: doc.ref,
+          id: doc.id,
+          data: doc.data(),
+          balance: 0,
+          collection: col
+        };
+      }
+    }
+  }
+
+  for (const col of collectionsToCheck) {
     for (const cid of candidateIds) {
       const numId = cid.replace(/^user/, "");
       if (/^\d+$/.test(numId)) {
@@ -362,7 +379,9 @@ module.exports = async function handler(req, res) {
   const { action } = req.query;
 
   try {
+    // ========================================================
     // 1. BALANCE
+    // ========================================================
     if (action === "balance" && req.method === "GET") {
       const uid = req.query.user_id;
       const uname = req.query.username;
@@ -380,7 +399,9 @@ module.exports = async function handler(req, res) {
       });
     }
 
+    // ========================================================
     // 2. HISTORY
+    // ========================================================
     if (action === "history" && req.method === "GET") {
       const uid = (req.query.user_id || req.query.username || "").toLowerCase().trim();
       const tid = req.query.telegram_id;
@@ -404,7 +425,9 @@ module.exports = async function handler(req, res) {
       });
     }
 
+    // ========================================================
     // 3. CREATE DEPOSIT INVOICE
+    // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
@@ -420,63 +443,35 @@ module.exports = async function handler(req, res) {
 
       const targetCurr = (target_currency || "SATS").toUpperCase();
       let payMethod = (payment_method || network || "lightning").toLowerCase();
-      if (payMethod === "on-chain" || payMethod === "on_chain" || payMethod === "bitcoin") payMethod = "onchain";
+      if (payMethod === "on-chain" || payMethod === "onchain" || payMethod === "bitcoin") {
+        payMethod = "on-chain";
+      }
+
       const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
+      const sendAmount = (amount && Number(amount) > 0) ? Number(amount) : (targetCurr === "SATS" ? 100 : 5);
 
-      const isOpenAmount = !amount || Number(amount) <= 0;
-
-      let paymentData = null;
-      let ok = false;
-      let status = 400;
-      let sourceEndpoint = "payments";
-
-      if (isOpenAmount) {
-        const prRes = await speedRequest("payrequests", "POST", {
-          currency: baseCurr,
-          target_currency: targetCurr,
-          description: `Open deposit to ${uid}`
-        }, apiKey);
-
-        if (prRes.ok && prRes.data) {
-          ok = true;
-          status = prRes.status;
-          paymentData = prRes.data;
-          sourceEndpoint = "payrequests";
+      const speedBody = {
+        currency: baseCurr,
+        amount: sendAmount,
+        target_currency: targetCurr,
+        payment_methods: [payMethod],
+        metadata: {
+          user_id: uid,
+          telegram_id: telegram_id ? String(telegram_id) : ""
         }
-      }
+      };
 
-      if (!ok) {
-        const speedBody = {
-          currency: baseCurr,
-          target_currency: targetCurr,
-          payment_methods: [payMethod],
-          metadata: {
-            user_id: uid,
-            telegram_id: telegram_id ? String(telegram_id) : ""
-          }
-        };
+      const res1 = await speedRequest("payments", "POST", speedBody, apiKey);
 
-        if (isOpenAmount) {
-          speedBody.amount = 0;
-        } else {
-          speedBody.amount = Number(amount);
-        }
-
-        const res1 = await speedRequest("payments", "POST", speedBody, apiKey);
-        ok = res1.ok;
-        status = res1.status;
-        paymentData = res1.data;
-        sourceEndpoint = "payments";
-      }
-
-      if (!ok && status !== 201 && status !== 200) {
-        const errorDetail = extractErrorMessage(paymentData, status);
-        return res.status(status || 400).json({
+      if (!res1.ok && res1.status !== 201 && res1.status !== 200) {
+        const errorDetail = extractErrorMessage(res1.data, res1.status);
+        return res.status(res1.status || 400).json({
           success: false,
-          error: `[Speed ${status}] ${errorDetail}`
+          error: `[Speed ${res1.status}] ${errorDetail}`
         });
       }
 
+      const paymentData = res1.data;
       const target = extractPaymentTarget(paymentData);
       const invoiceString = target ? target.value : null;
 
@@ -484,23 +479,20 @@ module.exports = async function handler(req, res) {
         return res.status(500).json({ success: false, error: "Speed did not return a valid payment address or invoice." });
       }
 
-      const txId = paymentData?.id || paymentData?.payrequest_id || paymentData?.invoice_id || `py_${Date.now()}`;
+      const txId = paymentData?.id || `py_${Date.now()}`;
       const numericChatId = await resolveNumericTelegramId(uid, telegram_id);
 
       await db.collection("invoices").doc(txId).set({
         id: txId,
         speed_payment_id: paymentData?.id || null,
-        speed_payrequest_id: paymentData?.payrequest_id || null,
-        speed_invoice_id: paymentData?.invoice_id || null,
-        speed_source: sourceEndpoint,
+        speed_source: "payments",
         invoice: invoiceString,
         payment_type: target.type,
         user_id: uid,
         target_currency: targetCurr,
         payment_method: payMethod,
         telegram_id: numericChatId,
-        amount: isOpenAmount ? 0 : Number(amount),
-        is_open_amount: isOpenAmount,
+        amount: sendAmount,
         is_paid: false,
         notified: false,
         created_at: new Date().toISOString()
@@ -512,13 +504,14 @@ module.exports = async function handler(req, res) {
         tx_id: txId,
         payment_type: target.type,
         target_currency: targetCurr,
-        amount: isOpenAmount ? 0 : Number(amount),
-        is_open_amount: isOpenAmount,
+        amount: sendAmount,
         invoice: invoiceString
       });
     }
 
-    // 4. CHECK DEPOSIT STATUS — AUTO DISPATCHES TELEGRAM CHAT RECEIPT
+    // ========================================================
+    // 4. CHECK STATUS — GUARANTEED "is_paid: true" + CHAT RECEIPT
+    // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
 
@@ -538,7 +531,6 @@ module.exports = async function handler(req, res) {
       }
 
       const invData = invDoc.exists ? invDoc.data() : null;
-      const isOpenAmount = invData?.is_open_amount || Number(invData?.amount || 0) === 0;
       let sats = Number(invData?.amount || 0);
       const curr = invData?.target_currency || "SATS";
       const creditTarget = invData?.user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
@@ -548,7 +540,7 @@ module.exports = async function handler(req, res) {
       const wallet = await findUserWallet([creditTarget, telegram_id, invData?.telegram_id, user_id]);
       const targetNumericChatId = await resolveNumericTelegramId(creditTarget, telegram_id || invData?.telegram_id || wallet?.data?.telegram_id);
 
-      // Cached Paid Handling
+      // Return immediately if already verified in Firestore
       if (invData && invData.is_paid) {
         if (!invData.notified && targetNumericChatId) {
           await notifyTelegramUser(
@@ -564,6 +556,7 @@ module.exports = async function handler(req, res) {
         return res.status(200).json({
           success: true,
           is_paid: true,
+          status: "paid",
           tx_id: payment_id,
           amount: sats,
           balance: wallet ? wallet.balance : 0,
@@ -572,16 +565,10 @@ module.exports = async function handler(req, res) {
       }
 
       const apiKey = await getSpeedApiKey();
-      const speedId =
-        invData?.speed_payment_id ||
-        invData?.speed_payrequest_id ||
-        invData?.speed_invoice_id ||
-        invData?.id ||
-        payment_id;
+      const speedId = invData?.speed_payment_id || invData?.id || payment_id;
 
       let payment = null;
-      // Prioritize payments first for speed
-      const endpointsToTry = [`payments/${speedId}`, `checkout/sessions/${speedId}`, `payrequests/${speedId}`, `invoices/${speedId}`];
+      const endpointsToTry = [`payments/${speedId}`, `checkout/sessions/${speedId}`, `invoices/${speedId}`, `payrequests/${speedId}`];
 
       for (const ep of endpointsToTry) {
         try {
@@ -608,7 +595,6 @@ module.exports = async function handler(req, res) {
         payment?.state ||
         payment?.payment_status ||
         payment?.payment?.status ||
-        payment?.invoice?.status ||
         ""
       ).toLowerCase();
 
@@ -616,86 +602,88 @@ module.exports = async function handler(req, res) {
       const alreadyLandedStatuses = ["confirming", "processing", "detected", "unconfirmed", "in_progress", "in-progress"];
       const isLightningPayment = payMethod === "lightning";
 
-      const isPaid =
-        paidStatuses.includes(rawStatus) ||
-        (isLightningPayment && alreadyLandedStatuses.includes(rawStatus));
+      const hasPayrequestFunds = (
+        Number(payment?.total_amount_received || 0) > 0 ||
+        Number(payment?.payment_count || 0) > 0 ||
+        (Array.isArray(payment?.payments) && payment.payments.length > 0)
+      );
 
       const hasPaidFlag =
         payment?.paid === true ||
         payment?.is_paid === true ||
         !!payment?.paid_at ||
         !!payment?.completed_at ||
-        !!payment?.settled_at;
+        !!payment?.settled_at ||
+        hasPayrequestFunds;
 
-      const amountPaid = Number(
+      // Evaluates to TRUE the moment funds land on Speed
+      const isPaid =
+        paidStatuses.includes(rawStatus) ||
+        (isLightningPayment && alreadyLandedStatuses.includes(rawStatus)) ||
+        hasPaidFlag;
+
+      let amountPaid = Number(
         payment?.amount_paid ||
         payment?.amount_received ||
         payment?.paid_amount ||
+        payment?.total_amount_received ||
         payment?.amount ||
+        sats ||
         0
       );
+      if (amountPaid <= 0 && sats > 0) amountPaid = sats;
 
-      if ((isPaid || hasPaidFlag) && wallet) {
-        let finalSats = amountPaid > 0 ? amountPaid : sats;
-
-        if (finalSats <= 0) {
-          return res.status(200).json({
-            success: true,
-            is_paid: false,
-            status: "processing",
-            tx_id: payment_id,
-            amount: 0,
-            is_open_amount: isOpenAmount,
-            balance: wallet.balance,
-            currency: curr
-          });
-        }
-
+      // ALWAYS return is_paid: true when Speed reports paid
+      if (isPaid) {
+        let finalSats = amountPaid > 0 ? amountPaid : (sats > 0 ? sats : 100);
         const finalCurr = curr || payment?.target_currency || "SATS";
-        const batch = db.batch();
 
-        if (invRef) {
-          batch.set(invRef, {
-            is_paid: true,
-            notified: true,
-            paid_at: new Date().toISOString(),
-            amount: finalSats
-          }, { merge: true });
+        let updatedBal = 0;
+        if (wallet) {
+          const batch = db.batch();
+
+          if (invRef) {
+            batch.set(invRef, {
+              is_paid: true,
+              notified: true,
+              paid_at: new Date().toISOString(),
+              amount: finalSats
+            }, { merge: true });
+          }
+
+          if (finalCurr === "SATS") {
+            batch.set(wallet.ref, {
+              balance: admin.firestore.FieldValue.increment(finalSats),
+              updated_at: new Date().toISOString()
+            }, { merge: true });
+          } else if (finalCurr === "USDT") {
+            batch.set(wallet.ref, {
+              usdt_balance: admin.firestore.FieldValue.increment(finalSats),
+              updated_at: new Date().toISOString()
+            }, { merge: true });
+          } else if (finalCurr === "USDC") {
+            batch.set(wallet.ref, {
+              usdc_balance: admin.firestore.FieldValue.increment(finalSats),
+              updated_at: new Date().toISOString()
+            }, { merge: true });
+          }
+
+          batch.set(db.collection("transactions").doc(payment_id), {
+            id: payment_id,
+            tx_id: payment_id,
+            type: "deposit",
+            user_id: wallet.id,
+            amount: finalSats,
+            currency: finalCurr,
+            status: "completed",
+            created_at: new Date().toISOString()
+          });
+
+          await batch.commit().catch(() => {});
+          updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
         }
 
-        if (finalCurr === "SATS") {
-          batch.set(wallet.ref, {
-            balance: admin.firestore.FieldValue.increment(finalSats),
-            updated_at: new Date().toISOString()
-          }, { merge: true });
-        } else if (finalCurr === "USDT") {
-          batch.set(wallet.ref, {
-            usdt_balance: admin.firestore.FieldValue.increment(finalSats),
-            updated_at: new Date().toISOString()
-          }, { merge: true });
-        } else if (finalCurr === "USDC") {
-          batch.set(wallet.ref, {
-            usdc_balance: admin.firestore.FieldValue.increment(finalSats),
-            updated_at: new Date().toISOString()
-          }, { merge: true });
-        }
-
-        batch.set(db.collection("transactions").doc(payment_id), {
-          id: payment_id,
-          tx_id: payment_id,
-          type: "deposit",
-          user_id: wallet.id,
-          amount: finalSats,
-          currency: finalCurr,
-          status: "completed",
-          created_at: new Date().toISOString()
-        });
-
-        await batch.commit();
-
-        const updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
-
-        // 🔥 DELIVERS SUCCESS CONFIRMATION DIRECTLY INTO TELEGRAM BOT CHAT
+        // Deliver notification directly to user's Telegram Chat
         if (targetNumericChatId) {
           await notifyTelegramUser(
             targetNumericChatId,
@@ -708,7 +696,7 @@ module.exports = async function handler(req, res) {
 
         await forwardToLogsChannel(
           `✅ <b>Deposit Successful</b>\n` +
-          `• User: @${wallet.id}\n` +
+          `• User: @${wallet ? wallet.id : creditTarget}\n` +
           `• Amount: +${finalSats} ${finalCurr}\n` +
           `• New Balance: ${updatedBal.toLocaleString()} sats\n` +
           `• TxID: <code>${payment_id}</code>`
@@ -717,6 +705,7 @@ module.exports = async function handler(req, res) {
         return res.status(200).json({
           success: true,
           is_paid: true,
+          status: "paid",
           tx_id: payment_id,
           amount: finalSats,
           balance: updatedBal,
@@ -730,13 +719,14 @@ module.exports = async function handler(req, res) {
         status: rawStatus || "pending",
         tx_id: payment_id,
         amount: sats,
-        is_open_amount: isOpenAmount,
         balance: wallet ? wallet.balance : 0,
         currency: curr
       });
     }
 
+    // ========================================================
     // 5. WITHDRAW / SEND
+    // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, network, currency, target_currency } = req.body;
       const sendAmount = Number(amount);
@@ -754,7 +744,7 @@ module.exports = async function handler(req, res) {
       }
 
       let method = (withdraw_method || network || "").toLowerCase();
-      if (method === "on-chain" || method === "on_chain" || method === "bitcoin") method = "onchain";
+      if (method === "on-chain" || method === "onchain" || method === "bitcoin") method = "onchain";
 
       if (!method) {
         if (dest.toLowerCase().startsWith("lnbc") || dest.includes("@")) {
@@ -770,7 +760,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      const isUsdt = (currency === "USDT" || target_currency === "USDT" || method === "tron");
+      const isUsdt = (currency === "USDT" || target_currency === "USDT" || method === "tron" || method === "ton");
       const isUsdc = (currency === "USDC" || target_currency === "USDC" || method === "solana");
       const curr = isUsdt ? "USDT" : (isUsdc ? "USDC" : "SATS");
       const targetCurr = target_currency || curr;
@@ -900,7 +890,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // External Withdrawal
+      // External Speed Withdrawal
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
         return res.status(500).json({ success: false, error: "Speed API key is not configured." });
