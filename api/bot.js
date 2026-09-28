@@ -359,24 +359,35 @@ async function isUserBanned(userId, numericId) {
 }
 
 // ----------------------------------------------------
-// DEPOSIT CHOICE MENU (Specific Amount vs Quick Invoice/Address)
+// DEPOSIT CHOICE MENU
 // ----------------------------------------------------
 function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabel }) {
   const isSats = targetCurrency === "SATS";
   const backAssetCallback = isSats ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
+  let buttons = [
+    [Markup.button.callback("🔢 Enter Specific Amount (Recommended)", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)]
+  ];
+
+  if (paymentMethod === "lightning") {
+    buttons.push([Markup.button.callback("⚡ Any Amount (Lightning Address)", `dep_opt:lnaddr:SATS:lightning:1`)]);
+    buttons.push([Markup.button.callback("⚡ Quick 1-SAT Invoice", `dep_opt:open:SATS:lightning`)]);
+  } else {
+    buttons.push([Markup.button.callback("⚡ Quick Deposit Address", `dep_opt:open:${targetCurrency}:${paymentMethod}`)]);
+  }
+
+  buttons.push([Markup.button.callback("« Back to Networks", backAssetCallback)]);
+
   return ctx.editMessageText(
     `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
     `Choose your deposit option below:\n\n` +
-    `1️⃣ <b>Enter Specific Amount:</b> Set the exact amount for this deposit.\n` +
-    `2️⃣ <b>Quick Invoice / Address:</b> Generate invoice or address immediately with one tap.\n`,
+    `1️⃣ <b>Enter Specific Amount (Recommended):</b> Sets your desired amount directly into the invoice so it pays your exact figure.\n` +
+    (paymentMethod === "lightning"
+      ? `2️⃣ <b>Lightning Address:</b> Allows the sender's wallet to edit and type ANY amount when sending.\n`
+      : `2️⃣ <b>Quick Address:</b> Generates an on-chain address ready for any transfer amount.\n`),
     {
       parse_mode: "HTML",
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
-        [Markup.button.callback("⚡ Quick Invoice / Address", `dep_opt:open:${targetCurrency}:${paymentMethod}`)],
-        [Markup.button.callback("« Back to Networks", backAssetCallback)]
-      ])
+      ...Markup.inlineKeyboard(buttons)
     }
   );
 }
@@ -427,7 +438,6 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 
     let caption = "";
     if (isLightning) {
-      // Pure lnbc invoice card: Address completely removed
       caption = `⚡ <b>Lightning Deposit Invoice</b>\n\n` +
         `💰 <b>Amount:</b> <code>${Number(finalAmount).toLocaleString()} ${targetCurrency}</code>\n` +
         `🌐 <b>Network:</b> Lightning Network (${targetCurrency})\n\n` +
@@ -490,13 +500,11 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
       stopDepositWatcher(chatId);
       const amtStr = data.amount ? `+${Number(data.amount).toLocaleString()} ${data.currency || "SATS"}` : "Funds";
 
-      // 1. POPUP MODAL: SUCCESS
       await ctx.answerCbQuery(
         `🎉 Payment Received!\n\n${amtStr} has been credited to your balance!\n\nTap OK to close.`,
         { show_alert: true }
       );
 
-      // 2. Update inline button to Confirmed
       await ctx.editMessageReplyMarkup(
         Markup.inlineKeyboard([
           [Markup.button.callback("✅ Payment Confirmed", "gateway_back")]
@@ -522,6 +530,57 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
       `⚠️ Error Checking Status:\n\n${err.message}`,
       { show_alert: true }
     ).catch(() => {});
+  }
+});
+
+// ----------------------------------------------------
+// CALLBACK ACTION: LIGHTNING ADDRESS (EDITABLE WHEN SENDING)
+// ----------------------------------------------------
+bot.action("dep_opt:lnaddr:SATS:lightning:1", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
+  const lnAddress = `${userId}@${DOMAIN}`;
+  const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(`lightning:${lnAddress}`)}&size=400&dark=00e676&light=0b0e14&margin=2&ecLevel=Q`;
+
+  await ctx.deleteMessage().catch(() => {});
+  await ctx.replyWithPhoto(qrUrl, {
+    caption:
+      `⚡ <b>Lightning Address (Editable Amount When Sending)</b>\n\n` +
+      `<code>${lnAddress}</code>\n\n` +
+      `👉 <b>How to pay any custom amount:</b>\n` +
+      `1. Copy your Lightning Address above.\n` +
+      `2. Open your external wallet (Binance, Strike, Cash App, Phoenix, Wallet of Satoshi, Blink, etc.).\n` +
+      `3. Paste this address. <b>Your wallet will ask you to type the exact amount you want to send</b>!\n\n` +
+      `⚡ <i>Funds credit to your balance immediately upon payment.</i>`,
+    parse_mode: "HTML",
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback("🔄 Check Status / Balance", "action_balance_popup")],
+      [Markup.button.callback("🔢 Generate Specific Invoice Instead", "dep_opt:amt:SATS:lightning")],
+      [Markup.button.callback("🏠 Main Menu", "gateway_back")]
+    ])
+  });
+});
+
+bot.action("action_balance_popup", async (ctx) => {
+  const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
+  try {
+    const res = await fetch(`${APP_URL}/api/wallet?action=check-address-status&user_id=${userId}&telegram_id=${ctx.from.id}`);
+    const data = await res.json();
+    const bal = data.balance !== undefined ? Number(data.balance).toLocaleString() : "0";
+
+    if (data && data.is_paid) {
+      await ctx.answerCbQuery(
+        `🎉 Payment Received!\n\n+${Number(data.amount || 0).toLocaleString()} SATS credited!\n💰 Current Balance: ${bal} SATS`,
+        { show_alert: true }
+      );
+    } else {
+      await ctx.answerCbQuery(
+        `💰 Current Balance: ${bal} SATS\n\nNo incoming transfer detected yet. Tap again after sending.`,
+        { show_alert: true }
+      );
+    }
+  } catch (e) {
+    await ctx.answerCbQuery("⚠️ Could not refresh balance.", { show_alert: true }).catch(() => {});
   }
 });
 
