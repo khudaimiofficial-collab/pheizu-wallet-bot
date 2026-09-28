@@ -470,6 +470,7 @@
     <label style="font-size:11px; color:var(--muted); margin-top:8px; display:block;">Recipient Destination Address or Invoice:</label>
     <input type="text" id="withDest" placeholder="Paste address or invoice" />
 
+    <!-- Label adapts dynamically: SATS for Lightning, BTC for On-Chain -->
     <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount to Send in SATS:</label>
     <input type="number" id="withAmount" step="1" placeholder="e.g. 500" />
 
@@ -596,7 +597,7 @@
   function haptic(type = "light") { try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){} }
   function hapticNotification(type = "success") { try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){} }
 
-  // Balance Switcher
+  // Balance Switcher (Cycle: BTC -> SATS -> USDT -> USDC)
   function cycleBalanceMode() {
     const modes = ['BTC', 'SATS', 'USDT', 'USDC'];
     let idx = (modes.indexOf(currentBalanceMode) + 1) % modes.length;
@@ -893,6 +894,7 @@
           currentDepositState.amount = Math.round(num); // SATS
           document.getElementById("amountRowVal").innerText = `${currentDepositState.amount.toLocaleString()} SATS ✏️`;
         } else {
+          // On-Chain input in BTC, converted to SATS for backend
           currentDepositState.amount = Math.round(num * 100000000);
           document.getElementById("amountRowVal").innerText = `${num} BTC ✏️`;
         }
@@ -941,11 +943,11 @@
         );
 
         if (isPaid) {
-          // 1. Extract directly reported amount from the API
-          let receivedSats = Number(data.amount || data.paid_amount || data.sats || 0);
+          // 1. Direct amount returned from the API
+          let receivedSats = Number(data.amount || data.target_amount_paid || data.sats || 0);
           let newBalance = Number(data.balance || 0);
 
-          // 2. If open-amount invoice (Amount 0), calculate differential from balance
+          // 2. Differential fallback if amount was 0 on invoice creation
           if (receivedSats <= 0 && newBalance > initialSats) {
             receivedSats = newBalance - initialSats;
           }
@@ -1113,6 +1115,7 @@
 
     if (!dest || !rawAmt || rawAmt <= 0) return showToast("⚠️ Enter valid destination & amount");
 
+    // Unit conversion: BTC + onchain -> rawAmt is in BTC, converted to SATS for backend
     let sendAmt = rawAmt;
     let targetCurr = selectedWithAsset;
 
