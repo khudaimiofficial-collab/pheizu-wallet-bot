@@ -45,16 +45,16 @@ const MASTER_ADMIN_ID = "8960497898";
 // NATIVE TELEGRAM MENU & COMMAND CONFIGURATION
 // ----------------------------------------------------
 
-// Set Telegram WebApp Menu Button (bottom-left next to text input)
+// Set the persistent Mini App menu button (bottom-left of chat)
 bot.telegram.setChatMenuButton({
   menuButton: {
     type: "web_app",
-    text: "⚡ Wallet",
+    text: "⚡ Open Wallet",
     web_app: { url: APP_URL }
   }
-}).catch(() => {});
+}).catch((e) => console.warn("Menu button error:", e.message));
 
-// Clear all slash commands from the "/" autocomplete menu to keep chat 100% clean
+// Clear all slash commands from "/" autocomplete to keep chat clean
 bot.telegram.deleteMyCommands().catch(() => {});
 
 // ----------------------------------------------------
@@ -93,7 +93,6 @@ async function isAuthorizedAdmin(ctx) {
   return false;
 }
 
-// Fetch configured logs/required channel from Firestore or Environment
 async function getRequiredChannelId() {
   if (db) {
     try {
@@ -106,7 +105,6 @@ async function getRequiredChannelId() {
   return (process.env.LOG_CHANNEL_ID || process.env.REQUIRED_CHANNEL || process.env.CHANNEL_ID || "").trim();
 }
 
-// Generate the invite link for the channel
 async function getChannelInviteLink(channelId) {
   if (!channelId) return "https://t.me";
   try {
@@ -123,7 +121,6 @@ async function getChannelInviteLink(channelId) {
   }
 }
 
-// Check if user is a member of the required channel
 async function checkUserMembership(userId, channelId) {
   if (!channelId) return true;
   try {
@@ -138,7 +135,6 @@ async function checkUserMembership(userId, channelId) {
   }
 }
 
-// Save user data to Firestore
 async function saveUserRecord(ctx) {
   if (!db || !ctx.from) return;
   const user = ctx.from;
@@ -158,7 +154,6 @@ async function saveUserRecord(ctx) {
 // UI SCREENS: JOIN CHANNEL vs WALLET LAUNCH
 // ----------------------------------------------------
 
-// 1. Show Join Channel Prompt (If Unverified)
 async function sendJoinPrompt(ctx, channelLink) {
   const text = [
     `🔒 <b>Channel Verification Required</b>\n`,
@@ -175,12 +170,10 @@ async function sendJoinPrompt(ctx, channelLink) {
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, { parse_mode: "HTML", ...kb }).catch(() => {});
   } else {
-    // Remove any leftover reply keyboard from user's screen
     await ctx.replyWithHTML(text, { ...kb, ...Markup.removeKeyboard() });
   }
 }
 
-// 2. Show Welcome & Launch Wallet (Once Verified)
 async function sendWelcomeScreen(ctx) {
   await saveUserRecord(ctx);
 
@@ -193,12 +186,12 @@ async function sendWelcomeScreen(ctx) {
   const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
 
   const buttons = [
-    [Markup.button.webApp("⚡ Open Pheizu Wallet", walletUrl)]
+    [Markup.button.webApp("⚡ Open Pheizu Wallet", walletUrl, { style: "primary" })]
   ];
 
-  // If user is Admin, add dedicated Admin Console button
+  // Admins get the Admin Console button too
   if (isAdm) {
-    buttons.push([Markup.button.webApp("👑 Open Admin Console", adminUrl)]);
+    buttons.push([Markup.button.webApp("👑 Open Admin Console", adminUrl, { style: "primary" })]);
   }
 
   const welcomeText = [
@@ -223,7 +216,6 @@ async function sendWelcomeScreen(ctx) {
 // BOT CONTROLLER
 // ----------------------------------------------------
 
-// /start command
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
   const channelId = await getRequiredChannelId();
@@ -239,7 +231,6 @@ bot.start(async (ctx) => {
   return sendWelcomeScreen(ctx);
 });
 
-// "✅ Verify & Start" Button Callback
 bot.action("verify_membership", async (ctx) => {
   const userId = ctx.from.id;
   const channelId = await getRequiredChannelId();
@@ -262,7 +253,7 @@ bot.action("verify_membership", async (ctx) => {
   return sendWelcomeScreen(ctx);
 });
 
-// Any other text message or command: Guide user to verify or open wallet
+// Handle any other text / command — send welcome
 bot.on("message", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
