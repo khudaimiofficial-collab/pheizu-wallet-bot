@@ -41,20 +41,16 @@ const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const APP_URL = process.env.WEBAPP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `https://${DOMAIN}`);
 const MASTER_ADMIN_ID = "8960497898";
 
-// ----------------------------------------------------
-// NATIVE TELEGRAM MENU & COMMAND CONFIGURATION
-// ----------------------------------------------------
-
-// Set the persistent Mini App menu button (bottom-left of chat)
+// Set Telegram WebApp Menu Button (bottom-left)
 bot.telegram.setChatMenuButton({
   menuButton: {
     type: "web_app",
-    text: "⚡ Open Wallet",
+    text: "⚡ Wallet",
     web_app: { url: APP_URL }
   }
-}).catch((e) => console.warn("Menu button error:", e.message));
+}).catch(() => {});
 
-// Clear all slash commands from "/" autocomplete to keep chat clean
+// Clear all slash commands from the "/" autocomplete menu
 bot.telegram.deleteMyCommands().catch(() => {});
 
 // ----------------------------------------------------
@@ -66,7 +62,8 @@ async function isAuthorizedAdmin(ctx) {
   const numericId = String(ctx.from.id).trim();
   const username = (ctx.from.username || "").toLowerCase().replace(/^@/, "").trim();
 
-  if (numericId === MASTER_ADMIN_ID) return true;
+  // 🔥 Explicitly grants admin access to Master ID and @pheizu
+  if (numericId === MASTER_ADMIN_ID || username === "pheizu") return true;
 
   const rawAdmins = (process.env.ADMIN_IDS || process.env.ADMIN_ID || "");
   const envAdmins = rawAdmins
@@ -157,7 +154,7 @@ async function saveUserRecord(ctx) {
 async function sendJoinPrompt(ctx, channelLink) {
   const text = [
     `🔒 <b>Channel Verification Required</b>\n`,
-    `To access <b>Pheizu Lightning Wallet</b>, you must first join our official updates and transaction receipt channel.\n`,
+    `To access <b>Pheizu Lightning Wallet</b>, you must first join our official channel for transaction receipts and updates.\n`,
     `1️⃣ Click <b>📢 Join Channel</b> below.`,
     `2️⃣ Return here and click <b>✅ Verify & Start</b>.`
   ].join("\n");
@@ -186,12 +183,12 @@ async function sendWelcomeScreen(ctx) {
   const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
 
   const buttons = [
-    [Markup.button.webApp("⚡ Open Pheizu Wallet", walletUrl, { style: "primary" })]
+    [Markup.button.webApp("⚡ Open Pheizu Wallet", walletUrl)]
   ];
 
-  // Admins get the Admin Console button too
+  // 🔥 Appends Admin Console Button if user is admin
   if (isAdm) {
-    buttons.push([Markup.button.webApp("👑 Open Admin Console", adminUrl, { style: "primary" })]);
+    buttons.push([Markup.button.webApp("👑 Open Admin Console", adminUrl)]);
   }
 
   const welcomeText = [
@@ -199,7 +196,8 @@ async function sendWelcomeScreen(ctx) {
     `Your fast, non-custodial crypto wallet directly inside Telegram.\n`,
     `• <b>Assets:</b> Bitcoin (Lightning & On-Chain), USDT (TON, TRC-20, Solana, ERC-20), USDC`,
     `• <b>Lightning Address:</b> <code>${username}@${DOMAIN}</code>\n`,
-    `Tap the button below to open your wallet:`
+    isAdm ? `👑 <i>Administrator privileges active.</i>\n\n` : ``,
+    `Tap below to open your wallet:`
   ].join("\n");
 
   const kb = Markup.inlineKeyboard(buttons);
@@ -216,6 +214,7 @@ async function sendWelcomeScreen(ctx) {
 // BOT CONTROLLER
 // ----------------------------------------------------
 
+// /start command
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
   const channelId = await getRequiredChannelId();
@@ -231,6 +230,41 @@ bot.start(async (ctx) => {
   return sendWelcomeScreen(ctx);
 });
 
+// /admin command — direct trigger for the admin console
+bot.command("admin", async (ctx) => {
+  const isAdm = await isAuthorizedAdmin(ctx);
+  if (!isAdm) {
+    return ctx.reply("⛔ Access denied: You are not an authorized administrator.");
+  }
+
+  const user = ctx.from;
+  const tgId = String(user.id);
+  const username = (user.username || `user${tgId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
+  const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
+
+  await ctx.replyWithHTML(
+    `👑 <b>Pheizu Administrator Console</b>\n\nTap below to launch the admin management dashboard:`,
+    Markup.inlineKeyboard([
+      [Markup.button.webApp("👑 Open Admin Console", adminUrl)]
+    ])
+  );
+});
+
+// /id command — inspect your numeric ID and admin status
+bot.command("id", async (ctx) => {
+  const isAdm = await isAuthorizedAdmin(ctx);
+  const uid = ctx.from.id;
+  const uname = ctx.from.username ? `@${ctx.from.username}` : "none";
+
+  await ctx.replyWithHTML(
+    `🆔 <b>Your Account Details:</b>\n\n` +
+    `• <b>Numeric ID:</b> <code>${uid}</code>\n` +
+    `• <b>Username:</b> ${uname}\n` +
+    `• <b>Admin Status:</b> ${isAdm ? "✅ <b>Authorized Admin</b>" : "❌ Regular User"}`
+  );
+});
+
+// "✅ Verify & Start" Button Callback
 bot.action("verify_membership", async (ctx) => {
   const userId = ctx.from.id;
   const channelId = await getRequiredChannelId();
@@ -253,8 +287,24 @@ bot.action("verify_membership", async (ctx) => {
   return sendWelcomeScreen(ctx);
 });
 
-// Handle any other text / command — send welcome
+// Fallback message handler
 bot.on("message", async (ctx) => {
+  const text = (ctx.message?.text || "").toLowerCase().trim();
+
+  // If user typed 'admin' or '/admin'
+  if (text === "/admin" || text === "admin") {
+    const isAdm = await isAuthorizedAdmin(ctx);
+    if (isAdm) {
+      const tgId = String(ctx.from.id);
+      const username = (ctx.from.username || `user${tgId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
+      const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
+      return ctx.replyWithHTML(
+        `👑 <b>Pheizu Administrator Console</b>`,
+        Markup.inlineKeyboard([[Markup.button.webApp("👑 Open Admin Console", adminUrl)]])
+      );
+    }
+  }
+
   const userId = ctx.from?.id;
   if (!userId) return;
 
