@@ -433,7 +433,7 @@ module.exports = async function handler(req, res) {
       let ok = false;
       let status = 400;
 
-      // When no custom amount is set, try Speed's payrequests for an open-amount invoice (lnbc1p...)
+      // When no custom amount is set, try Speed's payrequests for an open-amount invoice
       if (isOpenAmount) {
         const prRes = await speedRequest("payrequests", "POST", {
           currency: baseCurr,
@@ -448,7 +448,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Standard fallback to Speed payments (with amount if provided, otherwise open/zero)
+      // Standard fallback to Speed payments
       if (!ok) {
         const speedBody = {
           currency: baseCurr,
@@ -574,6 +574,7 @@ module.exports = async function handler(req, res) {
 
       const wallet = await findUserWallet([creditTarget, targetTgId, user_id]);
 
+      // Already credited earlier — return cached result
       if (invData && invData.is_paid) {
         return res.status(200).json({ 
           success: true, 
@@ -587,93 +588,137 @@ module.exports = async function handler(req, res) {
 
       const apiKey = await getSpeedApiKey();
       const speedId = invData?.id || payment_id;
-      const { data: payment } = await speedRequest(`payments/${speedId}`, "GET", null, apiKey);
 
-      const status = String(payment?.status || payment?.state || "").toLowerCase();
-      const isPaid = ["paid", "succeeded", "successful", "completed"].includes(status);
+      // Try payments endpoint first
+      let { ok: payOk, data: payment } = await speedRequest(`payments/${speedId}`, "GET", null, apiKey);
 
-      if (isPaid && wallet) {
-        // For open-amount invoices, use the amount that was actually paid
-        const finalSats = Number(payment?.amount || sats || 0);
-        const finalCurr = curr || payment?.target_currency || "SATS";
+      // Fallback: try payrequests endpoint (for open-amount invoices)
+      if (!payOk || !payment) {
+        const prRes = await speedRequest(`payrequests/${speedId}`, "GET", null, apiKey);
+        if (prRes.ok && prRes.data) payment = prRes.data;
+      }
 
-        // Safety: skip crediting if amount is still 0 (shouldn't happen if Speed reports paid)
-        if (finalSats > 0) {
-          const batch = db.batch();
+      // Check multiple possible fields for status
+      const rawStatus = String(
+        payment?.status ||
+        payment?.state ||
+        payment?.payment_status ||
+        payment?.payment?.status ||
+        ""
+      ).toLowerCase();
 
-          if (invRef) {
-            batch.set(invRef, {
-              is_paid: true,
-              paid_at: new Date().toISOString(),
-              amount: finalSats
-            }, { merge: true });
-          }
+      // Broad list of statuses that indicate payment
+      const paidStatuses = ["paid", "succeeded", "successful", "completed", "confirmed", "settled", "complete"];
+      const confirmingStatuses = ["confirming", "processing", "pending", "detected", "unconfirmed", "in_progress", "in-progress"];
 
-          if (finalCurr === "SATS") {
-            batch.set(wallet.ref, {
-              balance: admin.firestore.FieldValue.increment(finalSats),
-              updated_at: new Date().toISOString()
-            }, { merge: true });
-          } else if (finalCurr === "USDT") {
-            batch.set(wallet.ref, {
-              usdt_balance: admin.firestore.FieldValue.increment(finalSats),
-              updated_at: new Date().toISOString()
-            }, { merge: true });
-          } else if (finalCurr === "USDC") {
-            batch.set(wallet.ref, {
-              usdc_balance: admin.firestore.FieldValue.increment(finalSats),
-              updated_at: new Date().toISOString()
-            }, { merge: true });
-          }
+      const isPaid = paidStatuses.includes(rawStatus);
+      const isConfirming = confirmingStatuses.includes(rawStatus);
 
-          batch.set(db.collection("transactions").doc(payment_id), {
-            id: payment_id,
+      // Additional check: Speed might report paid_at or amount_paid
+      const hasPaidFlag = payment?.paid === true || payment?.is_paid === true || !!payment?.paid_at;
+      const amountPaid = Number(payment?.amount_paid || payment?.amount_received || payment?.amount || 0);
+
+      // If Speed says paid OR has paid flag → credit the wallet
+      if ((isPaid || hasPaidFlag) && wallet) {
+        // Use the actual paid amount if available, otherwise fall back to stored amount
+        let finalSats = amountPaid > 0 ? amountPaid : sats;
+
+        // If it's still 0 (open-amount invoice just paid but amount not yet reflected),
+        // return "processing" without crediting — user should re-check in a few seconds
+        if (finalSats <= 0) {
+          return res.status(200).json({
+            success: true,
+            is_paid: false,
+            status: "processing",
             tx_id: payment_id,
-            type: "deposit",
-            user_id: wallet.id,
-            amount: finalSats,
-            currency: finalCurr,
-            status: "completed",
-            created_at: new Date().toISOString()
-          });
-
-          await batch.commit();
-
-          const updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
-
-          if (targetTgId) {
-            await notifyTelegramUser(
-              targetTgId,
-              `🎉 <b>Payment Received!</b>\n\n` +
-              `⚡ <b>+${finalSats} ${finalCurr}</b> credited to your balance!\n` +
-              `💰 <b>New Balance:</b> ${updatedBal.toLocaleString()} sats\n` +
-              `🆔 <b>TxID:</b> <code>${payment_id}</code>`
-            );
-          }
-
-          await forwardToLogsChannel(
-            `📥 <b>Deposit Confirmed</b>\n` +
-            `• User: @${wallet.id}\n` +
-            `• Amount: +${finalSats} ${finalCurr}\n` +
-            `• New Balance: ${updatedBal.toLocaleString()} sats\n` +
-            `• TxID: <code>${payment_id}</code>`
-          );
-
-          return res.status(200).json({ 
-            success: true, 
-            is_paid: true,
-            tx_id: payment_id,
-            amount: finalSats,
-            balance: updatedBal,
-            currency: finalCurr
+            amount: 0,
+            is_open_amount: isOpenAmount,
+            balance: wallet.balance,
+            currency: curr
           });
         }
+
+        const finalCurr = curr || payment?.target_currency || "SATS";
+
+        const batch = db.batch();
+
+        if (invRef) {
+          batch.set(invRef, {
+            is_paid: true,
+            paid_at: new Date().toISOString(),
+            amount: finalSats
+          }, { merge: true });
+        }
+
+        if (finalCurr === "SATS") {
+          batch.set(wallet.ref, {
+            balance: admin.firestore.FieldValue.increment(finalSats),
+            updated_at: new Date().toISOString()
+          }, { merge: true });
+        } else if (finalCurr === "USDT") {
+          batch.set(wallet.ref, {
+            usdt_balance: admin.firestore.FieldValue.increment(finalSats),
+            updated_at: new Date().toISOString()
+          }, { merge: true });
+        } else if (finalCurr === "USDC") {
+          batch.set(wallet.ref, {
+            usdc_balance: admin.firestore.FieldValue.increment(finalSats),
+            updated_at: new Date().toISOString()
+          }, { merge: true });
+        }
+
+        batch.set(db.collection("transactions").doc(payment_id), {
+          id: payment_id,
+          tx_id: payment_id,
+          type: "deposit",
+          user_id: wallet.id,
+          amount: finalSats,
+          currency: finalCurr,
+          status: "completed",
+          created_at: new Date().toISOString()
+        });
+
+        await batch.commit();
+
+        const updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
+
+        if (targetTgId) {
+          await notifyTelegramUser(
+            targetTgId,
+            `🎉 <b>Payment Received!</b>\n\n` +
+            `⚡ <b>+${finalSats} ${finalCurr}</b> credited to your balance!\n` +
+            `💰 <b>New Balance:</b> ${updatedBal.toLocaleString()} sats\n` +
+            `🆔 <b>TxID:</b> <code>${payment_id}</code>`
+          );
+        }
+
+        await forwardToLogsChannel(
+          `📥 <b>Deposit Confirmed</b>\n` +
+          `• User: @${wallet.id}\n` +
+          `• Amount: +${finalSats} ${finalCurr}\n` +
+          `• New Balance: ${updatedBal.toLocaleString()} sats\n` +
+          `• TxID: <code>${payment_id}</code>`
+        );
+
+        return res.status(200).json({ 
+          success: true, 
+          is_paid: true,
+          tx_id: payment_id,
+          amount: finalSats,
+          balance: updatedBal,
+          currency: finalCurr
+        });
       }
+
+      // Return appropriate status
+      let responseStatus = "pending";
+      if (isConfirming) responseStatus = "confirming";
+      else if (rawStatus) responseStatus = rawStatus;
 
       return res.status(200).json({ 
         success: true, 
-        is_paid: isPaid && sats > 0,
-        status: status || "pending",
+        is_paid: false,
+        status: responseStatus,
         tx_id: payment_id,
         amount: sats,
         is_open_amount: isOpenAmount,
