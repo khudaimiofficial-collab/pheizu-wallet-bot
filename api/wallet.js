@@ -63,8 +63,7 @@ async function notifyTelegramUser(telegramId, message) {
   }
 }
 
-// Helper: Forward Wallet Events to Telegram Logs Channel
-// (Only called on SUCCESS — deposits and withdrawals)
+// Helper: Forward Wallet Events to Telegram Logs Channel (SUCCESS ONLY)
 async function forwardToLogsChannel(text) {
   if (!BOT_TOKEN) return;
   try {
@@ -427,7 +426,6 @@ module.exports = async function handler(req, res) {
       if (payMethod === "on-chain" || payMethod === "on_chain" || payMethod === "bitcoin") payMethod = "onchain";
       const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
 
-      // Determine if this is an open-amount (zero) invoice
       const isOpenAmount = !amount || Number(amount) <= 0;
 
       let paymentData = null;
@@ -435,7 +433,6 @@ module.exports = async function handler(req, res) {
       let status = 400;
       let sourceEndpoint = "payments";
 
-      // When no custom amount is set, try Speed's payrequests for an open-amount invoice
       if (isOpenAmount) {
         const prRes = await speedRequest("payrequests", "POST", {
           currency: baseCurr,
@@ -451,7 +448,6 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Standard fallback to Speed payments
       if (!ok) {
         const speedBody = {
           currency: baseCurr,
@@ -510,7 +506,6 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // Store ALL possible Speed IDs so check-status can query whichever endpoint is correct
       const txId = paymentData?.id || paymentData?.payrequest_id || paymentData?.invoice_id || `py_${Date.now()}`;
 
       await db.collection("invoices").doc(txId).set({
@@ -531,7 +526,7 @@ module.exports = async function handler(req, res) {
         created_at: new Date().toISOString()
       }, { merge: true });
 
-      // NO LOG here — only success logs are sent to the channel
+      // NO log here — only success logs are sent
 
       return res.status(200).json({
         success: true,
@@ -546,7 +541,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 4. CHECK DEPOSIT STATUS (MULTI-ENDPOINT LOOKUP)
+    // 4. CHECK DEPOSIT STATUS — CREDIT ON ANY DETECTED STATUS
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -577,7 +572,7 @@ module.exports = async function handler(req, res) {
 
       const wallet = await findUserWallet([creditTarget, targetTgId, user_id]);
 
-      // Already credited earlier — return cached result
+      // Already credited — return cached result
       if (invData && invData.is_paid) {
         return res.status(200).json({
           success: true,
@@ -591,7 +586,6 @@ module.exports = async function handler(req, res) {
 
       const apiKey = await getSpeedApiKey();
 
-      // Prefer the ID that matches the invoice type
       const speedId =
         invData?.speed_payrequest_id ||
         invData?.speed_invoice_id ||
@@ -599,7 +593,7 @@ module.exports = async function handler(req, res) {
         invData?.id ||
         payment_id;
 
-      // Try ALL possible Speed endpoints — different invoice types live under different routes
+      // Try ALL possible Speed endpoints
       let payment = null;
       const endpointsToTry = [];
 
@@ -627,7 +621,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // FALLBACK: search Speed by BOLT11 invoice string if ID lookups failed
+      // FALLBACK: search by BOLT11 string
       if (!payment && storedInvoice) {
         try {
           const shortInvoice = storedInvoice.substring(0, 60);
@@ -644,7 +638,6 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Interpret whatever Speed returned
       const rawStatus = String(
         payment?.status ||
         payment?.state ||
@@ -654,13 +647,18 @@ module.exports = async function handler(req, res) {
         ""
       ).toLowerCase();
 
+      // For Lightning, ANY of these means SATS have ALREADY landed
       const paidStatuses = ["paid", "succeeded", "successful", "completed", "confirmed", "settled", "complete"];
-      const confirmingStatuses = ["confirming", "processing", "pending", "detected", "unconfirmed", "in_progress", "in-progress"];
+      const alreadyLandedStatuses = ["confirming", "processing", "detected", "unconfirmed", "in_progress", "in-progress"];
 
-      const isPaid = paidStatuses.includes(rawStatus);
-      const isConfirming = confirmingStatuses.includes(rawStatus);
+      const isLightningPayment = payMethod === "lightning";
 
-      // Check multiple "paid" indicators
+      // Treat confirming as paid for Lightning — SATS are already in Speed balance
+      const isPaid =
+        paidStatuses.includes(rawStatus) ||
+        (isLightningPayment && alreadyLandedStatuses.includes(rawStatus));
+
+      // Additional paid indicators
       const hasPaidFlag =
         payment?.paid === true ||
         payment?.is_paid === true ||
@@ -676,11 +674,11 @@ module.exports = async function handler(req, res) {
         0
       );
 
-      // If Speed says paid OR has a paid flag → credit wallet IMMEDIATELY
+      // Credit if Speed says paid OR (Lightning + detected/processing) OR any paid flag
       if ((isPaid || hasPaidFlag) && wallet) {
         let finalSats = amountPaid > 0 ? amountPaid : sats;
 
-        // Open-amount invoice paid but Speed hasn't finalized amount yet
+        // Open-amount invoice paid but amount not yet reflected — wait for final amount
         if (finalSats <= 0) {
           return res.status(200).json({
             success: true,
@@ -738,7 +736,6 @@ module.exports = async function handler(req, res) {
 
         const updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
 
-        // Notify user
         if (targetTgId) {
           await notifyTelegramUser(
             targetTgId,
@@ -749,7 +746,7 @@ module.exports = async function handler(req, res) {
           );
         }
 
-        // ✅ ONLY SUCCESS LOG — Deposit Confirmed
+        // ✅ SUCCESS LOG
         await forwardToLogsChannel(
           `✅ <b>Deposit Successful</b>\n` +
           `• User: @${wallet.id}\n` +
@@ -770,8 +767,7 @@ module.exports = async function handler(req, res) {
 
       // Not paid yet — return status so watcher retries
       let responseStatus = "pending";
-      if (isConfirming) responseStatus = "confirming";
-      else if (rawStatus) responseStatus = rawStatus;
+      if (rawStatus) responseStatus = rawStatus;
 
       return res.status(200).json({
         success: true,
@@ -952,7 +948,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // B. Speed External Withdrawal (Payout)
+      // B. Speed External Withdrawal
       const apiKey = await getSpeedApiKey();
       if (!apiKey) {
         return res.status(500).json({ success: false, error: "Speed API key is not configured." });
@@ -1006,7 +1002,6 @@ module.exports = async function handler(req, res) {
       }
 
       if (!ok && status !== 200 && status !== 201) {
-        // ❌ NO failure log — only success logs to channel
         const errorDetail = extractErrorMessage(sendData, status);
         return res.status(status || 400).json({
           success: false,
