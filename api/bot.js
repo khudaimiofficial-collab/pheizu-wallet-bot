@@ -366,7 +366,7 @@ function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabe
   const backAssetCallback = isSats ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
   let buttons = [
-    [Markup.button.callback("🔢 Enter Specific Amount (Recommended)", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)]
+    [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)]
   ];
 
   if (paymentMethod === "lightning") {
@@ -381,10 +381,10 @@ function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabe
   return ctx.editMessageText(
     `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
     `Choose your deposit option below:\n\n` +
-    `1️⃣ <b>Enter Specific Amount (Recommended):</b> Sets your desired amount directly into the invoice so it pays your exact figure.\n` +
+    `1️⃣ <b>Enter Specific Amount:</b> Sets your exact custom amount into the invoice (e.g. 50, 500, 50,000 SATS).\n` +
     (paymentMethod === "lightning"
-      ? `2️⃣ <b>Lightning Address:</b> Allows the sender's wallet to edit and type ANY amount when sending.\n`
-      : `2️⃣ <b>Quick Address:</b> Generates an on-chain address ready for any transfer amount.\n`),
+      ? `2️⃣ <b>Lightning Address:</b> Senders can type ANY amount in their wallet when sending.\n`
+      : `2️⃣ <b>Quick Address:</b> Generates a direct address ready for any transfer amount.\n`),
     {
       parse_mode: "HTML",
       ...Markup.inlineKeyboard(buttons)
@@ -859,7 +859,6 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
   const networkLabel = paymentMethod === "lightning" ? "Lightning Network" : paymentMethod.toUpperCase();
 
   if (mode === "amt") {
-    // Option 1: Enter custom amount
     await setSession(ctx.from.id, {
       step: "awaiting_deposit_custom_amount",
       target_currency: targetCurrency,
@@ -887,7 +886,6 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
       await ctx.reply(promptText, { parse_mode: "HTML", ...promptKeyboard });
     }
   } else {
-    // Option 2: Generate direct invoice (starts with lnbc, NOT lnurl)
     return handleGenerateDeposit(ctx, {
       targetCurrency,
       paymentMethod,
@@ -1164,7 +1162,7 @@ bot.action("admin_setkey_prompt", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 7. TEXT MESSAGE HANDLER (CUSTOM DEPOSITS, WITHDRAWALS & ADMIN)
+// 7. TEXT MESSAGE HANDLER (WITHDRAWALS & DEPOSITS)
 // ----------------------------------------------------
 bot.on("text", async (ctx) => {
   const text = ctx.message.text.trim();
@@ -1308,7 +1306,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // C. WITHDRAW DESTINATION INPUT
+  // C. WITHDRAW DESTINATION INPUT (WITH EDITABLE AMOUNT OPTION)
   if (session.step === "awaiting_withdraw_dest") {
     await ctx.replyWithChatAction("typing");
 
@@ -1368,11 +1366,12 @@ bot.on("text", async (ctx) => {
         `💰 <b>Amount:</b> ${detectedAmount.toLocaleString()} ${detectedCurrency}\n` +
         `🌐 <b>Network:</b> ${detectedMethod.toUpperCase()}\n` +
         `🎯 <b>Recipient:</b> <code>${text.substring(0, 30)}...</code>\n\n` +
-        `Click <b>Send</b> below to confirm payment:`,
+        `Click <b>Send</b> below to proceed, or <b>Edit Amount</b> to customize:`,
         {
           parse_mode: "HTML",
           ...Markup.inlineKeyboard([
             [Markup.button.callback(`🚀 Send ${detectedAmount.toLocaleString()} ${detectedCurrency}`, "confirm_send")],
+            [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt")],
             [Markup.button.callback("❌ Cancel", "cancel_send")]
           ])
         }
@@ -1418,16 +1417,39 @@ bot.on("text", async (ctx) => {
     });
 
     return ctx.reply(
-      `⚡ <b>Payment Summary</b>\n\n💰 <b>Amount:</b> ${amount} ${curr}\n🎯 <b>Recipient:</b> <code>${destination}</code>\n🌐 <b>Method:</b> ${withdrawMethod.toUpperCase()}\n\nClick Send below:`,
+      `⚡ <b>Payment Summary</b>\n\n💰 <b>Amount:</b> ${amount.toLocaleString()} ${curr}\n🎯 <b>Recipient:</b> <code>${destination}</code>\n🌐 <b>Method:</b> ${withdrawMethod.toUpperCase()}\n\nClick Send below:`,
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback(`🚀 Send ${amount} ${curr}`, "confirm_send")],
+          [Markup.button.callback(`🚀 Send ${amount.toLocaleString()} ${curr}`, "confirm_send")],
+          [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt")],
           [Markup.button.callback("❌ Cancel", "cancel_send")]
         ])
       }
     );
   }
+});
+
+// ----------------------------------------------------
+// EDIT WITHDRAW AMOUNT HANDLER
+// ----------------------------------------------------
+bot.action("edit_withdraw_amt", async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const session = await getSession(ctx.from.id);
+  const curr = session.currency || "SATS";
+
+  await setSession(ctx.from.id, {
+    step: "awaiting_withdraw_amount"
+  });
+
+  const destShort = session.destination ? (session.destination.length > 28 ? session.destination.substring(0, 25) + '...' : session.destination) : '';
+
+  await ctx.editMessageText(
+    `✏️ <b>Edit Send Amount</b>\n\n` +
+    `Destination: <code>${destShort}</code>\n\n` +
+    `Please reply with the exact <b>amount in ${curr}</b> you want to send:`,
+    { parse_mode: "HTML" }
+  );
 });
 
 // ----------------------------------------------------
@@ -1471,7 +1493,7 @@ bot.action("confirm_send", async (ctx) => {
 
     await ctx.editMessageText(
       `✅ <b>Payment Successful!</b>\n\n` +
-      `💸 <b>Amount Sent:</b> ${amount} ${currency || "SATS"}\n` +
+      `💸 <b>Amount Sent:</b> ${amount.toLocaleString()} ${currency || "SATS"}\n` +
       `🎯 <b>Recipient:</b> <code>${displayRecipient}</code>\n` +
       `🆔 <b>TxID:</b> <code>${txId}</code>`,
       { parse_mode: "HTML" }
