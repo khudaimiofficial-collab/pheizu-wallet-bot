@@ -28,19 +28,18 @@ const MASTER_ADMIN_ID = "8960497898";
 const SAT_TO_USD = 0.00065;
 const activeWatchers = new Map();
 
-// Helper: Blue inline button
+// ----------------------------------------------------
+// Helper: Blue inline button (raw JSON — guarantees style works)
+// ----------------------------------------------------
 function blueBtn(text, data) {
   return { text, callback_data: data, style: "primary" };
 }
-// Helper: Blue inline URL button
 function blueUrl(text, url) {
   return { text, url, style: "primary" };
 }
-// Helper: Blue inline WebApp button
 function blueWebApp(text, url) {
   return { text, web_app: { url }, style: "primary" };
 }
-// Helper: Wrap rows into an inline keyboard reply_markup
 function blueKb(rows) {
   return { reply_markup: { inline_keyboard: rows } };
 }
@@ -101,7 +100,7 @@ async function getDirectBalance(userId, telegramId) {
   return { sats: 0, usdt: 0, usdc: 0 };
 }
 
-// Persistent Reply Keyboard — BLUE style
+// Persistent Reply Keyboard — BLUE style, old labels
 async function getMainKeyboard(ctx) {
   const rows = [
     [{ text: "💰 Balance", style: "primary" }, { text: "📥 Deposit", style: "primary" }],
@@ -116,7 +115,7 @@ async function getMainKeyboard(ctx) {
 }
 
 // ----------------------------------------------------
-// KEYBOARDS: WITHDRAW, DEPOSIT & ADMIN (RAW BLUE JSON)
+// KEYBOARDS: WITHDRAW, DEPOSIT & ADMIN
 // ----------------------------------------------------
 function getWithdrawAssetKeyboard() {
   return blueKb([
@@ -240,10 +239,15 @@ function stopDepositWatcher(chatId) {
   }
 }
 
+// ----------------------------------------------------
+// AUTO-WATCHER: polls check-status every 2s and instantly
+// credits the user the moment Speed reports paid.
+// Works for ANY wallet type (Speed, Phoenix, Strike, Muun, etc.)
+// ----------------------------------------------------
 function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
   stopDepositWatcher(chatId);
   let attempts = 0;
-  const maxAttempts = 60;
+  const maxAttempts = 90; // 90 * 2s = 3 minutes
 
   const timer = setInterval(async () => {
     attempts++;
@@ -259,19 +263,20 @@ function startDepositWatcher(chatId, paymentId, expectedAmount, targetUserId) {
       if (data && data.is_paid) {
         stopDepositWatcher(chatId);
 
+        // Notify user — INSTANT credit notification
         try {
           const amtStr = data.amount ? `+${Number(data.amount).toLocaleString()} ${data.currency || "SATS"}` : "Funds";
           await bot.telegram.sendMessage(
             chatId,
             `🎉 <b>Payment Received!</b>\n\n` +
-            `✨ ${amtStr} has been credited to your balance!\n\n` +
+            `✨ <b>${amtStr}</b> has been credited to your balance!\n\n` +
             `🆔 <b>TxID:</b> <code>${paymentId}</code>`,
             { parse_mode: "HTML" }
           );
         } catch (e) {}
       }
     } catch (e) {}
-  }, 3000);
+  }, 2000);
 
   activeWatchers.set(String(chatId), timer);
 }
@@ -464,6 +469,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       ])
     });
 
+    // NOTE: No "invoice created" log to channel — only success logs
     startDepositWatcher(ctx.from.id, txId, isSpecified ? amount : 0, userId);
   } catch (err) {
     const backCallback = targetCurrency === "SATS" ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
