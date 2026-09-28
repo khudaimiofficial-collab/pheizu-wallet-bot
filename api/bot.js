@@ -42,17 +42,42 @@ const APP_URL = process.env.WEBAPP_URL || (process.env.VERCEL_URL ? `https://${p
 const MASTER_ADMIN_ID = "8960497898";
 const BOT_USERNAME = process.env.BOT_USERNAME || "pheizu_bot";
 
-// Native Telegram WebApp Menu Button (bottom-left)
-bot.telegram.setChatMenuButton({
-  menuButton: {
-    type: "web_app",
-    text: "⚡ Wallet",
-    web_app: { url: APP_URL }
-  }
+// ----------------------------------------------------
+// NATIVE TELEGRAM MENU & COMMAND CONFIGURATION
+// ----------------------------------------------------
+
+// 1. By default, ensure the global menu button is DEFAULT (no Open Wallet button for strangers)
+bot.telegram.callApi("setChatMenuButton", {
+  menu_button: { type: "default" }
 }).catch(() => {});
 
-// Clear all slash commands from the "/" autocomplete menu
+// 2. Clear all slash commands from the "/" autocomplete menu
 bot.telegram.deleteMyCommands().catch(() => {});
+
+// Helper: Set or Remove the Telegram Chat Menu Button per-user
+async function setMenuButtonForUser(chatId, isVerified, walletUrl = "") {
+  try {
+    if (!isVerified) {
+      // Hide the Open Wallet button from the bottom-left bar
+      await bot.telegram.callApi("setChatMenuButton", {
+        chat_id: chatId,
+        menu_button: { type: "default" }
+      });
+    } else {
+      // Show the Open Wallet button ONLY after verification
+      await bot.telegram.callApi("setChatMenuButton", {
+        chat_id: chatId,
+        menu_button: {
+          type: "web_app",
+          text: "⚡ Wallet",
+          web_app: { url: walletUrl }
+        }
+      });
+    }
+  } catch (e) {
+    console.warn("Could not set chat menu button:", e.message);
+  }
+}
 
 // ----------------------------------------------------
 // HELPERS: ADMIN, BALANCES & CHANNEL VERIFICATION
@@ -63,7 +88,6 @@ async function isAuthorizedAdmin(ctx) {
   const numericId = String(ctx.from.id).trim();
   const username = (ctx.from.username || "").toLowerCase().replace(/^@/, "").trim();
 
-  // Master ID or @pheizu
   if (numericId === MASTER_ADMIN_ID || username === "pheizu") return true;
 
   const rawAdmins = (process.env.ADMIN_IDS || process.env.ADMIN_ID || "");
@@ -173,6 +197,11 @@ async function saveUserRecord(ctx) {
 
 // 1. Channel Join Prompt (If Unverified)
 async function sendJoinPrompt(ctx, channelLink) {
+  const userId = ctx.from.id;
+  
+  // 🔥 Ensure Open Wallet is REMOVED from the chat menu bar
+  await setMenuButtonForUser(userId, false);
+
   const text = [
     `🔒 <b>Channel Verification Required</b>\n`,
     `To access <b>Pheizu Lightning Wallet</b>, you must first join our official updates and transaction receipt channel.\n`,
@@ -204,11 +233,12 @@ async function sendMainMenu(ctx) {
   const walletUrl = `${APP_URL}/?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
   const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
 
-  // Share text & URL
+  // 🔥 User is verified: Enable the Open Wallet menu button in bottom-left
+  await setMenuButtonForUser(tgId, true, walletUrl);
+
   const shareText = encodeURIComponent("⚡ Pay & receive Bitcoin and Stablecoins instantly with zero fees on Pheizu Lightning Wallet!");
   const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(`https://t.me/${BOT_USERNAME}?start=ref_${username}`)}&text=${shareText}`;
 
-  // Menu Buttons Layout
   const buttons = [
     [Markup.button.webApp("⚡ Open Pheizu Wallet", walletUrl)],
     [
@@ -217,7 +247,6 @@ async function sendMainMenu(ctx) {
     ]
   ];
 
-  // Show Admin button ONLY if authorized
   if (isAdm) {
     buttons.push([Markup.button.webApp("👑 Open Admin Console", adminUrl)]);
   }
@@ -241,7 +270,6 @@ async function sendMainMenu(ctx) {
       await ctx.replyWithHTML(welcomeText, kb);
     }
   } else {
-    // Corrected: kb passed cleanly without any conflicting removeKeyboard
     await ctx.replyWithHTML(welcomeText, kb);
   }
 }
@@ -346,7 +374,7 @@ bot.command("id", async (ctx) => {
   );
 });
 
-// "✅ Verify & Start" Button
+// "✅ Verify & Start" Button Callback
 bot.action("verify_membership", async (ctx) => {
   const userId = ctx.from.id;
   const channelId = await getRequiredChannelId();
@@ -359,6 +387,7 @@ bot.action("verify_membership", async (ctx) => {
   const isMember = await checkUserMembership(userId, channelId);
 
   if (!isMember) {
+    await setMenuButtonForUser(userId, false);
     return ctx.answerCbQuery(
       "❌ You have not joined the channel yet!\n\nPlease join the channel first, then tap Verify.",
       { show_alert: true }
