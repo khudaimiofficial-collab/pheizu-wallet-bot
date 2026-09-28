@@ -84,134 +84,134 @@ async function getDirectBalance(userId, telegramId) {
   return { sats: 0, usdt: 0, usdc: 0 };
 }
 
-// Persistent Reply Keyboard — Old labels with blue style
+// Persistent Reply Keyboard
 async function getMainKeyboard(ctx) {
   const rows = [
-    [{ text: "💰 Balance", style: "primary" }, { text: "📥 Deposit", style: "primary" }],
-    [{ text: "📤 Withdraw", style: "primary" }, { text: "📜 History", style: "primary" }]
+    ["💰 Balance", "📥 Deposit"],
+    ["📤 Withdraw", "📜 History"]
   ];
 
   if (await isAuthorizedAdmin(ctx)) {
-    rows.push([{ text: "👑 Admin Panel", style: "primary" }]);
+    rows.push(["👑 Admin Panel"]);
   }
 
   return Markup.keyboard(rows).resize();
 }
 
 // ----------------------------------------------------
-// KEYBOARDS: WITHDRAW, DEPOSIT & ADMIN (BLUE STYLE)
+// KEYBOARDS: WITHDRAW, DEPOSIT & ADMIN
 // ----------------------------------------------------
 function getWithdrawAssetKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("⚡ Bitcoin (SATS)", "with_asset_sats", { style: "primary" })],
+    [Markup.button.callback("⚡ Bitcoin (SATS)", "with_asset_sats")],
     [
-      Markup.button.callback("💵 USDT", "with_asset_usdt", { style: "primary" }),
-      Markup.button.callback("💲 USDC", "with_asset_usdc", { style: "primary" })
+      Markup.button.callback("💵 USDT", "with_asset_usdt"),
+      Markup.button.callback("💲 USDC", "with_asset_usdc")
     ],
-    [Markup.button.callback("🔙 Back to Main Menu", "gateway_back", { style: "primary" })]
+    [Markup.button.callback("🔙 Back to Main Menu", "gateway_back")]
   ]);
 }
 
 function getSatsWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "with_net_sats_lightning", { style: "primary" }),
-      Markup.button.callback("₿ On-Chain", "with_net_sats_onchain", { style: "primary" })
+      Markup.button.callback("⚡ Lightning", "with_net_sats_lightning"),
+      Markup.button.callback("₿ On-Chain", "with_net_sats_onchain")
     ],
-    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets", { style: "primary" })]
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
   ]);
 }
 
 function getUsdtWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "with_net_usdt_lightning", { style: "primary" }),
-      Markup.button.callback("⛓️ Ethereum", "with_net_usdt_ethereum", { style: "primary" })
+      Markup.button.callback("⚡ Lightning", "with_net_usdt_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdt_ethereum")
     ],
     [
-      Markup.button.callback("🔴 Tron (TRC-20)", "with_net_usdt_tron", { style: "primary" }),
-      Markup.button.callback("🟣 Solana", "with_net_usdt_solana", { style: "primary" })
+      Markup.button.callback("🔴 Tron (TRC-20)", "with_net_usdt_tron"),
+      Markup.button.callback("🟣 Solana", "with_net_usdt_solana")
     ],
-    [Markup.button.callback("💎 TON", "with_net_usdt_ton", { style: "primary" })],
-    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets", { style: "primary" })]
+    [Markup.button.callback("💎 TON", "with_net_usdt_ton")],
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
   ]);
 }
 
 function getUsdcWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "with_net_usdc_lightning", { style: "primary" }),
-      Markup.button.callback("⛓️ Ethereum", "with_net_usdc_ethereum", { style: "primary" })
+      Markup.button.callback("⚡ Lightning", "with_net_usdc_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdc_ethereum")
     ],
     [
-      Markup.button.callback("🟣 Solana", "with_net_usdc_solana", { style: "primary" })
+      Markup.button.callback("🟣 Solana", "with_net_usdc_solana")
     ],
-    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets", { style: "primary" })]
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets")]
   ]);
 }
 
 function getDepositAssetKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("⚡ Bitcoin (SATS)", "dep_asset_sats", { style: "primary" })],
+    [Markup.button.callback("⚡ Bitcoin (SATS)", "dep_asset_sats")],
     [
-      Markup.button.callback("💵 USDT", "dep_asset_usdt", { style: "primary" }),
-      Markup.button.callback("💲 USDC", "dep_asset_usdc", { style: "primary" })
+      Markup.button.callback("💵 USDT", "dep_asset_usdt"),
+      Markup.button.callback("💲 USDC", "dep_asset_usdc")
     ],
-    [Markup.button.callback("🔙 Back", "gateway_back", { style: "primary" })]
+    [Markup.button.callback("🔙 Back", "gateway_back")]
   ]);
 }
 
 function getUsdtDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "dep_net_usdt_lightning", { style: "primary" }),
-      Markup.button.callback("⛓️ Ethereum", "dep_net_usdt_ethereum", { style: "primary" })
+      Markup.button.callback("⚡ Lightning", "dep_net_usdt_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "dep_net_usdt_ethereum")
     ],
     [
-      Markup.button.callback("🔴 Tron (TRC-20)", "dep_net_usdt_tron", { style: "primary" }),
-      Markup.button.callback("🟣 Solana", "dep_net_usdt_solana", { style: "primary" })
+      Markup.button.callback("🔴 Tron (TRC-20)", "dep_net_usdt_tron"),
+      Markup.button.callback("🟣 Solana", "dep_net_usdt_solana")
     ],
-    [Markup.button.callback("💎 TON", "dep_net_usdt_ton", { style: "primary" })],
-    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets", { style: "primary" })]
+    [Markup.button.callback("💎 TON", "dep_net_usdt_ton")],
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
   ]);
 }
 
 function getUsdcDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "dep_net_usdc_lightning", { style: "primary" }),
-      Markup.button.callback("⛓️ Ethereum", "dep_net_usdc_ethereum", { style: "primary" })
+      Markup.button.callback("⚡ Lightning", "dep_net_usdc_lightning"),
+      Markup.button.callback("⛓️ Ethereum", "dep_net_usdc_ethereum")
     ],
     [
-      Markup.button.callback("🟣 Solana", "dep_net_usdc_solana", { style: "primary" })
+      Markup.button.callback("🟣 Solana", "dep_net_usdc_solana")
     ],
-    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets", { style: "primary" })]
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
   ]);
 }
 
 function getSatsDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning", "dep_net_sats_lightning", { style: "primary" }),
-      Markup.button.callback("₿ On-Chain", "dep_net_sats_onchain", { style: "primary" })
+      Markup.button.callback("⚡ Lightning", "dep_net_sats_lightning"),
+      Markup.button.callback("₿ On-Chain", "dep_net_sats_onchain")
     ],
-    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets", { style: "primary" })]
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets")]
   ]);
 }
 
 function getAdminDashboardKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("👤 Manage Users", "admin_users_menu", { style: "primary" }),
-      Markup.button.callback("📢 Broadcast", "admin_broadcast_prompt", { style: "primary" })
+      Markup.button.callback("👤 Manage Users", "admin_users_menu"),
+      Markup.button.callback("📢 Broadcast", "admin_broadcast_prompt")
     ],
     [
-      Markup.button.callback("📋 Logs Channel", "admin_logs_prompt", { style: "primary" }),
-      Markup.button.callback("👑 Admins (Add/Del)", "admin_admins_menu", { style: "primary" })
+      Markup.button.callback("📋 Logs Channel", "admin_logs_prompt"),
+      Markup.button.callback("👑 Admins (Add/Del)", "admin_admins_menu")
     ],
     [
-      Markup.button.callback("🔑 Set Speed Key", "admin_setkey_prompt", { style: "primary" }),
-      Markup.button.callback("❌ Close", "admin_close", { style: "primary" })
+      Markup.button.callback("🔑 Set Speed Key", "admin_setkey_prompt"),
+      Markup.button.callback("❌ Close", "admin_close")
     ]
   ]);
 }
@@ -219,16 +219,16 @@ function getAdminDashboardKeyboard() {
 function getAdminUserManagementKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("🚫 Ban User", "adm_ban_user", { style: "primary" }),
-      Markup.button.callback("✅ Unban User", "adm_unban_user", { style: "primary" })
+      Markup.button.callback("🚫 Ban User", "adm_ban_user"),
+      Markup.button.callback("✅ Unban User", "adm_unban_user")
     ],
     [
-      Markup.button.callback("➕ Add Balance", "adm_add_bal", { style: "primary" }),
-      Markup.button.callback("➖ Deduct Balance", "adm_deduct_bal", { style: "primary" })
+      Markup.button.callback("➕ Add Balance", "adm_add_bal"),
+      Markup.button.callback("➖ Deduct Balance", "adm_deduct_bal")
     ],
     [
-      Markup.button.callback("🗑️ Delete User", "adm_del_user", { style: "primary" }),
-      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard", { style: "primary" })
+      Markup.button.callback("🗑️ Delete User", "adm_del_user"),
+      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard")
     ]
   ]);
 }
@@ -236,12 +236,12 @@ function getAdminUserManagementKeyboard() {
 function getAdminAdminsKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("➕ Add Admin", "adm_add_admin", { style: "primary" }),
-      Markup.button.callback("➖ Delete Admin", "adm_del_admin", { style: "primary" })
+      Markup.button.callback("➕ Add Admin", "adm_add_admin"),
+      Markup.button.callback("➖ Delete Admin", "adm_del_admin")
     ],
     [
-      Markup.button.callback("📋 List Admins", "adm_list_admins", { style: "primary" }),
-      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard", { style: "primary" })
+      Markup.button.callback("📋 List Admins", "adm_list_admins"),
+      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard")
     ]
   ]);
 }
@@ -340,11 +340,11 @@ async function getWalletOverviewText(userId, telegramId, isAdm) {
   );
 }
 
-// Fixed BOLT-11 Decoder
+// Fixed BOLT-11 Decoder: Only detects amount if digits exist before the '1' separator
 function decodeBolt11Sats(invoice) {
   const clean = invoice.trim().toLowerCase().replace(/^lightning:/, "");
   const match = clean.match(/^ln(?:bc|tb|bcrt)([0-9]+)([munp]?)1/);
-  if (!match) return null;
+  if (!match) return null; // Zero-amount invoice! Returns null so amount remains editable!
 
   const val = parseInt(match[1], 10);
   const multiplier = match[2];
@@ -371,25 +371,59 @@ async function isUserBanned(userId, numericId) {
 }
 
 // ----------------------------------------------------
-// DEPOSIT CHOICE MENU
+// DEPOSIT AMOUNT SELECTOR MENU
 // ----------------------------------------------------
 function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabel }) {
   const isSats = targetCurrency === "SATS";
   const backAssetCallback = isSats ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
-  let buttons = [
-    [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`, { style: "primary" })],
-    [Markup.button.callback("⚡ Quick Invoice (Open Amount)", `dep_opt:open:${targetCurrency}:${paymentMethod}`, { style: "primary" })],
-    [Markup.button.callback("🔙 Back to Networks", backAssetCallback, { style: "primary" })]
-  ];
+  let buttons = [];
+
+  if (isSats && paymentMethod === "lightning") {
+    buttons.push([
+      Markup.button.callback("⚡ Quick Invoice (Open Amount)", `dep_opt:open:SATS:lightning`)
+    ]);
+    buttons.push([
+      Markup.button.callback("⚡ 100 SATS", `dep_preset:SATS:lightning:100`),
+      Markup.button.callback("⚡ 500 SATS", `dep_preset:SATS:lightning:500`)
+    ]);
+    buttons.push([
+      Markup.button.callback("⚡ 1,000 SATS", `dep_preset:SATS:lightning:1000`),
+      Markup.button.callback("⚡ 5,000 SATS", `dep_preset:SATS:lightning:5000`)
+    ]);
+    buttons.push([
+      Markup.button.callback("🔢 Enter Custom Amount", `dep_opt:amt:SATS:lightning`)
+    ]);
+  } else if (!isSats) {
+    buttons.push([
+      Markup.button.callback("⚡ Quick Deposit Address", `dep_opt:open:${targetCurrency}:${paymentMethod}`)
+    ]);
+    buttons.push([
+      Markup.button.callback(`💵 5 ${targetCurrency}`, `dep_preset:${targetCurrency}:${paymentMethod}:5`),
+      Markup.button.callback(`💵 10 ${targetCurrency}`, `dep_preset:${targetCurrency}:${paymentMethod}:10`)
+    ]);
+    buttons.push([
+      Markup.button.callback("🔢 Enter Custom Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)
+    ]);
+  } else {
+    buttons.push([
+      Markup.button.callback("⚡ Quick Deposit Address", `dep_opt:open:SATS:onchain`)
+    ]);
+    buttons.push([
+      Markup.button.callback("🔢 Enter Custom Amount", `dep_opt:amt:SATS:onchain`)
+    ]);
+  }
+
+  buttons.push([Markup.button.callback("🔙 Back to Networks", backAssetCallback)]);
+
+  const lnAddressNotice = (paymentMethod === "lightning")
+    ? `\n⚡ <i>Senders can also pay any amount directly to your Lightning Address:\n<code>${String(ctx.from.username || ctx.from.id).toLowerCase()}@${DOMAIN}</code></i>\n`
+    : ``;
 
   return ctx.editMessageText(
     `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
-    `✨ <b>Choose your deposit option below:</b>\n\n` +
-    `1️⃣ <b>Enter Specific Amount:</b> Generate an invoice for your exact desired amount (e.g. 50, 500, 50,000 SATS).\n\n` +
-    `2️⃣ <b>Quick Invoice (Open Amount):</b> Generate an invoice where the sender can type any amount in their wallet.\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💡 <i>Tip: Use Quick Invoice for flexible payments!</i>`,
+    `Choose your deposit option below to generate your invoice:\n` +
+    lnAddressNotice,
     {
       parse_mode: "HTML",
       ...Markup.inlineKeyboard(buttons)
@@ -405,6 +439,8 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
   await clearSession(ctx.from.id);
 
   let statusMsg = null;
+  const isSpecified = Boolean(isCustomAmount && amount && Number(amount) > 0);
+
   if (ctx.callbackQuery) {
     await ctx.editMessageText(
       `⏳ <b>Generating ${targetCurrency} (${networkLabel}) deposit details...</b>`,
@@ -423,7 +459,8 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       telegram_id: String(ctx.from.id)
     };
 
-    if (amount && Number(amount) > 0) {
+    // If custom amount was requested, send it; otherwise omit amount so Speed doesn't hardcode a fixed number
+    if (isSpecified) {
       payload.amount = Number(amount);
     }
 
@@ -444,9 +481,9 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 
     let caption = "";
     if (isLightning) {
-      const amtLine = isCustomAmount
+      const amtLine = isSpecified
         ? `💰 <b>Amount:</b> <code>${Number(amount).toLocaleString()} ${targetCurrency}</code>\n`
-        : `💰 <b>Amount:</b> <i>Editable when sending</i>\n`;
+        : `💰 <b>Amount:</b> <i>Open Amount (editable when sending)</i>\n`;
 
       caption = `⚡ <b>Lightning Deposit Invoice</b>\n\n` +
         amtLine +
@@ -455,7 +492,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
         `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
         `<i>Scan QR or copy invoice to pay. Waiting for payment...</i>`;
     } else {
-      const amtLine = isCustomAmount
+      const amtLine = isSpecified
         ? `💰 <b>Expected Amount:</b> <code>${amount} ${targetCurrency}</code>\n`
         : ``;
 
@@ -477,11 +514,11 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       caption,
       parse_mode: "HTML",
       ...Markup.inlineKeyboard([
-        [Markup.button.callback("🔄 Check Status", `check_dep:${txId}`, { style: "primary" })]
+        [Markup.button.callback("🔄 Check Status", `check_dep:${txId}`)]
       ])
     });
 
-    startDepositWatcher(ctx.from.id, txId, amount || 0, userId);
+    startDepositWatcher(ctx.from.id, txId, isSpecified ? amount : 0, userId);
   } catch (err) {
     const backCallback = targetCurrency === "SATS" ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
     await ctx.reply(
@@ -489,13 +526,32 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`, { style: "primary" })],
-          [Markup.button.callback("🔙 Back to Networks", backCallback, { style: "primary" })]
+          [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
+          [Markup.button.callback("🔙 Back to Networks", backCallback)]
         ])
       }
     );
   }
 }
+
+// ----------------------------------------------------
+// PRESET AMOUNT GENERATION
+// ----------------------------------------------------
+bot.action(/^dep_preset:([^:]+):([^:]+):([^:]+)$/, async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const targetCurrency = ctx.match[1];
+  const paymentMethod = ctx.match[2];
+  const amount = Number(ctx.match[3]);
+  const networkLabel = paymentMethod === "lightning" ? "Lightning Network" : paymentMethod.toUpperCase();
+
+  return handleGenerateDeposit(ctx, {
+    targetCurrency,
+    paymentMethod,
+    amount,
+    networkLabel,
+    isCustomAmount: true
+  });
+});
 
 // ----------------------------------------------------
 // CALLBACK ACTION: CHECK DEPOSIT STATUS
@@ -520,7 +576,7 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
 
       await ctx.editMessageReplyMarkup(
         Markup.inlineKeyboard([
-          [Markup.button.callback("✅ Payment Confirmed", "gateway_back", { style: "primary" })]
+          [Markup.button.callback("✅ Payment Confirmed", "gateway_back")]
         ]).reply_markup
       ).catch(() => {});
     } else {
@@ -632,7 +688,7 @@ bot.hears("💰 Balance", async (ctx) => {
   await ctx.reply(walletText, {
     parse_mode: "HTML",
     ...Markup.inlineKeyboard([
-      Markup.button.webApp("📱 Open WebApp", APP_URL, { style: "primary" })
+      Markup.button.webApp("📱 Open WebApp", APP_URL)
     ])
   });
 });
@@ -825,7 +881,7 @@ bot.action("dep_net_usdc_solana", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// CALLBACK ACTIONS: OPTION 1 (CUSTOM AMOUNT) VS OPTION 2 (OPEN INVOICE)
+// CALLBACK ACTIONS: OPTION 1 (CUSTOM AMOUNT) VS OPTION 2 (DIRECT INVOICE)
 // ----------------------------------------------------
 bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
@@ -843,7 +899,7 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
     });
 
     const isSats = targetCurrency === "SATS";
-    const exampleAmt = isSats ? "50, 100, 1000" : "10, 25";
+    const exampleAmt = isSats ? "50, 100, 500, 1000" : "5, 10, 25";
     const backCallback = isSats ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
     const promptText = `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
@@ -852,7 +908,7 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
       `<i>Type /cancel to abort at any time.</i>`;
 
     const promptKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback("🔙 Back to Networks", backCallback, { style: "primary" })]
+      [Markup.button.callback("« Back to Networks", backCallback)]
     ]);
 
     try {
@@ -862,7 +918,6 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
       await ctx.reply(promptText, { parse_mode: "HTML", ...promptKeyboard });
     }
   } else {
-    // Option 2: Generate open invoice with amount = 0
     return handleGenerateDeposit(ctx, {
       targetCurrency,
       paymentMethod,
@@ -1026,7 +1081,7 @@ bot.action("gateway_back", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   await ctx.deleteMessage().catch(() => {});
   const kb = await getMainKeyboard(ctx);
-  await ctx.reply("🔙 <b>Returned to main menu.</b>", { parse_mode: "HTML", ...kb });
+  await ctx.reply("🔙 Returned to main menu.", kb);
 });
 
 // Admin Callbacks
@@ -1140,7 +1195,7 @@ bot.action("admin_setkey_prompt", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 7. TEXT MESSAGE HANDLER (WITHDRAWALS & DEPOSITS)
+// 7. TEXT MESSAGE HANDLER (CUSTOM DEPOSITS, WITHDRAWALS & ADMIN)
 // ----------------------------------------------------
 bot.on("text", async (ctx) => {
   const text = ctx.message.text.trim();
@@ -1284,7 +1339,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // C. WITHDRAW DESTINATION INPUT
+  // C. WITHDRAW DESTINATION INPUT (ACCURATE AMOUNT DETECTION & EDITABLE FOR ZERO-AMOUNT INVOICES)
   if (session.step === "awaiting_withdraw_dest") {
     await ctx.replyWithChatAction("typing");
 
@@ -1307,6 +1362,7 @@ bot.on("text", async (ctx) => {
       }
     }
 
+    // Decode BOLT-11: Detects amount ONLY if digits exist before the '1' separator
     if (!detectedAmount && (text.toLowerCase().startsWith("lnbc") || text.toLowerCase().startsWith("lightning:lnbc"))) {
       detectedAmount = decodeBolt11Sats(text);
       if (detectedAmount) {
@@ -1315,6 +1371,7 @@ bot.on("text", async (ctx) => {
       }
     }
 
+    // If an amount is detected from a fixed invoice
     if (detectedAmount && detectedAmount > 0) {
       const bal = await getDirectBalance(userId, ctx.from.id);
 
@@ -1348,14 +1405,15 @@ bot.on("text", async (ctx) => {
         {
           parse_mode: "HTML",
           ...Markup.inlineKeyboard([
-            [Markup.button.callback(`🚀 Send ${detectedAmount.toLocaleString()} ${detectedCurrency}`, "confirm_send", { style: "primary" })],
-            [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt", { style: "primary" })],
-            [Markup.button.callback("❌ Cancel", "cancel_send", { style: "primary" })]
+            [Markup.button.callback(`🚀 Send ${detectedAmount.toLocaleString()} ${detectedCurrency}`, "confirm_send")],
+            [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt")],
+            [Markup.button.callback("❌ Cancel", "cancel_send")]
           ])
         }
       );
     }
 
+    // Zero-amount invoice (lnbc1p...) or on-chain address: PROMPTS USER TO ENTER AMOUNT
     const currentBal = await getDirectBalance(userId, ctx.from.id);
     let availText = `${currentBal.sats.toLocaleString()} SATS`;
     if (detectedCurrency === "USDT") availText = `${currentBal.usdt.toFixed(2)} USDT`;
@@ -1404,9 +1462,9 @@ bot.on("text", async (ctx) => {
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback(`🚀 Send ${amount.toLocaleString()} ${curr}`, "confirm_send", { style: "primary" })],
-          [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt", { style: "primary" })],
-          [Markup.button.callback("❌ Cancel", "cancel_send", { style: "primary" })]
+          [Markup.button.callback(`🚀 Send ${amount.toLocaleString()} ${curr}`, "confirm_send")],
+          [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt")],
+          [Markup.button.callback("❌ Cancel", "cancel_send")]
         ])
       }
     );
