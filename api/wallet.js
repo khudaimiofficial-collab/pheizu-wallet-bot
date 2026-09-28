@@ -226,12 +226,11 @@ function extractPaymentTarget(obj) {
   return null;
 }
 
-// Extract real amount received ONLY from payment settled fields
 function extractPaidAmount(payment, invData) {
   if (!payment) return 0;
 
   const candidates = [
-    payment.target_amount_paid,   // Official Speed API field for paid SATS [1.1]
+    payment.target_amount_paid,
     payment.amount_received,
     payment.total_amount_received,
     payment.paid_amount,
@@ -241,7 +240,6 @@ function extractPaidAmount(payment, invData) {
     payment.payments?.[0]?.target_amount_paid,
     payment.payments?.[0]?.amount_received,
     payment.payments?.[0]?.paid_amount,
-    // Only use target_amount or amount if invoice was created with a specific amount
     invData?.amount > 0 ? payment.target_amount : null,
     invData?.amount > 0 ? payment.amount : null,
     invData?.amount > 0 ? invData.amount : null
@@ -382,7 +380,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, history: list.slice(0, 10) });
     }
 
-    // 3. CREATE DEPOSIT INVOICE
+    // 3. CREATE DEPOSIT INVOICE (Speed ID and TxID are strictly identical)
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
@@ -407,7 +405,7 @@ module.exports = async function handler(req, res) {
       let status = 400;
       let sourceEndpoint = "payments";
 
-      // Open Amount Lightning -> Create Payrequest
+      // A. Open Amount Lightning -> Create Payrequest
       if (isOpenAmount && payMethod === "lightning") {
         const prRes = await speedRequest("payrequests", "POST", {
           currency: baseCurr,
@@ -423,7 +421,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Open Amount On-chain -> Create Payment Address
+      // B. Open Amount On-chain -> Create Payment Address
       if (isOpenAmount && payMethod === "onchain") {
         const addrRes = await speedRequest("payment-addresses", "POST", {
           currency: baseCurr,
@@ -440,7 +438,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Specific Amount
+      // C. Specific Amount
       if (!ok) {
         const speedBody = {
           currency: baseCurr,
@@ -510,7 +508,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 4. CHECK DEPOSIT STATUS — STRICT PAYMENT VERIFICATION
+    // 4. CHECK DEPOSIT STATUS (Supports both Internal Bot-to-Bot & External Payments)
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
       if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
@@ -536,8 +534,20 @@ module.exports = async function handler(req, res) {
       const wallet = await findUserWallet([creditTarget, telegram_id, invData?.telegram_id, user_id]);
       const targetNumericChatId = await resolveNumericTelegramId(creditTarget, telegram_id || invData?.telegram_id || wallet?.data?.telegram_id);
 
-      // Return early ONLY if verified, amount > 0, and user was already notified
-      if (invData && invData.is_paid && Number(invData.amount || 0) > 0 && invData.notified) {
+      // 🔥 IMMEDIATE RETURN FOR INTERNAL BOT-TO-BOT PAYMENTS OR ALREADY VERIFIED PAYMENTS
+      if (invData && invData.is_paid && Number(invData.amount || 0) > 0) {
+        if (!invData.notified && targetNumericChatId) {
+          const fromUser = invData.paid_by ? ` from @${invData.paid_by}` : '';
+          await notifyTelegramUser(
+            targetNumericChatId,
+            `🎉 <b>Payment Received!</b>\n\n` +
+            `⚡ <b>+${invData.amount} ${curr}</b>${fromUser} credited to your balance!\n` +
+            `💰 <b>New Balance:</b> ${(wallet ? wallet.balance : invData.amount).toLocaleString()} sats\n` +
+            `🆔 <b>TxID:</b> <code>${payment_id}</code>`
+          );
+          await invRef.set({ notified: true }, { merge: true });
+        }
+
         return res.status(200).json({
           success: true,
           is_paid: true,
@@ -562,7 +572,6 @@ module.exports = async function handler(req, res) {
           const prPayRes = await speedRequest(`payrequests/${prId}/payments`, "GET", null, apiKey);
           if (prPayRes.ok && prPayRes.data) {
             const list = prPayRes.data.data || prPayRes.data.items || prPayRes.data.payments || (Array.isArray(prPayRes.data) ? prPayRes.data : []);
-            // Only select payments that are actually paid
             const paidItems = list.filter(p => ["paid", "succeeded", "completed", "confirmed"].includes(String(p.status).toLowerCase()));
             if (paidItems.length > 0) {
               payment = paidItems[0];
@@ -583,7 +592,6 @@ module.exports = async function handler(req, res) {
           if (searchRes.ok && searchRes.data) {
             const list = searchRes.data.data || searchRes.data.items || [];
             for (const p of list) {
-              // Exact match only (no fuzzy substring)
               const matchesInvoice = cleanInvoice && (
                 p.invoice === cleanInvoice ||
                 p.payment_request === cleanInvoice ||
@@ -636,7 +644,6 @@ module.exports = async function handler(req, res) {
         ""
       ).toLowerCase();
 
-      // 🔥 STRICT PAYMENT STATUS VALIDATION
       const isConfirmedPaidStatus = [
         "paid",
         "succeeded",
@@ -648,19 +655,14 @@ module.exports = async function handler(req, res) {
 
       const hasPaidFlag = payment?.paid === true || payment?.is_paid === true || !!payment?.paid_at || !!payment?.settled_at;
 
-      // PayRequest is ONLY paid if Speed explicitly reports funds received
       const hasPayrequestFunds = (
         (speedId.startsWith("pr_") || invData?.speed_source === "payrequests") &&
         (Number(payment?.total_amount_received || 0) > 0 || Number(payment?.payment_count || 0) > 0)
       );
 
-      // Must be confirmed paid by Speed (NEVER based on detectedAmount alone!)
       const isPaid = (isConfirmedPaidStatus || hasPaidFlag || hasPayrequestFunds);
-
-      // Extract amount paid
       const finalSats = detectedAmount > 0 ? detectedAmount : extractPaidAmount(payment, invData);
 
-      // 🔥 Process and credit ONLY when Speed genuinely marks the payment as paid
       if (isPaid && finalSats > 0) {
         const finalCurr = curr || payment?.target_currency || "SATS";
 
@@ -714,7 +716,6 @@ module.exports = async function handler(req, res) {
           updatedBal = wallet.balance + (finalCurr === "SATS" ? delta : 0);
         }
 
-        // Notify user via Telegram bot chat
         if (targetNumericChatId) {
           await notifyTelegramUser(
             targetNumericChatId,
@@ -744,7 +745,6 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // 🛡️ UNPAID: If payment has not arrived, always return is_paid: false
       return res.status(200).json({
         success: true,
         is_paid: false,
@@ -756,7 +756,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 5. WITHDRAW / SEND
+    // 5. WITHDRAW / SEND (Handles Internal Bot-to-Bot + Duplicate Detection)
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, network, currency, target_currency } = req.body;
       const sendAmount = Number(amount);
@@ -766,12 +766,12 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ success: false, error: "Invalid parameters." });
       }
 
+      const cleanDest = dest.replace(/^lightning:/i, "").replace(/^bitcoin:/i, "").trim();
+
       // Check if invoice has already been paid
       if (dest.toLowerCase().startsWith("lnbc") || dest.toLowerCase().startsWith("lightning:lnbc") || dest.startsWith("bc1")) {
-        const cleanInv = dest.replace(/^lightning:/i, "").trim();
-
         const paidInvCheck = await db.collection("invoices")
-          .where("invoice", "==", cleanInv)
+          .where("invoice", "in", [dest, cleanDest, `lightning:${cleanDest}`])
           .where("is_paid", "==", true)
           .limit(1)
           .get();
@@ -843,13 +843,16 @@ module.exports = async function handler(req, res) {
       let recipientUserId = null;
       let internalInvoiceDoc = null;
 
+      // 1. Check if recipient is a Lightning Address on this domain
       if (dest.includes("@") && dest.toLowerCase().includes(DOMAIN.toLowerCase())) {
         recipientUserId = dest.split("@")[0].toLowerCase().trim();
       }
 
+      // 2. Check if invoice belongs to an internal user in our system
       if (!recipientUserId) {
+        const candidates = [dest, cleanDest, `lightning:${cleanDest}`];
         const invSnap = await db.collection("invoices")
-          .where("invoice", "==", dest)
+          .where("invoice", "in", candidates)
           .where("is_paid", "==", false)
           .limit(1)
           .get();
@@ -861,7 +864,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Internal Transfer
+      // ⚡ INTERNAL BOT-TO-BOT TRANSFER
       if (recipientUserId) {
         if (recipientUserId === senderWallet.id) {
           return res.status(400).json({ success: false, error: "You cannot send payments to your own account." });
@@ -889,8 +892,10 @@ module.exports = async function handler(req, res) {
           const invData = (await internalInvoiceDoc.get()).data();
           recipientTgId = invData?.telegram_id;
 
+          // 🔥 Marks the invoice paid immediately so the recipient's check-status triggers success!
           batch.update(internalInvoiceDoc, {
             is_paid: true,
+            notified: false, // Allows check-status to deliver the success notification & popup
             paid_at: new Date().toISOString(),
             paid_by: senderWallet.id,
             tx_id: txId,
