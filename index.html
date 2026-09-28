@@ -19,6 +19,7 @@
       --primary-light: #38bdf8;
       --button: #00e676;
       --border: #1e2c4a;
+      --accent: #f59e0b;
       --danger: #ef4444;
     }
     
@@ -86,7 +87,7 @@
     .asset-pill-name { font-size: 10px; color: var(--muted); text-transform: uppercase; }
     .asset-pill-val { font-size: 12px; font-weight: 700; margin-top: 2px; font-family: monospace; color: #fff; }
 
-    /* Top Navigation Tabs */
+    /* Clean Navigation Tabs */
     .nav-tabs {
       display: flex;
       background: var(--card);
@@ -94,8 +95,9 @@
       padding: 3px;
       margin-bottom: 12px;
       border: 1px solid var(--border);
-      gap: 2px;
+      gap: 3px;
     }
+    
     .tab-btn {
       flex: 1;
       padding: 10px 4px;
@@ -117,7 +119,7 @@
       border: 1px solid var(--border);
     }
 
-    /* Sliding Pill Container (Horizontal Slider for Networks) */
+    /* Sliding Pill Container */
     .sliding-pill-container {
       display: flex;
       overflow-x: auto;
@@ -126,7 +128,6 @@
       gap: 6px;
       padding: 4px 2px 8px;
       scrollbar-width: none;
-      -ms-overflow-style: none;
     }
     .sliding-pill-container::-webkit-scrollbar { display: none; }
 
@@ -152,7 +153,7 @@
       color: #fff;
     }
 
-    /* Receive QR Card Container */
+    /* QR Frame with Pheizu Logo */
     .receive-box {
       background: var(--card);
       border-radius: 20px;
@@ -160,7 +161,6 @@
       border: 1px solid var(--border);
       margin-top: 10px;
     }
-    
     .receive-header {
       font-size: 16px;
       font-weight: 700;
@@ -169,7 +169,6 @@
       color: #fff;
     }
 
-    /* Pure White Rounded QR Frame with Center Logo */
     .qr-frame {
       background: #ffffff;
       border-radius: 20px;
@@ -183,14 +182,8 @@
       height: 250px;
       box-shadow: 0 8px 30px rgba(0,0,0,0.6);
     }
+    #qrcode { display: flex; justify-content: center; align-items: center; }
 
-    #qrcode {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-    }
-
-    /* Pheizu Circular Electric Dragon/Wolf Logo */
     .pheizu-qr-logo {
       position: absolute;
       width: 48px;
@@ -207,7 +200,6 @@
       pointer-events: none;
     }
 
-    /* Invoice Details Sheet */
     .details-sheet {
       background: var(--card-inner);
       border: 1px solid var(--border);
@@ -215,7 +207,6 @@
       padding: 10px 14px;
       margin-bottom: 14px;
     }
-
     .details-row {
       display: flex;
       justify-content: space-between;
@@ -225,7 +216,6 @@
       font-size: 12px;
     }
     .details-row:last-child { border-bottom: none; }
-    
     .details-label { color: var(--muted); }
     .details-val {
       font-family: monospace;
@@ -248,10 +238,9 @@
       margin-top: 10px;
     }
 
-    /* Asset Buttons */
     .btn-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
       gap: 6px;
       margin-bottom: 8px;
     }
@@ -301,6 +290,22 @@
     }
     .btn-action:active { transform: scale(0.98); }
 
+    /* Account Details Badge */
+    .account-badge-box {
+      background: var(--card-inner);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .account-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      font-size: 12px;
+    }
+    .account-row:last-child { border-bottom: none; }
+
     /* Floating Toast */
     .toast {
       position: fixed;
@@ -318,7 +323,7 @@
       box-shadow: 0 4px 20px rgba(0,0,0,0.8);
     }
 
-    /* Modal Sheet for Input (Add Amount / Add Note) */
+    /* Modal */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -375,46 +380,38 @@
     </div>
   </div>
 
-  <!-- 2. MAIN NAVIGATION TABS -->
+  <!-- 2. CLEAN NAVIGATION TABS (Admin & Share Removed) -->
   <div class="nav-tabs">
     <button id="navTabDeposit" class="tab-btn active" onclick="switchNavTab('deposit')">📥 Deposit</button>
     <button id="navTabWithdraw" class="tab-btn" onclick="switchNavTab('withdraw')">📤 Withdraw</button>
-    <button id="navTabWallet" class="tab-btn" onclick="switchNavTab('wallet')">💳 Account</button>
+    <button id="navTabAccount" class="tab-btn" onclick="switchNavTab('account')">👤 Account</button>
     <button id="navTabHistory" class="tab-btn" onclick="switchNavTab('history')">📜 History</button>
-    <button id="navTabAdmin" class="tab-btn hidden" onclick="switchNavTab('admin')">👑 Admin</button>
   </div>
 
   <!-- 3. TAB: DEPOSIT -->
   <div id="panelDeposit">
-    <!-- Asset Selector -->
     <div class="btn-grid">
       <button id="depAssetBtc" class="choice-btn selected" onclick="selectDepositAsset('BTC')">₿ BTC</button>
       <button id="depAssetUsdt" class="choice-btn" onclick="selectDepositAsset('USDT')">💵 USDT</button>
       <button id="depAssetUsdc" class="choice-btn" onclick="selectDepositAsset('USDC')">💲 USDC</button>
     </div>
 
-    <!-- Sliding Pill Bar for Networks -->
     <div style="font-size:11px; color:var(--muted); margin: 6px 0 2px;">Slide to select network:</div>
-    <div id="depNetworkSlider" class="sliding-pill-container">
-      <!-- Injected dynamically -->
-    </div>
+    <div id="depNetworkSlider" class="sliding-pill-container"></div>
 
-    <!-- USDT / USDC Deposit Config (Hidden for BTC) -->
     <div id="stableDepositConfig" class="card hidden" style="margin-top:8px;">
       <div style="font-size:11px; color:var(--muted); margin-bottom:4px;">Deposit Amount (Minimum $0.50):</div>
       <input type="number" id="stableDepositAmount" min="0.5" step="0.5" value="5" placeholder="Min 0.5" />
       <button class="btn-action" onclick="generateStablecoinDeposit()">⚡ Generate Deposit QR</button>
     </div>
 
-    <!-- RECEIVE BOX (SCREENSHOT 3 STYLE) -->
+    <!-- RECEIVE BOX (STYLE MATCHING SCREENSHOT 3) -->
     <div id="receiveBox" class="receive-box">
       <div id="receiveTitle" class="receive-header">Receive BTC</div>
 
-      <!-- QR Card with Pheizu Wolf Logo Badge -->
       <div class="qr-frame">
         <div id="qrcode"></div>
         <div class="pheizu-qr-logo">
-          <!-- Pheizu Custom Electric Shield SVG -->
           <svg viewBox="0 0 24 24" fill="none">
             <path d="M12 2L4 6V12C4 17.5 7.5 21.5 12 22C16.5 21.5 20 17.5 20 12V6L12 2Z" fill="#0369a1"/>
             <path d="M13 5L7 13H12L11 19L17 11H12L13 5Z" fill="#38bdf8"/>
@@ -422,7 +419,6 @@
         </div>
       </div>
 
-      <!-- Details Sheet -->
       <div class="details-sheet">
         <div class="details-row">
           <span class="details-label">Invoice</span>
@@ -459,41 +455,52 @@
     </div>
   </div>
 
-  <!-- 4. TAB: WITHDRAW (DYNAMICALLY APPLIES BTC, SATS, USDT, USDC) -->
+  <!-- 4. TAB: WITHDRAW (ADAPTS TO SATS FOR LIGHTNING, BTC FOR ON-CHAIN) -->
   <div id="panelWithdraw" class="card hidden">
     <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">Select Asset to Withdraw:</div>
     <div class="btn-grid">
       <button id="withAssetBtc" class="choice-btn selected" onclick="selectWithdrawAsset('BTC')">₿ BTC</button>
-      <button id="withAssetSats" class="choice-btn" onclick="selectWithdrawAsset('SATS')">⚡ SATS</button>
       <button id="withAssetUsdt" class="choice-btn" onclick="selectWithdrawAsset('USDT')">💵 USDT</button>
       <button id="withAssetUsdc" class="choice-btn" onclick="selectWithdrawAsset('USDC')">💲 USDC</button>
     </div>
 
     <div style="font-size:11px; color:var(--muted); margin:8px 0 2px;">Slide to select network:</div>
-    <div id="withNetworkSlider" class="sliding-pill-container">
-      <!-- Injected dynamically -->
-    </div>
+    <div id="withNetworkSlider" class="sliding-pill-container"></div>
 
     <label style="font-size:11px; color:var(--muted); margin-top:8px; display:block;">Recipient Destination Address or Invoice:</label>
     <input type="text" id="withDest" placeholder="Paste address or invoice" />
 
-    <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount to Send in BTC:</label>
-    <input type="number" id="withAmount" step="any" placeholder="Enter amount" />
+    <!-- Label adapts dynamically: SATS for Lightning, BTC for On-Chain -->
+    <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount to Send in SATS:</label>
+    <input type="number" id="withAmount" step="1" placeholder="e.g. 500" />
 
     <button id="btnSendFunds" class="btn-action" onclick="executeWithdrawal()">🚀 Send Payment</button>
     <div id="withFeedback" style="font-size:12px; margin-top:8px; text-align:center;"></div>
   </div>
 
-  <!-- 5. TAB: ACCOUNT INFO -->
-  <div id="panelWallet" class="card hidden">
-    <div style="font-size:12px; color:var(--muted); line-height:1.7;">
-      • User: <b id="displayUsername" style="color:#fff;">...</b><br/>
-      • Telegram ID: <b id="displayTgId" style="color:#fff;">...</b><br/>
-      • Settlement: <b>Pheizu High-Speed Lightning Node</b>
-    </div>
-    <div style="margin-top:10px;">
-      <span style="font-size:10px; color:var(--muted); display:block;">LIGHTNING ADDRESS:</span>
-      <span id="userLnAddress" style="color:var(--primary-light); font-family:monospace; font-size:12px;">...</span>
+  <!-- 5. TAB: ACCOUNT (DETAILS) -->
+  <div id="panelAccount" class="card hidden">
+    <div style="font-size:13px; font-weight:700; color:var(--primary-light); margin-bottom:12px;">👤 Account Details</div>
+    
+    <div class="account-badge-box">
+      <div class="account-row">
+        <span style="color:var(--muted);">Username:</span>
+        <b id="accUsername" style="color:#fff;">...</b>
+      </div>
+      <div class="account-row">
+        <span style="color:var(--muted);">Telegram User ID:</span>
+        <code id="accTgId" style="color:#fff;">...</code>
+      </div>
+      <div class="account-row">
+        <span style="color:var(--muted);">Lightning Address:</span>
+        <span onclick="copyAddress()" style="color:var(--primary-light); cursor:pointer; font-family:monospace;">
+          <span id="accLnAddress">...</span> 📋
+        </span>
+      </div>
+      <div class="account-row">
+        <span style="color:var(--muted);">Settlement Engine:</span>
+        <span style="color:#10b981; font-weight:600;">⚡ Lightning Node Active</span>
+      </div>
     </div>
   </div>
 
@@ -504,14 +511,7 @@
     </div>
   </div>
 
-  <!-- 7. TAB: ADMIN -->
-  <div id="panelAdmin" class="card hidden">
-    <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">Speed API Key:</div>
-    <input type="text" id="adminSpeedKeyInput" placeholder="sk_live_..." />
-    <button class="btn-action" onclick="showToast('✓ Key Saved')">Save Key</button>
-  </div>
-
-  <!-- 8. MODAL FOR "ADD AMOUNT" & "ADD NOTE" -->
+  <!-- 7. MODAL FOR "ADD AMOUNT" & "ADD NOTE" -->
   <div id="inputModal" class="modal-overlay hidden">
     <div class="modal-card">
       <h3 id="inputModalTitle" style="font-size:16px; margin-bottom:8px; color:#fff;">Add Amount</h3>
@@ -524,7 +524,7 @@
     </div>
   </div>
 
-  <!-- 9. PAYMENT SUCCESS MODAL -->
+  <!-- 8. PAYMENT SUCCESS CELEBRATION MODAL -->
   <div id="successModal" class="modal-overlay hidden">
     <div class="modal-card" style="text-align:center;">
       <div style="font-size:48px; margin-bottom:10px;">🎉</div>
@@ -537,7 +537,6 @@
 
 <script>
   const DOMAIN = "pheizu-wallet-bot.vercel.app";
-  const MASTER_ADMIN_ID = "8960497898";
   const SAT_TO_USD = 0.00065;
 
   const tg = window.Telegram?.WebApp;
@@ -573,33 +572,19 @@
   const currentUserId = username;
   const myLightningAddress = `${username}@${DOMAIN}`;
 
-  document.getElementById("userLnAddress").innerText = myLightningAddress;
-  document.getElementById("displayUsername").innerText = `@${username}`;
-  document.getElementById("displayTgId").innerText = tgNumericId || "N/A";
-
-  if (tgNumericId === MASTER_ADMIN_ID || username === "pheizu") {
-    document.getElementById("navTabAdmin").classList.remove("hidden");
-  }
+  // Populate Account Details
+  document.getElementById("accUsername").innerText = `@${username}`;
+  document.getElementById("accTgId").innerText = tgNumericId || "N/A";
+  document.getElementById("accLnAddress").innerText = myLightningAddress;
 
   let liveBalances = { sats: 0, usdt: 0, usdc: 0 };
-  let currentBalanceMode = 'BTC'; // 'BTC', 'SATS', 'USDT', 'USDC'
+  let currentBalanceMode = 'BTC';
   let activeCheckTimer = null;
   let currentActiveInvoice = "";
   let toastTimer = null;
 
-  // Invoice caching for BTC (so switching networks doesn't regenerate)
-  const btcInvoiceCache = {
-    lightning: null,
-    onchain: null
-  };
-
-  // Current deposit parameters
-  let currentDepositState = {
-    asset: 'BTC',
-    network: 'lightning',
-    amount: 0,
-    note: ''
-  };
+  const btcInvoiceCache = { lightning: null, onchain: null };
+  let currentDepositState = { asset: 'BTC', network: 'lightning', amount: 0, note: '' };
 
   function showToast(msg) {
     const toast = document.getElementById("toast");
@@ -612,7 +597,7 @@
   function haptic(type = "light") { try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){} }
   function hapticNotification(type = "success") { try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){} }
 
-  // Balance Switcher (BTC -> SATS -> USDT -> USDC)
+  // Balance Switcher
   function cycleBalanceMode() {
     const modes = ['BTC', 'SATS', 'USDT', 'USDC'];
     let idx = (modes.indexOf(currentBalanceMode) + 1) % modes.length;
@@ -668,7 +653,7 @@
 
   function switchNavTab(tab) {
     haptic("light");
-    ["Deposit", "Withdraw", "Wallet", "History", "Admin"].forEach(t => {
+    ["Deposit", "Withdraw", "Account", "History"].forEach(t => {
       const p = document.getElementById(`panel${t}`);
       const b = document.getElementById(`navTab${t}`);
       if (p) p.classList.add("hidden");
@@ -684,7 +669,7 @@
   }
 
   // ==========================================
-  // DEPOSIT CONTROLLER (BTC Caching, Slide Networks)
+  // DEPOSIT CONTROLLER
   // ==========================================
   function selectDepositAsset(asset) {
     currentDepositState.asset = asset;
@@ -699,8 +684,6 @@
     const title = document.getElementById("receiveTitle");
 
     title.innerText = `Receive ${asset}`;
-
-    // Reset details sheet labels
     document.getElementById("amountRowVal").innerText = "Add amount ✏️";
     document.getElementById("noteRowVal").innerText = "Add note ✏️";
     document.getElementById("feeRowVal").innerText = (asset === 'BTC' ? '₿0' : '$0');
@@ -713,7 +696,6 @@
       currentDepositState.network = 'lightning';
       loadBtcDeposit();
     } else {
-      // For USDT / USDC, hide the BTC QR code and invoice until generated
       receiveBox.classList.add("hidden");
       stableConfig.classList.remove("hidden");
     }
@@ -751,6 +733,10 @@
     currentDepositState.network = net;
     document.querySelectorAll("#depNetworkSlider .net-pill-btn").forEach(b => b.classList.remove("active"));
     el.classList.add("active");
+    
+    // Reset amount label when switching between Lightning and On-Chain
+    currentDepositState.amount = 0;
+    document.getElementById("amountRowVal").innerText = "Add amount ✏️";
     loadBtcDeposit();
   }
 
@@ -760,17 +746,13 @@
     el.classList.add("active");
   }
 
-  // Load BTC Deposit with Caching: Don't regenerate if already cached!
   function loadBtcDeposit() {
     const net = currentDepositState.network;
-    
-    // Check if cached invoice exists for this network with 0 amount & no note
     if (currentDepositState.amount === 0 && !currentDepositState.note && btcInvoiceCache[net]) {
       displayInvoiceOnScreen(btcInvoiceCache[net]);
       return;
     }
 
-    // Else generate and cache
     generateDepositRequest(currentDepositState.amount, (invoiceData) => {
       if (currentDepositState.amount === 0 && !currentDepositState.note) {
         btcInvoiceCache[net] = invoiceData;
@@ -848,9 +830,9 @@
   }
 
   // ==========================================
-  // "ADD AMOUNT" & "ADD NOTE" MODALS (WORKING)
+  // "ADD AMOUNT" & "ADD NOTE" MODALS
   // ==========================================
-  let activeModalType = 'amount'; // 'amount' or 'note'
+  let activeModalType = 'amount';
 
   function openInputModal(type) {
     activeModalType = type;
@@ -861,16 +843,32 @@
     const field = document.getElementById("inputModalField");
 
     if (type === 'amount') {
-      title.innerText = `Set Deposit Amount (${currentDepositState.asset})`;
-      desc.innerText = currentDepositState.asset === 'BTC' ? "Enter amount in BTC (e.g. 0.0005)" : "Enter amount in USD (min 0.5)";
-      field.type = "number";
-      field.placeholder = currentDepositState.asset === 'BTC' ? "e.g. 0.0005" : "e.g. 10";
-      field.value = currentDepositState.amount > 0 ? currentDepositState.amount : "";
+      if (currentDepositState.asset === 'BTC') {
+        if (currentDepositState.network === 'lightning') {
+          title.innerText = "Set Amount in SATS";
+          desc.innerText = "Enter the exact amount of Satoshis to receive.";
+          field.type = "number";
+          field.placeholder = "e.g. 1000";
+          field.value = currentDepositState.amount > 0 ? currentDepositState.amount : "";
+        } else {
+          title.innerText = "Set Amount in BTC";
+          desc.innerText = "Enter the exact amount of BTC to receive.";
+          field.type = "number";
+          field.placeholder = "e.g. 0.0005";
+          field.value = currentDepositState.amount > 0 ? (currentDepositState.amount / 100000000).toFixed(8) : "";
+        }
+      } else {
+        title.innerText = `Set Deposit Amount (${currentDepositState.asset})`;
+        desc.innerText = "Enter amount in USD (minimum 0.50).";
+        field.type = "number";
+        field.placeholder = "e.g. 10";
+        field.value = currentDepositState.amount > 0 ? currentDepositState.amount : "";
+      }
     } else {
       title.innerText = "Add Payment Note";
       desc.innerText = "Attach an optional note/memo for this deposit.";
       field.type = "text";
-      field.placeholder = "e.g. For dinner or Pheizu credit";
+      field.placeholder = "e.g. Pheizu deposit";
       field.value = currentDepositState.note || "";
     }
 
@@ -891,20 +889,30 @@
         showToast("⚠️ Enter a valid amount");
         return;
       }
-      if (currentDepositState.asset !== 'BTC' && num < 0.5) {
-        showToast("⚠️ Minimum amount is $0.50");
-        return;
-      }
 
-      currentDepositState.amount = num;
-      document.getElementById("amountRowVal").innerText = currentDepositState.asset === 'BTC' ? `${num} BTC ✏️` : `$${num.toFixed(2)} ✏️`;
+      if (currentDepositState.asset === 'BTC') {
+        if (currentDepositState.network === 'lightning') {
+          currentDepositState.amount = Math.round(num); // in SATS
+          document.getElementById("amountRowVal").innerText = `${currentDepositState.amount.toLocaleString()} SATS ✏️`;
+        } else {
+          // On-Chain input in BTC, converted to SATS for backend
+          currentDepositState.amount = Math.round(num * 100000000);
+          document.getElementById("amountRowVal").innerText = `${num} BTC ✏️`;
+        }
+      } else {
+        if (num < 0.5) {
+          showToast("⚠️ Minimum amount is $0.50");
+          return;
+        }
+        currentDepositState.amount = num;
+        document.getElementById("amountRowVal").innerText = `$${num.toFixed(2)} ✏️`;
+      }
     } else {
       currentDepositState.note = val;
       document.getElementById("noteRowVal").innerText = val ? `${val.substring(0, 15)}... ✏️` : "Add note ✏️";
     }
 
     closeInputModal();
-    // Regenerate invoice with updated amount / note
     generateDepositRequest(currentDepositState.amount);
   }
 
@@ -938,7 +946,9 @@
           activeCheckTimer = null;
 
           const credited = currentDepositState.asset === "BTC" 
-            ? `${(Number(data.amount || amount || 0) / 100000000).toFixed(8)} BTC`
+            ? (currentDepositState.network === 'lightning' 
+                ? `${Number(data.amount || amount || 0).toLocaleString()} SATS` 
+                : `${(Number(data.amount || amount || 0) / 100000000).toFixed(8)} BTC`)
             : `${data.amount || amount} ${currentDepositState.asset}`;
 
           triggerSuccessPopup(credited);
@@ -985,18 +995,15 @@
   }
 
   // ==========================================
-  // WITHDRAWAL CONTROLLER (BTC, SATS, USDT, USDC)
+  // WITHDRAWAL CONTROLLER (BTC [Lightning/OnChain], USDT, USDC)
   // ==========================================
   let selectedWithAsset = "BTC";
   let selectedWithNetwork = "lightning";
 
   function selectWithdrawAsset(asset) {
     selectedWithAsset = asset;
-    ["Btc", "Sats", "Usdt", "Usdc"].forEach(a => document.getElementById(`withAsset${a}`).classList.remove("selected"));
+    ["Btc", "Usdt", "Usdc"].forEach(a => document.getElementById(`withAsset${a}`).classList.remove("selected"));
     document.getElementById(`withAsset${asset.charAt(0) + asset.slice(1).toLowerCase()}`).classList.add("selected");
-
-    const label = document.getElementById("withAmountLabel");
-    label.innerText = `Amount to Send in ${asset}:`;
 
     renderWithdrawSlider();
   }
@@ -1005,12 +1012,13 @@
     const slider = document.getElementById("withNetworkSlider");
     slider.innerHTML = "";
 
-    if (selectedWithAsset === "BTC" || selectedWithAsset === "SATS") {
+    if (selectedWithAsset === "BTC") {
       selectedWithNetwork = "lightning";
       slider.innerHTML = `
-        <button class="net-pill-btn active" onclick="setWithNet('lightning', this)">⚡ Lightning</button>
-        <button class="net-pill-btn" onclick="setWithNet('onchain', this)">₿ On-Chain</button>
+        <button class="net-pill-btn active" onclick="setWithNet('lightning', this)">⚡ Lightning (SATS)</button>
+        <button class="net-pill-btn" onclick="setWithNet('onchain', this)">₿ On-Chain (BTC)</button>
       `;
+      updateWithdrawLabels();
     } else if (selectedWithAsset === "USDT") {
       selectedWithNetwork = "ton";
       slider.innerHTML = `
@@ -1020,6 +1028,7 @@
         <button class="net-pill-btn" onclick="setWithNet('solana', this)">🟣 Solana</button>
         <button class="net-pill-btn" onclick="setWithNet('ethereum', this)">⛓️ Ethereum</button>
       `;
+      updateWithdrawLabels();
     } else {
       selectedWithNetwork = "solana";
       slider.innerHTML = `
@@ -1027,6 +1036,7 @@
         <button class="net-pill-btn" onclick="setWithNet('lightning', this)">⚡ Lightning</button>
         <button class="net-pill-btn" onclick="setWithNet('ethereum', this)">⛓️ Ethereum</button>
       `;
+      updateWithdrawLabels();
     }
   }
 
@@ -1034,6 +1044,28 @@
     selectedWithNetwork = net;
     document.querySelectorAll("#withNetworkSlider .net-pill-btn").forEach(b => b.classList.remove("active"));
     el.classList.add("active");
+    updateWithdrawLabels();
+  }
+
+  function updateWithdrawLabels() {
+    const label = document.getElementById("withAmountLabel");
+    const input = document.getElementById("withAmount");
+
+    if (selectedWithAsset === "BTC") {
+      if (selectedWithNetwork === "lightning") {
+        label.innerText = "Amount to Send in SATS:";
+        input.step = "1";
+        input.placeholder = "e.g. 500";
+      } else {
+        label.innerText = "Amount to Send in BTC:";
+        input.step = "any";
+        input.placeholder = "e.g. 0.0005";
+      }
+    } else {
+      label.innerText = `Amount to Send in ${selectedWithAsset}:`;
+      input.step = "any";
+      input.placeholder = "e.g. 10";
+    }
   }
 
   async function executeWithdrawal() {
@@ -1045,9 +1077,20 @@
 
     if (!dest || !rawAmt || rawAmt <= 0) return showToast("⚠️ Enter valid destination & amount");
 
-    // Convert units: BTC converts to satoshis; SATS passes directly
-    const sendAmt = selectedWithAsset === "BTC" ? Math.round(rawAmt * 100000000) : rawAmt;
-    const targetCurr = (selectedWithAsset === "BTC" || selectedWithAsset === "SATS") ? "SATS" : selectedWithAsset;
+    // Unit conversion:
+    // BTC + onchain -> rawAmt is in BTC, converted to SATS for backend
+    // BTC + lightning -> rawAmt is already in SATS
+    let sendAmt = rawAmt;
+    let targetCurr = selectedWithAsset;
+
+    if (selectedWithAsset === "BTC") {
+      targetCurr = "SATS";
+      if (selectedWithNetwork === "onchain") {
+        sendAmt = Math.round(rawAmt * 100000000);
+      } else {
+        sendAmt = Math.round(rawAmt);
+      }
+    }
 
     btn.disabled = true;
     btn.innerText = "Broadcasting...";
@@ -1071,8 +1114,9 @@
       if (!data.success) throw new Error(data.error);
 
       hapticNotification("success");
-      feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${rawAmt} ${selectedWithAsset}!</span>`;
-      showToast(`✓ Sent ${rawAmt} ${selectedWithAsset}!`);
+      const displayConfirmed = selectedWithAsset === "BTC" && selectedWithNetwork === "lightning" ? `${sendAmt} SATS` : `${rawAmt} ${selectedWithAsset}`;
+      feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${displayConfirmed} successfully!</span>`;
+      showToast(`✓ Sent ${displayConfirmed}!`);
 
       document.getElementById("withDest").value = "";
       document.getElementById("withAmount").value = "";
@@ -1131,6 +1175,11 @@
     navigator.clipboard.writeText(currentActiveInvoice);
     haptic("light");
     showToast("✓ Copied to clipboard!");
+  }
+  function copyAddress() {
+    navigator.clipboard.writeText(myLightningAddress);
+    haptic("light");
+    showToast("✓ Lightning Address copied!");
   }
 
   // Initial Load
