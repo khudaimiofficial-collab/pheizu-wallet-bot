@@ -18,6 +18,14 @@ if (!admin.apps.length) {
       admin.initializeApp({
         credential: admin.credential.cert(parsed)
       });
+    } else if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+        })
+      });
     } else {
       admin.initializeApp();
     }
@@ -33,7 +41,11 @@ const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const APP_URL = process.env.WEBAPP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `https://${DOMAIN}`);
 const MASTER_ADMIN_ID = "8960497898";
 
-// Configure native Telegram Menu Button (bottom-left) to open the Mini App
+// ----------------------------------------------------
+// NATIVE TELEGRAM MENU & COMMAND CONFIGURATION
+// ----------------------------------------------------
+
+// Set Telegram WebApp Menu Button (bottom-left next to text input)
 bot.telegram.setChatMenuButton({
   menuButton: {
     type: "web_app",
@@ -42,7 +54,7 @@ bot.telegram.setChatMenuButton({
   }
 }).catch(() => {});
 
-// Clear all slash commands from the "/" autocomplete menu
+// Clear all slash commands from the "/" autocomplete menu to keep chat 100% clean
 bot.telegram.deleteMyCommands().catch(() => {});
 
 // ----------------------------------------------------
@@ -81,7 +93,7 @@ async function isAuthorizedAdmin(ctx) {
   return false;
 }
 
-// Fetch configured logs/required channel
+// Fetch configured logs/required channel from Firestore or Environment
 async function getRequiredChannelId() {
   if (db) {
     try {
@@ -113,7 +125,7 @@ async function getChannelInviteLink(channelId) {
 
 // Check if user is a member of the required channel
 async function checkUserMembership(userId, channelId) {
-  if (!channelId) return true; // If no channel configured, allow through
+  if (!channelId) return true;
   try {
     const member = await bot.telegram.getChatMember(channelId, userId);
     return ["creator", "administrator", "member", "restricted"].includes(member.status);
@@ -122,7 +134,6 @@ async function checkUserMembership(userId, channelId) {
     if (e.message.includes("user not found") || e.message.includes("PARTICIPANT_ID_INVALID")) {
       return false;
     }
-    // If bot isn't admin in channel yet, don't lock users out
     return true;
   }
 }
@@ -151,7 +162,7 @@ async function saveUserRecord(ctx) {
 async function sendJoinPrompt(ctx, channelLink) {
   const text = [
     `🔒 <b>Channel Verification Required</b>\n`,
-    `To access <b>Pheizu Lightning Wallet</b>, you must first join our official channel for transaction receipts and updates.\n`,
+    `To access <b>Pheizu Lightning Wallet</b>, you must first join our official updates and transaction receipt channel.\n`,
     `1️⃣ Click <b>📢 Join Channel</b> below.`,
     `2️⃣ Return here and click <b>✅ Verify & Start</b>.`
   ].join("\n");
@@ -164,7 +175,7 @@ async function sendJoinPrompt(ctx, channelLink) {
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, { parse_mode: "HTML", ...kb }).catch(() => {});
   } else {
-    // Also remove any old bottom reply keyboard from user screen
+    // Remove any leftover reply keyboard from user's screen
     await ctx.replyWithHTML(text, { ...kb, ...Markup.removeKeyboard() });
   }
 }
@@ -195,7 +206,7 @@ async function sendWelcomeScreen(ctx) {
     `Your fast, non-custodial crypto wallet directly inside Telegram.\n`,
     `• <b>Assets:</b> Bitcoin (Lightning & On-Chain), USDT (TON, TRC-20, Solana, ERC-20), USDC`,
     `• <b>Lightning Address:</b> <code>${username}@${DOMAIN}</code>\n`,
-    `Tap below to open your wallet:`
+    `Tap the button below to open your wallet:`
   ].join("\n");
 
   const kb = Markup.inlineKeyboard(buttons);
@@ -251,7 +262,7 @@ bot.action("verify_membership", async (ctx) => {
   return sendWelcomeScreen(ctx);
 });
 
-// Any other message: Guide the user to open their wallet or verify
+// Any other text message or command: Guide user to verify or open wallet
 bot.on("message", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
