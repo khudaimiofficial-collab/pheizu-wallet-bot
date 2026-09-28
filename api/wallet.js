@@ -337,7 +337,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, history: list.slice(0, 10) });
     }
 
-    // 3. CREATE DEPOSIT INVOICE (OPEN AMOUNT 0 SUPPORTED)
+    // 3. CREATE DEPOSIT INVOICE
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
@@ -349,8 +349,6 @@ module.exports = async function handler(req, res) {
 
       const targetCurr = (target_currency || "SATS").toUpperCase();
       let payMethod = (payment_method || network || "lightning").toLowerCase();
-      
-      // Speed requires 'onchain' without hyphen for payments/payment_addresses
       if (payMethod === "on-chain" || payMethod === "bitcoin" || payMethod === "onchain") {
         payMethod = "onchain";
       }
@@ -363,7 +361,7 @@ module.exports = async function handler(req, res) {
       let status = 400;
       let sourceEndpoint = "payments";
 
-      // A. Open Amount Lightning -> Create Payrequest (Amount 0)
+      // A. Open Amount Lightning -> Create Payrequest
       if (isOpenAmount && payMethod === "lightning") {
         const prRes = await speedRequest("payrequests", "POST", {
           currency: baseCurr,
@@ -397,23 +395,18 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // C. Fallback to /payments (Specific Amount or Open)
+      // C. Specific Amount -> Create Payment
       if (!ok) {
         const speedBody = {
           currency: baseCurr,
           target_currency: targetCurr,
           payment_methods: [payMethod],
+          amount: Number(amount) || 100,
           metadata: {
             user_id: uid,
             telegram_id: telegram_id ? String(telegram_id) : ""
           }
         };
-
-        if (isOpenAmount) {
-          speedBody.amount = 0;
-        } else {
-          speedBody.amount = Number(amount);
-        }
 
         const res1 = await speedRequest("payments", "POST", speedBody, apiKey);
         ok = res1.ok;
@@ -443,6 +436,7 @@ module.exports = async function handler(req, res) {
       await db.collection("invoices").doc(txId).set({
         id: txId,
         speed_payment_id: paymentData?.id || null,
+        speed_payrequest_id: paymentData?.payrequest_id || null,
         speed_source: sourceEndpoint,
         invoice: invoiceString,
         payment_type: target.type,
@@ -469,7 +463,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 4. CHECK DEPOSIT STATUS
+    // 4. CHECK DEPOSIT STATUS — INSPECTS BOTH PAYMENTS & PAYREQUESTS
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
       if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
@@ -519,27 +513,55 @@ module.exports = async function handler(req, res) {
       }
 
       const apiKey = await getSpeedApiKey();
-      const speedId = invData?.speed_payment_id || invData?.id || payment_id;
+      const speedId = invData?.speed_payment_id || invData?.speed_payrequest_id || invData?.id || payment_id;
 
       let payment = null;
-      const endpointsToTry = [
-        `payments/${speedId}`,
-        `checkout/sessions/${speedId}`,
-        `invoices/${speedId}`,
-        `payrequests/${speedId}`,
-        `payment-addresses/${speedId}`
-      ];
 
-      for (const ep of endpointsToTry) {
+      // 🔥 STEP 1: If it's a PayRequest, fetch from /payrequests/:id/payments
+      if (speedId.startsWith("pr_") || invData?.speed_source === "payrequests" || invData?.speed_payrequest_id) {
+        const prId = invData?.speed_payrequest_id || speedId;
         try {
-          const r = await speedRequest(ep, "GET", null, apiKey);
-          if (r.ok && r.data && (r.data.id || r.data.status || r.data.state || r.data.paid_at)) {
-            payment = r.data;
-            break;
+          const prPayRes = await speedRequest(`payrequests/${prId}/payments`, "GET", null, apiKey);
+          if (prPayRes.ok && prPayRes.data) {
+            const list = prPayRes.data.data || prPayRes.data.items || (Array.isArray(prPayRes.data) ? prPayRes.data : []);
+            if (list.length > 0) {
+              payment = list[0]; // Active/latest payment for this PayRequest
+            }
           }
         } catch (e) {}
       }
 
+      // 🔥 STEP 2: If it's a Payment Address, check /payment-addresses/:id/payments
+      if (!payment && (speedId.startsWith("pa_") || invData?.speed_source === "payment-addresses")) {
+        try {
+          const paRes = await speedRequest(`payment-addresses/${speedId}/payments`, "GET", null, apiKey);
+          if (paRes.ok && paRes.data) {
+            const list = paRes.data.data || paRes.data.items || (Array.isArray(paRes.data) ? paRes.data : []);
+            if (list.length > 0) payment = list[0];
+          }
+        } catch (e) {}
+      }
+
+      // 🔥 STEP 3: Fallback check standard payments endpoint
+      if (!payment) {
+        const endpointsToTry = [
+          `payments/${speedId}`,
+          `checkout/sessions/${speedId}`,
+          `invoices/${speedId}`
+        ];
+
+        for (const ep of endpointsToTry) {
+          try {
+            const r = await speedRequest(ep, "GET", null, apiKey);
+            if (r.ok && r.data && (r.data.id || r.data.status || r.data.state || r.data.paid_at)) {
+              payment = r.data;
+              break;
+            }
+          } catch (e) {}
+        }
+      }
+
+      // 🔥 STEP 4: Fallback search by invoice string
       if (!payment && storedInvoice) {
         try {
           const search = await speedRequest(`payments?search=${encodeURIComponent(storedInvoice.substring(0, 60))}`, "GET", null, apiKey);
@@ -562,19 +584,12 @@ module.exports = async function handler(req, res) {
       const alreadyLandedStatuses = ["confirming", "processing", "detected", "unconfirmed", "in_progress", "in-progress"];
       const isLightningPayment = payMethod === "lightning";
 
-      const hasPayrequestFunds = (
-        Number(payment?.total_amount_received || 0) > 0 ||
-        Number(payment?.payment_count || 0) > 0 ||
-        (Array.isArray(payment?.payments) && payment.payments.length > 0)
-      );
-
       const hasPaidFlag =
         payment?.paid === true ||
         payment?.is_paid === true ||
         !!payment?.paid_at ||
         !!payment?.completed_at ||
-        !!payment?.settled_at ||
-        hasPayrequestFunds;
+        !!payment?.settled_at;
 
       const isPaid =
         paidStatuses.includes(rawStatus) ||
@@ -585,7 +600,6 @@ module.exports = async function handler(req, res) {
         payment?.amount_paid ||
         payment?.amount_received ||
         payment?.paid_amount ||
-        payment?.total_amount_received ||
         payment?.amount ||
         sats ||
         0
@@ -641,6 +655,7 @@ module.exports = async function handler(req, res) {
           updatedBal = wallet.balance + (finalCurr === "SATS" ? finalSats : 0);
         }
 
+        // 🔥 Dispatches message directly to Telegram Bot Chat
         if (targetNumericChatId) {
           await notifyTelegramUser(
             targetNumericChatId,
