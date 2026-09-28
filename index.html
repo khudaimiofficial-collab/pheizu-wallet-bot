@@ -10,59 +10,69 @@
 
   <style>
     :root {
-      --bg: var(--tg-theme-bg-color, #090d16);
-      --card: var(--tg-theme-secondary-bg-color, #111827);
-      --text: var(--tg-theme-text-color, #f3f4f6);
-      --muted: var(--tg-theme-hint-color, #9ca3af);
-      --button: var(--tg-theme-button-color, #00d084);
-      --button-text: var(--tg-theme-button-text-color, #000000);
-      --border: #1f2937;
+      --bg: #050811;
+      --card: #0b1120;
+      --card-inner: #070c18;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --button: #00e676;
+      --button-text: #000000;
+      --border: #1e293b;
       --accent-blue: #38bdf8;
-      --accent-gold: #fbbf24;
       --danger: #ef4444;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent !important;
+      -webkit-touch-callout: none;
+      outline: none !important;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
       padding: 14px;
       user-select: none;
-      padding-bottom: 40px;
+      padding-bottom: 50px;
     }
+
     .card {
       background: var(--card);
       border-radius: 14px;
       padding: 16px;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
       border: 1px solid var(--border);
     }
+
     .balance-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-    .balance-amount { font-size: 30px; font-weight: bold; color: var(--button); margin: 4px 0; }
-    .balance-sub { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+    .balance-amount { font-size: 26px; font-weight: 800; color: var(--button); margin: 4px 0; font-family: monospace; }
+    .balance-sub { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
     
     .asset-grid {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
-      gap: 8px;
+      gap: 6px;
       margin: 10px 0;
     }
     .asset-pill {
-      background: rgba(255,255,255,0.03);
+      background: var(--card-inner);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 8px;
+      padding: 8px 4px;
       text-align: center;
     }
     .asset-pill-name { font-size: 10px; color: var(--muted); text-transform: uppercase; }
-    .asset-pill-val { font-size: 13px; font-weight: bold; margin-top: 3px; }
+    .asset-pill-val { font-size: 12px; font-weight: 700; margin-top: 2px; font-family: monospace; }
 
     .address-badge {
-      background: #090d16;
+      background: var(--card-inner);
       border: 1px solid var(--border);
       padding: 9px 12px;
       border-radius: 8px;
-      font-size: 12px;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -82,7 +92,7 @@
       background: var(--card);
       border-radius: 10px;
       padding: 3px;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
       border: 1px solid var(--border);
       overflow-x: auto;
       gap: 2px;
@@ -99,12 +109,15 @@
       cursor: pointer;
       white-space: nowrap;
       text-align: center;
+      transition: transform 0.1s ease;
     }
+    .tab-btn:active { transform: scale(0.96); }
     .tab-btn.active {
       background: var(--border);
       color: var(--text);
     }
 
+    /* Button Grids */
     .button-group-label {
       font-size: 11px;
       color: var(--muted);
@@ -114,12 +127,12 @@
     }
     .btn-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
       gap: 6px;
       margin-bottom: 10px;
     }
     .choice-btn {
-      background: var(--bg);
+      background: var(--card-inner);
       border: 1px solid var(--border);
       color: var(--text);
       padding: 10px 6px;
@@ -128,24 +141,28 @@
       cursor: pointer;
       text-align: center;
       font-weight: 600;
+      transition: transform 0.1s ease, border-color 0.2s ease;
     }
+    .choice-btn:active { transform: scale(0.96); }
     .choice-btn.selected {
       border-color: var(--button);
-      background: rgba(0, 208, 132, 0.1);
+      background: rgba(0, 230, 118, 0.08);
       color: var(--button);
     }
 
     input {
       width: 100%;
       padding: 11px;
-      background: var(--bg);
+      background: var(--card-inner);
       border: 1px solid var(--border);
       color: var(--text);
       border-radius: 8px;
       margin: 6px 0 12px;
-      font-size: 14px;
+      font-size: 13px;
       font-family: monospace;
     }
+    input:focus { border-color: var(--accent-blue); }
+
     .btn-action {
       width: 100%;
       padding: 12px;
@@ -153,29 +170,35 @@
       color: var(--button-text);
       border: none;
       border-radius: 8px;
-      font-weight: bold;
+      font-weight: 700;
       font-size: 14px;
       cursor: pointer;
       margin-top: 4px;
+      transition: transform 0.1s ease, opacity 0.2s ease;
     }
+    .btn-action:active { transform: scale(0.98); }
     .btn-action:disabled {
       opacity: 0.4 !important;
       cursor: not-allowed !important;
+      transform: none !important;
     }
 
+    /* Cool QR Container */
     .qr-box {
       text-align: center;
-      background: var(--bg);
-      padding: 14px;
-      border-radius: 10px;
+      background: var(--card-inner);
+      padding: 16px;
+      border-radius: 12px;
       margin-top: 12px;
       border: 1px solid var(--border);
+      box-shadow: 0 0 25px rgba(0, 230, 118, 0.08);
     }
     #qrcode {
-      background: white;
+      background: #ffffff;
       padding: 8px;
-      border-radius: 8px;
+      border-radius: 10px;
       display: inline-block;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.4);
     }
     .invoice-text {
       font-family: monospace;
@@ -186,15 +209,17 @@
       border-radius: 6px;
       margin-top: 8px;
       color: var(--accent-blue);
-      max-height: 90px;
+      max-height: 80px;
       overflow-y: auto;
+      border: 1px solid var(--border);
     }
 
+    /* History & Log Items */
     .tx-item {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 10px;
+      padding: 9px 0;
       border-bottom: 1px solid var(--border);
       font-size: 12px;
     }
@@ -203,29 +228,51 @@
     .tx-out { color: var(--danger); font-weight: bold; }
 
     .log-box {
-      background: #090d16;
+      background: var(--card-inner);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 10px;
-      max-height: 110px;
+      max-height: 100px;
       overflow-y: auto;
       font-family: monospace;
       font-size: 10px;
       color: var(--muted);
-      margin-top: 10px;
+      margin-top: 8px;
     }
-    .log-entry { margin-bottom: 4px; line-height: 1.3; }
+    .log-entry { margin-bottom: 3px; line-height: 1.3; }
     .log-success { color: var(--button); }
     .log-error { color: var(--danger); }
     .log-info { color: var(--accent-blue); }
 
     .hidden { display: none !important; }
 
-    /* Guaranteed visible modal */
+    /* Floating Toast Notification (Replaces Browser Alerts) */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1e293b;
+      border: 1px solid var(--button);
+      color: #fff;
+      padding: 9px 18px;
+      border-radius: 30px;
+      font-size: 12px;
+      font-weight: 600;
+      z-index: 10000;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.7);
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translate(-50%, 10px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
+
+    /* Success Modal */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.85);
+      background: rgba(0, 0, 0, 0.88);
       display: flex;
       justify-content: center;
       align-items: center;
@@ -240,11 +287,14 @@
       text-align: center;
       max-width: 320px;
       width: 100%;
-      box-shadow: 0 10px 30px rgba(0, 208, 132, 0.2);
+      box-shadow: 0 10px 40px rgba(0, 230, 118, 0.25);
     }
   </style>
 </head>
 <body>
+
+  <!-- Floating Toast Notification -->
+  <div id="toast" class="toast hidden"></div>
 
   <!-- 1. MULTI-ASSET OVERVIEW CARD -->
   <div class="card">
@@ -255,13 +305,13 @@
       </button>
     </div>
 
-    <div id="balanceDisplay" class="balance-amount">... sats</div>
+    <div id="balanceDisplay" class="balance-amount">0.00000000 BTC</div>
     <div id="totalUsdDisplay" class="balance-sub">≈ $0.00 USD</div>
 
     <div class="asset-grid">
       <div class="asset-pill">
-        <div class="asset-pill-name">⚡ Bitcoin</div>
-        <div id="pillSats" class="asset-pill-val">0 sats</div>
+        <div class="asset-pill-name">₿ Bitcoin</div>
+        <div id="pillBtc" class="asset-pill-val">0.00000000</div>
       </div>
       <div class="asset-pill">
         <div class="asset-pill-name">💵 USDT</div>
@@ -305,7 +355,7 @@
     <div style="font-size:12px; color:var(--muted); line-height:1.6;">
       • User: <b id="displayUsername" style="color:var(--text);">...</b><br/>
       • Telegram ID: <b id="displayTgId" style="color:var(--text);">...</b><br/>
-      • Network: <b>Bitcoin Lightning Network</b>
+      • Settlement: <b>Bitcoin Lightning & Multi-Chain</b>
     </div>
   </div>
 
@@ -313,29 +363,35 @@
   <div id="panelDeposit" class="card hidden">
     <div class="button-group-label">1. Select Asset:</div>
     <div class="btn-grid">
-      <button id="depAssetSats" class="choice-btn selected" onclick="selectDepositAsset('SATS')">⚡ SATS</button>
+      <button id="depAssetBtc" class="choice-btn selected" onclick="selectDepositAsset('BTC')">₿ BTC</button>
       <button id="depAssetUsdt" class="choice-btn" onclick="selectDepositAsset('USDT')">💵 USDT</button>
       <button id="depAssetUsdc" class="choice-btn" onclick="selectDepositAsset('USDC')">💲 USDC</button>
     </div>
 
     <div class="button-group-label">2. Select Network:</div>
-    <div id="depNetworkGrid" class="btn-grid">
-      <!-- Injected with TON, Lightning, Tron, Ethereum, Solana -->
+    <div id="depNetworkGrid" class="btn-grid"></div>
+
+    <!-- Amount Section (Hidden for BTC which instantly generates amount 0) -->
+    <div id="stablecoinDepositSection" class="hidden">
+      <div class="button-group-label">3. Select Amount (Min 0.5):</div>
+      <div class="btn-grid">
+        <button class="choice-btn" onclick="setDepPreset(5)">$5</button>
+        <button class="choice-btn" onclick="setDepPreset(10)">$10</button>
+        <button class="choice-btn" onclick="setDepPreset(25)">$25</button>
+        <button class="choice-btn" onclick="setDepPreset(50)">$50</button>
+      </div>
+
+      <label style="font-size:11px; color:var(--muted);">Amount in USD (Min 0.5):</label>
+      <input type="number" id="depCustomAmount" step="0.1" min="0.5" placeholder="e.g. 5" value="5" />
+      <button id="btnGenerateStableInvoice" class="btn-action" onclick="createDepositInvoice()">⚡ Generate Deposit QR</button>
     </div>
 
-    <div class="button-group-label">3. Select Amount:</div>
-    <div id="depPresetsGrid" class="btn-grid"></div>
-
-    <label style="font-size:11px; color:var(--muted);">Amount to deposit:</label>
-    <input type="number" id="depCustomAmount" placeholder="e.g. 100" value="100" />
-
-    <button id="btnGenerateInvoice" class="btn-action" onclick="createDepositInvoice()">⚡ Generate Deposit QR</button>
-
+    <!-- Cool QR Display Area -->
     <div id="qrResult" class="qr-box hidden">
       <div id="qrcode"></div>
       <p id="listenNotice" style="font-size:12px; color:#f59e0b; margin-top:8px;">⏳ Waiting for payment from any wallet...</p>
       <div id="invoiceString" class="invoice-text"></div>
-      <button class="btn-action" style="margin-top:8px; font-size:12px; padding:7px;" onclick="copyInvoice()">Copy Invoice / Address</button>
+      <button class="btn-action" style="margin-top:8px; font-size:12px; padding:7px;" onclick="copyInvoice()">Copy Address / Invoice</button>
     </div>
   </div>
 
@@ -343,7 +399,7 @@
   <div id="panelWithdraw" class="card hidden">
     <div class="button-group-label">1. Select Asset:</div>
     <div class="btn-grid">
-      <button id="withAssetSats" class="choice-btn selected" onclick="selectWithdrawAsset('SATS')">⚡ SATS</button>
+      <button id="withAssetBtc" class="choice-btn selected" onclick="selectWithdrawAsset('BTC')">₿ BTC</button>
       <button id="withAssetUsdt" class="choice-btn" onclick="selectWithdrawAsset('USDT')">💵 USDT</button>
       <button id="withAssetUsdc" class="choice-btn" onclick="selectWithdrawAsset('USDC')">💲 USDC</button>
     </div>
@@ -352,10 +408,10 @@
     <div id="withNetworkGrid" class="btn-grid"></div>
 
     <label style="font-size:11px; color:var(--muted);">Recipient Destination (Lightning Address, BOLT11, or Crypto Address):</label>
-    <input type="text" id="withDest" placeholder="e.g. name@speed.app or lnbc..." />
+    <input type="text" id="withDest" placeholder="e.g. name@speed.app, lnbc, or address" />
 
-    <label style="font-size:11px; color:var(--muted);">Amount to Send:</label>
-    <input type="number" id="withAmount" placeholder="e.g. 100" />
+    <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount to Send in BTC:</label>
+    <input type="number" id="withAmount" step="any" placeholder="e.g. 0.0001" />
 
     <button id="btnSendFunds" class="btn-action" onclick="executeWithdrawal()">🚀 Send Payment</button>
     <div id="withFeedback" style="font-size:12px; margin-top:8px; text-align:center;"></div>
@@ -383,7 +439,7 @@
 
     <div class="button-group-label" style="margin-top:14px;">Credit Balance</div>
     <input type="text" id="adminTargetUser" placeholder="Target Username (e.g. pheizu)" />
-    <input type="number" id="adminCreditAmt" placeholder="Amount of SATS" />
+    <input type="number" id="adminCreditAmt" placeholder="Amount in SATS" />
     <button class="btn-action" style="background:var(--accent-blue);" onclick="adminAddBalance()">➕ Add Balance</button>
   </div>
 
@@ -458,6 +514,16 @@
   let liveBalances = { sats: 0, usdt: 0, usdc: 0 };
   let activeCheckTimer = null;
   let currentActiveInvoice = "";
+  let toastTimer = null;
+
+  // Discreet Toast Notification (Replaces intrusive alerts)
+  function showToast(msg) {
+    const toast = document.getElementById("toast");
+    toast.innerText = msg;
+    toast.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.add("hidden"), 2400);
+  }
 
   function addLog(msg, type = "info") {
     const box = document.getElementById("activityLogs");
@@ -472,6 +538,7 @@
   function haptic(type = "light") { try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){} }
   function hapticNotification(type = "success") { try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){} }
 
+  // Load Balance & Convert SATS to BTC format
   async function loadBalance() {
     haptic("light");
     try {
@@ -482,8 +549,9 @@
         liveBalances.usdt = Number(data.usdt_balance || 0);
         liveBalances.usdc = Number(data.usdc_balance || 0);
 
-        document.getElementById("balanceDisplay").innerText = `${liveBalances.sats.toLocaleString()} sats`;
-        document.getElementById("pillSats").innerText = `${liveBalances.sats.toLocaleString()} sats`;
+        const btcValue = (liveBalances.sats / 100000000).toFixed(8);
+        document.getElementById("balanceDisplay").innerText = `${btcValue} BTC`;
+        document.getElementById("pillBtc").innerText = btcValue;
         document.getElementById("pillUsdt").innerText = `$${liveBalances.usdt.toFixed(2)}`;
         document.getElementById("pillUsdc").innerText = `$${liveBalances.usdc.toFixed(2)}`;
 
@@ -511,14 +579,14 @@
   }
 
   // ==========================================
-  // DEPOSIT CONTROLLER (With 💎 TON)
+  // DEPOSIT CONTROLLER
   // ==========================================
-  let selectedDepAsset = "SATS";
+  let selectedDepAsset = "BTC";
   let selectedDepNetwork = "lightning";
 
   function selectDepositAsset(asset) {
     selectedDepAsset = asset;
-    ["Sats", "Usdt", "Usdc"].forEach(a => {
+    ["Btc", "Usdt", "Usdc"].forEach(a => {
       document.getElementById(`depAsset${a}`).classList.remove("selected");
     });
     document.getElementById(`depAsset${asset.charAt(0) + asset.slice(1).toLowerCase()}`).classList.add("selected");
@@ -527,24 +595,21 @@
 
   function renderDepositNetworks() {
     const netGrid = document.getElementById("depNetworkGrid");
-    const preGrid = document.getElementById("depPresetsGrid");
+    const stableSection = document.getElementById("stablecoinDepositSection");
     netGrid.innerHTML = "";
-    preGrid.innerHTML = "";
 
-    if (selectedDepAsset === "SATS") {
-      selectedDepNetwork = "lightning";
+    if (selectedDepAsset === "BTC") {
+      stableSection.classList.add("hidden");
       netGrid.innerHTML = `
-        <button class="choice-btn selected" onclick="setDepNetwork(this, 'lightning')">⚡ Lightning</button>
-        <button class="choice-btn" onclick="setDepNetwork(this, 'onchain')">₿ On-Chain</button>
+        <button class="choice-btn selected" onclick="setBtcDepNetwork(this, 'lightning')">⚡ Lightning (Amount 0)</button>
+        <button class="choice-btn" onclick="setBtcDepNetwork(this, 'onchain')">₿ On-Chain (Amount 0)</button>
       `;
-      preGrid.innerHTML = `
-        <button class="choice-btn" onclick="setDepPreset(100)">100</button>
-        <button class="choice-btn" onclick="setDepPreset(500)">500</button>
-        <button class="choice-btn" onclick="setDepPreset(1000)">1,000</button>
-        <button class="choice-btn" onclick="setDepPreset(5000)">5,000</button>
-      `;
-      document.getElementById("depCustomAmount").value = 100;
+      // Direct instant QR generation for BTC with Amount 0
+      selectedDepNetwork = "lightning";
+      createDepositInvoice(0);
     } else if (selectedDepAsset === "USDT") {
+      stableSection.classList.remove("hidden");
+      document.getElementById("qrResult").classList.add("hidden");
       selectedDepNetwork = "ton";
       netGrid.innerHTML = `
         <button class="choice-btn selected" onclick="setDepNetwork(this, 'ton')">💎 TON</button>
@@ -553,28 +618,23 @@
         <button class="choice-btn" onclick="setDepNetwork(this, 'solana')">🟣 Solana</button>
         <button class="choice-btn" onclick="setDepNetwork(this, 'ethereum')">⛓️ Ethereum</button>
       `;
-      preGrid.innerHTML = `
-        <button class="choice-btn" onclick="setDepPreset(5)">$5</button>
-        <button class="choice-btn" onclick="setDepPreset(10)">$10</button>
-        <button class="choice-btn" onclick="setDepPreset(25)">$25</button>
-        <button class="choice-btn" onclick="setDepPreset(50)">$50</button>
-      `;
-      document.getElementById("depCustomAmount").value = 5;
     } else {
+      stableSection.classList.remove("hidden");
+      document.getElementById("qrResult").classList.add("hidden");
       selectedDepNetwork = "solana";
       netGrid.innerHTML = `
         <button class="choice-btn selected" onclick="setDepNetwork(this, 'solana')">🟣 Solana</button>
         <button class="choice-btn" onclick="setDepNetwork(this, 'lightning')">⚡ Lightning</button>
         <button class="choice-btn" onclick="setDepNetwork(this, 'ethereum')">⛓️ Ethereum</button>
       `;
-      preGrid.innerHTML = `
-        <button class="choice-btn" onclick="setDepPreset(5)">$5</button>
-        <button class="choice-btn" onclick="setDepPreset(10)">$10</button>
-        <button class="choice-btn" onclick="setDepPreset(25)">$25</button>
-        <button class="choice-btn" onclick="setDepPreset(50)">$50</button>
-      `;
-      document.getElementById("depCustomAmount").value = 5;
     }
+  }
+
+  function setBtcDepNetwork(el, net) {
+    selectedDepNetwork = net;
+    document.querySelectorAll("#depNetworkGrid .choice-btn").forEach(b => b.classList.remove("selected"));
+    el.classList.add("selected");
+    createDepositInvoice(0);
   }
 
   function setDepNetwork(el, net) {
@@ -588,16 +648,26 @@
     haptic("light");
   }
 
-  async function createDepositInvoice() {
+  async function createDepositInvoice(forcedAmount = null) {
     haptic("medium");
-    const amt = Number(document.getElementById("depCustomAmount").value) || (selectedDepAsset === "SATS" ? 100 : 5);
-    const btn = document.getElementById("btnGenerateInvoice");
 
-    btn.disabled = true;
-    btn.innerText = "Generating Invoice...";
+    let amt = forcedAmount !== null ? forcedAmount : Number(document.getElementById("depCustomAmount").value);
+
+    // Enforce 0.5 minimum for USDT and USDC
+    if (selectedDepAsset !== "BTC" && amt < 0.5) {
+      showToast("⚠️ Minimum deposit is 0.5 " + selectedDepAsset);
+      return;
+    }
+
+    const qrResult = document.getElementById("qrResult");
+    const qrDiv = document.getElementById("qrcode");
+    qrDiv.innerHTML = "<div style='padding:20px; font-size:11px; color:#64748b;'>Generating QR...</div>";
+    qrResult.classList.remove("hidden");
+
     if (activeCheckTimer) clearInterval(activeCheckTimer);
 
-    addLog(`Creating ${amt} ${selectedDepAsset} deposit on ${selectedDepNetwork.toUpperCase()}...`, "info");
+    const targetCurr = selectedDepAsset === "BTC" ? "SATS" : selectedDepAsset;
+    addLog(`Generating ${selectedDepAsset} invoice (${selectedDepNetwork.toUpperCase()}) amount: ${amt}...`, "info");
 
     try {
       const res = await fetch("/api/wallet?action=create-payment", {
@@ -605,7 +675,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           amount: amt,
-          target_currency: selectedDepAsset,
+          target_currency: targetCurr,
           payment_method: selectedDepNetwork,
           user_id: currentUserId,
           username: username,
@@ -620,22 +690,17 @@
         ? currentActiveInvoice
         : (selectedDepNetwork === "lightning" ? `lightning:${currentActiveInvoice}` : currentActiveInvoice);
 
-      const qrDiv = document.getElementById("qrcode");
       qrDiv.innerHTML = "";
       new QRCode(qrDiv, { text: qrTarget, width: 170, height: 170 });
 
       document.getElementById("invoiceString").innerText = currentActiveInvoice;
-      document.getElementById("qrResult").classList.remove("hidden");
       document.getElementById("listenNotice").innerText = "⏳ Waiting for payment from any wallet...";
-      addLog("Invoice ready. Polling for payment confirmation...", "info");
+      addLog("Invoice ready. Polling for verification...", "info");
 
       startVerificationPolling(data.tx_id || data.id, amt);
     } catch(err) {
-      addLog(`Deposit error: ${err.message}`, "error");
-      alert("Deposit Error: " + err.message);
-    } finally {
-      btn.disabled = false;
-      btn.innerText = "⚡ Generate Deposit QR";
+      addLog(`Error: ${err.message}`, "error");
+      showToast("Error: " + err.message);
     }
   }
 
@@ -648,7 +713,6 @@
       if (attempts > 180) {
         clearInterval(activeCheckTimer);
         activeCheckTimer = null;
-        addLog("Deposit poll timed out. Tap Refresh to check balance.", "info");
         return;
       }
 
@@ -672,17 +736,20 @@
             notice.style.color = "var(--button)";
           }
 
-          const finalAmt = data.amount || amount || 100;
-          addLog(`✅ Received +${finalAmt} ${selectedDepAsset}! Balance updated.`, "success");
+          const credited = selectedDepAsset === "BTC" 
+            ? `${(Number(data.amount || amount || 0) / 100000000).toFixed(8)} BTC`
+            : `${data.amount || amount} ${selectedDepAsset}`;
 
-          triggerSuccessPopup(finalAmt);
+          addLog(`✅ Confirmed: +${credited}! Balance credited.`, "success");
+
+          triggerSuccessPopup(credited);
           loadBalance();
         }
       } catch (e) {}
     }, 2500);
   }
 
-  function triggerSuccessPopup(amount) {
+  function triggerSuccessPopup(creditedText) {
     hapticNotification("success");
 
     try {
@@ -690,7 +757,7 @@
       const amtEl = document.getElementById("modalAmountText");
       const balEl = document.getElementById("modalBalanceText");
 
-      if (amtEl) amtEl.innerText = `+${amount} ${selectedDepAsset || 'SATS'} Credited!`;
+      if (amtEl) amtEl.innerText = `+${creditedText} Credited!`;
       if (balEl) balEl.innerText = "Your wallet balance has been updated.";
       if (modal) {
         modal.classList.remove("hidden");
@@ -702,7 +769,7 @@
       if (tg && typeof tg.showPopup === "function" && tg.isVersionAtLeast && tg.isVersionAtLeast("6.2")) {
         tg.showPopup({
           title: "⚡ Payment Received!",
-          message: `+${amount} ${selectedDepAsset || 'SATS'} credited to your balance!`,
+          message: `+${creditedText} credited to your balance!`,
           buttons: [{ type: "ok", text: "Awesome!" }]
         });
       }
@@ -715,23 +782,24 @@
       modal.classList.add("hidden");
       modal.style.display = "none";
     }
-    const qrBox = document.getElementById("qrResult");
-    if (qrBox) qrBox.classList.add("hidden");
     loadBalance();
   }
 
   // ==========================================
-  // WITHDRAWAL CONTROLLER (With 💎 TON)
+  // WITHDRAWAL CONTROLLER
   // ==========================================
-  let selectedWithAsset = "SATS";
+  let selectedWithAsset = "BTC";
   let selectedWithNetwork = "lightning";
 
   function selectWithdrawAsset(asset) {
     selectedWithAsset = asset;
-    ["Sats", "Usdt", "Usdc"].forEach(a => {
+    ["Btc", "Usdt", "Usdc"].forEach(a => {
       document.getElementById(`withAsset${a}`).classList.remove("selected");
     });
     document.getElementById(`withAsset${asset.charAt(0) + asset.slice(1).toLowerCase()}`).classList.add("selected");
+
+    const label = document.getElementById("withAmountLabel");
+    label.innerText = `Amount to Send in ${asset}:`;
     renderWithdrawNetworks();
   }
 
@@ -739,7 +807,7 @@
     const netGrid = document.getElementById("withNetworkGrid");
     netGrid.innerHTML = "";
 
-    if (selectedWithAsset === "SATS") {
+    if (selectedWithAsset === "BTC") {
       selectedWithNetwork = "lightning";
       netGrid.innerHTML = `
         <button class="choice-btn selected" onclick="setWithNetwork(this, 'lightning')">⚡ Lightning</button>
@@ -773,16 +841,23 @@
   async function executeWithdrawal() {
     haptic("medium");
     const dest = document.getElementById("withDest").value.trim();
-    const amt = Number(document.getElementById("withAmount").value);
+    const rawAmt = Number(document.getElementById("withAmount").value);
     const feedback = document.getElementById("withFeedback");
     const btn = document.getElementById("btnSendFunds");
 
-    if (!dest || !amt || amt <= 0) return alert("Please fill in recipient address and amount.");
+    if (!dest || !rawAmt || rawAmt <= 0) {
+      showToast("⚠️ Enter valid recipient and amount");
+      return;
+    }
+
+    // Convert BTC to SATS for backend processing
+    const sendAmt = selectedWithAsset === "BTC" ? Math.round(rawAmt * 100000000) : rawAmt;
+    const targetCurr = selectedWithAsset === "BTC" ? "SATS" : selectedWithAsset;
 
     btn.disabled = true;
-    btn.innerText = "Broadcasting Payment...";
+    btn.innerText = "Broadcasting...";
     feedback.innerText = "Sending across network...";
-    addLog(`Initiating withdrawal of ${amt} ${selectedWithAsset} to ${dest}...`, "info");
+    addLog(`Broadcasting withdrawal of ${rawAmt} ${selectedWithAsset} to ${dest}...`, "info");
 
     try {
       const res = await fetch("/api/wallet?action=send", {
@@ -790,10 +865,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           destination: dest,
-          amount: amt,
+          amount: sendAmt,
           withdraw_method: selectedWithNetwork,
-          currency: selectedWithAsset,
-          target_currency: selectedWithAsset,
+          currency: targetCurr,
+          target_currency: targetCurr,
           user_id: currentUserId,
           username: username,
           telegram_id: tgNumericId
@@ -803,16 +878,18 @@
       if (!data.success) throw new Error(data.error);
 
       hapticNotification("success");
-      feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${amt} ${selectedWithAsset} successfully!</span>`;
-      addLog(`✓ Withdrawal of ${amt} ${selectedWithAsset} confirmed!`, "success");
+      feedback.innerHTML = `<span style="color:var(--button)">✓ Sent ${rawAmt} ${selectedWithAsset} successfully!</span>`;
+      addLog(`✓ Sent ${rawAmt} ${selectedWithAsset} confirmed!`, "success");
+      showToast(`✓ Sent ${rawAmt} ${selectedWithAsset}!`);
 
       document.getElementById("withDest").value = "";
       document.getElementById("withAmount").value = "";
       loadBalance();
     } catch (err) {
       hapticNotification("error");
-      feedback.innerHTML = `<span style="color:var(--danger)">Withdrawal failed: ${err.message}</span>`;
+      feedback.innerHTML = `<span style="color:var(--danger)">Failed: ${err.message}</span>`;
       addLog(`Withdrawal failed: ${err.message}`, "error");
+      showToast("Failed: " + err.message);
     } finally {
       btn.disabled = false;
       btn.innerText = "🚀 Send Payment";
@@ -840,13 +917,16 @@
         const sign = isIn ? "+" : "-";
         const colorClass = isIn ? "tx-in" : "tx-out";
         const dateStr = tx.created_at ? new Date(tx.created_at).toLocaleDateString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : "Recent";
+        const curr = tx.currency || 'SATS';
+        const displayAmt = curr === 'SATS' ? `${(Number(tx.amount)/100000000).toFixed(8)} BTC` : `${tx.amount} ${curr}`;
+
         return `
           <div class="tx-item">
             <div>
               <div style="font-weight:600; text-transform:capitalize;">${tx.type.replace('_', ' ')}</div>
-              <div style="font-size:10px; color:var(--muted);">${dateStr} • <code>${(tx.tx_id || tx.id || "").substring(0, 12)}...</code></div>
+              <div style="font-size:10px; color:var(--muted);">${dateStr} • <code>${(tx.tx_id || tx.id || "").substring(0, 10)}...</code></div>
             </div>
-            <div class="${colorClass}">${sign}${tx.amount} ${tx.currency || 'SATS'}</div>
+            <div class="${colorClass}">${sign}${displayAmt}</div>
           </div>
         `;
       }).join("");
@@ -857,29 +937,27 @@
 
   async function saveAdminSpeedKey() {
     const key = document.getElementById("adminSpeedKeyInput").value.trim();
-    if (!key) return alert("Enter Speed Key");
-    addLog("Updating Speed API Key in database...", "info");
-    alert("Speed Key saved successfully!");
+    if (!key) return showToast("⚠️ Enter Speed Key");
+    showToast("✓ Speed Key saved!");
   }
 
   async function adminAddBalance() {
     const target = document.getElementById("adminTargetUser").value.trim();
     const amt = Number(document.getElementById("adminCreditAmt").value);
-    if (!target || !amt) return alert("Enter target user and amount");
-    addLog(`Admin credited +${amt} sats to @${target}`, "success");
-    alert(`Success: Credited +${amt} SATS to @${target}`);
+    if (!target || !amt) return showToast("⚠️ Enter user & amount");
+    showToast(`✓ Credited +${amt} SATS to @${target}`);
   }
 
   function copyInvoice() {
     if (!currentActiveInvoice) return;
     navigator.clipboard.writeText(currentActiveInvoice);
     haptic("light");
-    alert("Invoice / Address copied to clipboard!");
+    showToast("✓ Copied to clipboard!");
   }
   function copyAddress() {
     navigator.clipboard.writeText(myLightningAddress);
     haptic("light");
-    alert("Lightning Address copied!\n" + myLightningAddress);
+    showToast("✓ Lightning Address copied!");
   }
 
   renderDepositNetworks();
