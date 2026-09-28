@@ -380,7 +380,7 @@
     </div>
   </div>
 
-  <!-- 2. CLEAN NAVIGATION TABS (Admin & Share Removed) -->
+  <!-- 2. CLEAN NAVIGATION TABS -->
   <div class="nav-tabs">
     <button id="navTabDeposit" class="tab-btn active" onclick="switchNavTab('deposit')">📥 Deposit</button>
     <button id="navTabWithdraw" class="tab-btn" onclick="switchNavTab('withdraw')">📤 Withdraw</button>
@@ -405,7 +405,7 @@
       <button class="btn-action" onclick="generateStablecoinDeposit()">⚡ Generate Deposit QR</button>
     </div>
 
-    <!-- RECEIVE BOX (STYLE MATCHING SCREENSHOT 3) -->
+    <!-- RECEIVE BOX -->
     <div id="receiveBox" class="receive-box">
       <div id="receiveTitle" class="receive-header">Receive BTC</div>
 
@@ -455,7 +455,7 @@
     </div>
   </div>
 
-  <!-- 4. TAB: WITHDRAW (ADAPTS TO SATS FOR LIGHTNING, BTC FOR ON-CHAIN) -->
+  <!-- 4. TAB: WITHDRAW -->
   <div id="panelWithdraw" class="card hidden">
     <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">Select Asset to Withdraw:</div>
     <div class="btn-grid">
@@ -942,14 +942,23 @@
         );
 
         if (isPaid) {
+          const rawPaidAmt = Number(data.amount || amount || 0);
+
+          // If paid but amount is still settling, continue polling for up to 15 attempts
+          if (rawPaidAmt <= 0 && attempts < 15) {
+            return;
+          }
+
           clearInterval(activeCheckTimer);
           activeCheckTimer = null;
 
+          const finalAmt = rawPaidAmt;
+
           const credited = currentDepositState.asset === "BTC" 
             ? (currentDepositState.network === 'lightning' 
-                ? `${Number(data.amount || amount || 0).toLocaleString()} SATS` 
-                : `${(Number(data.amount || amount || 0) / 100000000).toFixed(8)} BTC`)
-            : `${data.amount || amount} ${currentDepositState.asset}`;
+                ? `${Number(finalAmt).toLocaleString()} SATS` 
+                : `${(Number(finalAmt) / 100000000).toFixed(8)} BTC`)
+            : `${finalAmt} ${currentDepositState.asset}`;
 
           triggerSuccessPopup(credited);
           loadBalance();
@@ -995,7 +1004,7 @@
   }
 
   // ==========================================
-  // WITHDRAWAL CONTROLLER (BTC [Lightning/OnChain], USDT, USDC)
+  // WITHDRAWAL CONTROLLER
   // ==========================================
   let selectedWithAsset = "BTC";
   let selectedWithNetwork = "lightning";
@@ -1077,9 +1086,7 @@
 
     if (!dest || !rawAmt || rawAmt <= 0) return showToast("⚠️ Enter valid destination & amount");
 
-    // Unit conversion:
-    // BTC + onchain -> rawAmt is in BTC, converted to SATS for backend
-    // BTC + lightning -> rawAmt is already in SATS
+    // Unit conversion: BTC + onchain -> rawAmt is in BTC, converted to SATS for backend
     let sendAmt = rawAmt;
     let targetCurr = selectedWithAsset;
 
@@ -1182,7 +1189,7 @@
     showToast("✓ Lightning Address copied!");
   }
 
-  // Initial Load
+  // Initial Boot
   renderSlidingDepositNetworks();
   renderWithdrawSlider();
   loadBalance();
