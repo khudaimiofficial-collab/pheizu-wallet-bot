@@ -17,34 +17,72 @@ if (!admin.apps.length) {
 
 const db = admin.apps.length ? admin.firestore() : null;
 
-// Helper: Speed API Request Wrapper
-async function speedRequest(path, method = "GET", body = null) {
-  let apiKey = process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY;
-  
-  // Also check database if configured via Admin Panel
-  if (!apiKey && db) {
+// Helper: Retrieve Speed API Key from Firestore first, then environment variables
+async function getSpeedApiKey() {
+  if (db) {
     try {
       const snap = await db.collection("settings").doc("speed").get();
-      if (snap.exists && snap.data().api_key) apiKey = snap.data().api_key;
+      if (snap.exists && snap.data().api_key) {
+        const k = String(snap.data().api_key).trim().replace(/^["']|["']$/g, "");
+        if (k && !k.includes("placeholder")) return k;
+      }
     } catch (e) {}
   }
+  const envKey = (process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
+  if (envKey && !envKey.includes("placeholder")) return envKey;
+  return null;
+}
 
-  if (!apiKey) throw new Error("SPEED_API_KEY is not configured.");
+// Helper: Speed API Request Wrapper with robust authentication
+async function speedRequest(path, method = "GET", body = null) {
+  const apiKey = await getSpeedApiKey();
+  if (!apiKey) {
+    throw new Error("SPEED_API_KEY is not set. Use 'Set Speed Key' in Admin Panel or set SPEED_API_KEY in Vercel.");
+  }
 
-  const headers = {
-    "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
-    "Content-Type": "application/json"
+  // Speed supports Bearer or Basic Auth
+  const authHeader = apiKey.startsWith("Basic ") || apiKey.startsWith("Bearer ")
+    ? apiKey
+    : (apiKey.startsWith("sk_") ? `Bearer ${apiKey}` : `Basic ${Buffer.from(apiKey + ":").toString("base64")}`);
+
+  const options = {
+    method,
+    headers: {
+      "Authorization": authHeader,
+      "Content-Type": "application/json"
+    }
   };
 
-  const options = { method, headers };
-  if (body) options.body = JSON.stringify(body);
+  if (body) {
+    options.body = JSON.stringify(body);
+  }
 
   const res = await fetch(`https://api.tryspeed.com${path}`, options);
-  const data = await res.json();
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = { error: { message: `Speed returned non-JSON HTTP ${res.status}` } };
+  }
+
   return { status: res.status, data };
 }
 
-// Helper: Dispatch Telegram Message to Bot Chat
+// Helper: Extract clean error message from Speed API responses
+function parseSpeedError(data, status) {
+  if (!data) return `Speed API HTTP ${status}`;
+  if (data.error && typeof data.error === "object" && data.error.message) {
+    return data.error.message;
+  }
+  if (typeof data.error === "string") return data.error;
+  if (Array.isArray(data.errors) && data.errors[0]?.message) {
+    return data.errors[0].message;
+  }
+  if (data.message) return data.message;
+  return `Speed API error (${status})`;
+}
+
+// Helper: Dispatch Telegram notification to Bot Chat
 async function sendTelegramMessage(chatId, text) {
   const token = process.env.BOT_TOKEN;
   if (!token || !chatId) return false;
@@ -71,11 +109,15 @@ async function sendTelegramMessage(chatId, text) {
 async function getBalance(userId, telegramId) {
   if (!db) return 0;
   const candidates = [userId, telegramId, telegramId ? `user${telegramId}` : null].filter(Boolean);
-  for (const id of candidates) {
-    const doc = await db.collection("users").doc(String(id).toLowerCase()).get();
-    if (doc.exists) {
-      const d = doc.data();
-      return Number(d.balance ?? d.sats ?? d.amount ?? 0);
+  for (const col of ["users", "wallets"]) {
+    for (const id of candidates) {
+      try {
+        const doc = await db.collection(col).doc(String(id).toLowerCase()).get();
+        if (doc.exists) {
+          const d = doc.data();
+          return Number(d.balance ?? d.sats ?? d.amount ?? 0);
+        }
+      } catch (e) {}
     }
   }
   return 0;
@@ -130,41 +172,58 @@ export default async function handler(req, res) {
     }
 
     // ----------------------------------------------------
-    // 2. ACTION: CREATE PAYMENT (Invoice / QR)
+    // 2. ACTION: CREATE PAYMENT (Lightning Invoice / QR)
     // ----------------------------------------------------
     if (action === "create-payment") {
       const body = req.body || {};
-      const amount = Number(body.amount);
-      const currency = body.target_currency || (body.network === "lightning" ? "SATS" : "SATS");
+      const rawAmount = body.amount !== undefined && body.amount !== null ? Number(body.amount) : 0;
+      const currency = body.target_currency || "SATS";
       const paymentMethod = body.payment_method || body.network || "lightning";
       const userId = String(body.user_id || body.username || "").toLowerCase();
       const telegramId = String(body.telegram_id || "");
 
+      // Build payload for Speed checkout sessions
       const sessionPayload = {
         currency: currency === "SATS" ? "SATS" : currency,
         payment_methods: [paymentMethod === "lightning" ? "lightning" : paymentMethod]
       };
 
-      if (amount && amount > 0) {
-        sessionPayload.amount = amount;
+      // Handle specific amount vs open/variable amount
+      if (rawAmount > 0) {
+        sessionPayload.amount = rawAmount;
+      } else {
+        // Allow open-amount invoice
+        sessionPayload.amount_type = "variable";
+        sessionPayload.allow_variable_amount = true;
       }
 
       const speedRes = await speedRequest("/checkout/sessions", "POST", sessionPayload);
+
       if (speedRes.status >= 400 || !speedRes.data) {
-        return res.status(400).json({ success: false, error: speedRes.data?.message || "Speed API invoice generation failed" });
+        const errorMsg = parseSpeedError(speedRes.data, speedRes.status);
+        return res.status(400).json({ success: false, error: errorMsg });
       }
 
       const session = speedRes.data;
-      const invoice = session.payment_method_options?.lightning?.invoice ||
-                      session.lightning_invoice ||
-                      session.invoice ||
-                      session.hosted_url;
+
+      // Extract invoice string from Speed session object
+      const invoice =
+        session.payment_method_options?.lightning?.invoice ||
+        session.lightning_invoice ||
+        session.invoice ||
+        session.payment?.invoice ||
+        session.hosted_url ||
+        session.url;
+
+      if (!invoice) {
+        return res.status(400).json({ success: false, error: "Speed did not return a valid Lightning invoice." });
+      }
 
       const record = {
         tx_id: session.id,
         id: session.id,
         invoice,
-        amount: amount || 0,
+        amount: rawAmount || 0,
         currency,
         target_currency: currency,
         payment_method: paymentMethod,
@@ -184,13 +243,13 @@ export default async function handler(req, res) {
         id: session.id,
         tx_id: session.id,
         invoice,
-        amount: amount || 0,
+        amount: rawAmount || 0,
         currency
       });
     }
 
     // ----------------------------------------------------
-    // 3. ACTION: CHECK STATUS (Notifies Telegram Bot Chat!)
+    // 3. ACTION: CHECK STATUS (Notifies Bot Chat)
     // ----------------------------------------------------
     if (action === "check-status") {
       const paymentId = req.query.payment_id;
@@ -199,7 +258,6 @@ export default async function handler(req, res) {
 
       if (!paymentId) return res.status(400).json({ success: false, error: "payment_id required" });
 
-      // Look up invoice record in Firestore
       let invoiceData = null;
       let invoiceRef = null;
       if (db) {
@@ -208,7 +266,6 @@ export default async function handler(req, res) {
         if (snap.exists) invoiceData = snap.data();
       }
 
-      // Check payment status on Speed
       const speedRes = await speedRequest(`/checkout/sessions/${paymentId}`, "GET");
       const session = speedRes.data;
 
@@ -223,17 +280,14 @@ export default async function handler(req, res) {
         const alreadyNotified = invoiceData?.notified === true;
 
         if (!alreadyNotified) {
-          // 1. Credit balance in DB
           if (targetUserId || targetTelegramId) {
             await creditUser(targetUserId, targetTelegramId, paidAmount, currency);
           }
 
-          // 2. Mark as paid and notified
           if (invoiceRef) {
             await invoiceRef.set({ is_paid: true, notified: true, paid_at: new Date().toISOString() }, { merge: true });
           }
 
-          // 3. Add to transaction history
           if (db && targetUserId) {
             await db.collection("history").add({
               user_id: targetUserId,
@@ -246,7 +300,7 @@ export default async function handler(req, res) {
             });
           }
 
-          // 4. 🔥 SEND CONFIRMATION DIRECTLY TO TELEGRAM BOT CHAT
+          // Send message to Telegram Bot Chat
           if (targetTelegramId) {
             const amtStr = `+${Number(paidAmount).toLocaleString()} ${currency}`;
             await sendTelegramMessage(
@@ -294,10 +348,8 @@ export default async function handler(req, res) {
         return res.status(400).json({ success: false, error: "Insufficient balance." });
       }
 
-      // Deduct balance in Firestore
       await deductUser(userId, telegramId, amount, currency);
 
-      // Record in History
       if (db) {
         await db.collection("history").add({
           user_id: userId,
@@ -310,7 +362,6 @@ export default async function handler(req, res) {
         });
       }
 
-      // Send confirmation to Bot Chat
       if (telegramId) {
         const displayRecipient = destination.includes("@") ? destination : `${destination.substring(0, 24)}...`;
         await sendTelegramMessage(
