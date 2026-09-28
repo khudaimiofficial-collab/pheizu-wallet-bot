@@ -325,15 +325,18 @@ async function getWalletOverviewText(userId, telegramId, isAdm) {
     `💲 <b>USDC:</b> <code>${usdc} USDC</code> (${usdc}$)\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `💵 <b>Total:</b> <code>${totalUsd}$</code>\n\n` +
-    `⚡ <b>Lightning Address:</b> <code>${userId}@${DOMAIN}</code>\n` +
-    `📌 <b>Minimum Deposit:</b> None for SATS / 0.5 USDT`
+    `⚡ <b>Lightning Address:</b> <code>${userId}@${DOMAIN}</code>`
   );
 }
 
+// Fixed BOLT-11 Decoder: Accurately detects zero-amount invoices (lnbc1p...) vs amount-encoded invoices
 function decodeBolt11Sats(invoice) {
   const clean = invoice.trim().toLowerCase().replace(/^lightning:/, "");
-  const match = clean.match(/^ln(?:bc|tb|bcrt)([0-9]+)([munp]?)/);
-  if (!match) return null;
+  // In BOLT-11, the amount is followed by the separator '1'.
+  // Example with amount: lnbc10n1... (1 sat), lnbc50u1... (5,000 sats).
+  // Example without amount (zero-amount): lnbc1p... (no digits before the '1' separator).
+  const match = clean.match(/^ln(?:bc|tb|bcrt)([0-9]+)([munp]?)1/);
+  if (!match) return null; // Zero-amount invoice! Returns null so amount remains editable!
 
   const val = parseInt(match[1], 10);
   const multiplier = match[2];
@@ -360,7 +363,7 @@ async function isUserBanned(userId, numericId) {
 }
 
 // ----------------------------------------------------
-// DEPOSIT CHOICE MENU (Specific Amount vs Quick Invoice/Address)
+// DEPOSIT CHOICE MENU
 // ----------------------------------------------------
 function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabel }) {
   const isSats = targetCurrency === "SATS";
@@ -368,15 +371,15 @@ function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabe
 
   let buttons = [
     [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
-    [Markup.button.callback(paymentMethod === "lightning" ? "⚡ Quick Invoice" : "⚡ Quick Deposit Address", `dep_opt:open:${targetCurrency}:${paymentMethod}`)],
+    [Markup.button.callback("⚡ Quick Invoice (Open Amount)", `dep_opt:open:${targetCurrency}:${paymentMethod}`)],
     [Markup.button.callback("« Back to Networks", backAssetCallback)]
   ];
 
   return ctx.editMessageText(
     `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
     `Choose your deposit option below:\n\n` +
-    `1️⃣ <b>Enter Specific Amount:</b> Sets your exact custom amount into the invoice.\n` +
-    `2️⃣ <b>Quick ${paymentMethod === "lightning" ? "Invoice" : "Address"}:</b> Generate immediately with one tap.\n`,
+    `1️⃣ <b>Enter Specific Amount:</b> Generate an invoice for your exact desired amount (e.g. 50, 500, 50,000 SATS).\n` +
+    `2️⃣ <b>Quick Invoice (Open Amount):</b> Generate an invoice where the sender can type any amount in their wallet.\n`,
     {
       parse_mode: "HTML",
       ...Markup.inlineKeyboard(buttons)
@@ -385,7 +388,7 @@ function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabe
 }
 
 // ----------------------------------------------------
-// GENERATE & DISPLAY DEPOSIT DETAILS (NO AMOUNT ON QUICK INVOICE)
+// GENERATE & DISPLAY DEPOSIT INVOICE (ONLY "CHECK STATUS" BUTTON)
 // ----------------------------------------------------
 async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amount, networkLabel, isCustomAmount }) {
   const userId = String(ctx.from.username || ctx.from.id).toLowerCase();
@@ -402,21 +405,22 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
   }
 
   try {
-    const isSats = targetCurrency === "SATS";
-    const defaultAmount = isSats ? 1 : 0.5;
-    const finalAmount = amount || defaultAmount;
+    const payload = {
+      target_currency: targetCurrency,
+      payment_method: paymentMethod,
+      user_id: userId,
+      username: userId,
+      telegram_id: String(ctx.from.id)
+    };
+
+    if (amount && Number(amount) > 0) {
+      payload.amount = Number(amount);
+    }
 
     const res = await fetch(`${APP_URL}/api/wallet?action=create-payment`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        amount: finalAmount,
-        target_currency: targetCurrency,
-        payment_method: paymentMethod,
-        user_id: userId,
-        username: userId,
-        telegram_id: String(ctx.from.id)
-      })
+      body: JSON.stringify(payload)
     });
 
     const data = await res.json();
@@ -430,10 +434,9 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 
     let caption = "";
     if (isLightning) {
-      // Don't show amount for Quick Invoice; show only for custom specific amounts
       const amtLine = isCustomAmount
-        ? `💰 <b>Amount:</b> <code>${Number(finalAmount).toLocaleString()} ${targetCurrency}</code>\n`
-        : ``;
+        ? `💰 <b>Amount:</b> <code>${Number(amount).toLocaleString()} ${targetCurrency}</code>\n`
+        : `💰 <b>Amount:</b> <i>Editable when sending</i>\n`;
 
       caption = `⚡ <b>Lightning Deposit Invoice</b>\n\n` +
         amtLine +
@@ -443,7 +446,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
         `<i>Scan QR or copy invoice to pay. Waiting for payment...</i>`;
     } else {
       const amtLine = isCustomAmount
-        ? `💰 <b>Expected Amount:</b> <code>${finalAmount} ${targetCurrency}</code>\n`
+        ? `💰 <b>Expected Amount:</b> <code>${amount} ${targetCurrency}</code>\n`
         : ``;
 
       caption = `📥 <b>${targetCurrency} Deposit Address</b>\n\n` +
@@ -469,7 +472,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       ])
     });
 
-    startDepositWatcher(ctx.from.id, txId, finalAmount, userId);
+    startDepositWatcher(ctx.from.id, txId, amount || 0, userId);
   } catch (err) {
     const backCallback = targetCurrency === "SATS" ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
     await ctx.reply(
@@ -501,13 +504,11 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
       stopDepositWatcher(chatId);
       const amtStr = data.amount ? `+${Number(data.amount).toLocaleString()} ${data.currency || "SATS"}` : "Funds";
 
-      // 1. POPUP MODAL: SUCCESS
       await ctx.answerCbQuery(
         `🎉 Payment Received!\n\n${amtStr} has been credited to your balance!\n\nTap OK to close.`,
         { show_alert: true }
       );
 
-      // 2. Update inline button to Confirmed
       await ctx.editMessageReplyMarkup(
         Markup.inlineKeyboard([
           [Markup.button.callback("✅ Payment Confirmed", "gateway_back")]
@@ -801,7 +802,7 @@ bot.action("dep_net_usdc_solana", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// CALLBACK ACTIONS: OPTION 1 (CUSTOM AMOUNT) VS OPTION 2 (DIRECT INVOICE)
+// CALLBACK ACTIONS: OPTION 1 (CUSTOM AMOUNT) VS OPTION 2 (OPEN INVOICE)
 // ----------------------------------------------------
 bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
@@ -838,7 +839,7 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
       await ctx.reply(promptText, { parse_mode: "HTML", ...promptKeyboard });
     }
   } else {
-    // Option 2: Generate direct invoice (starts with lnbc, no amount shown)
+    // Option 2: Generate open invoice without embedding a fixed amount
     return handleGenerateDeposit(ctx, {
       targetCurrency,
       paymentMethod,
@@ -1115,7 +1116,7 @@ bot.action("admin_setkey_prompt", async (ctx) => {
 });
 
 // ----------------------------------------------------
-// 7. TEXT MESSAGE HANDLER (CUSTOM DEPOSITS, WITHDRAWALS & ADMIN)
+// 7. TEXT MESSAGE HANDLER (WITHDRAWALS & DEPOSITS)
 // ----------------------------------------------------
 bot.on("text", async (ctx) => {
   const text = ctx.message.text.trim();
@@ -1259,7 +1260,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // C. WITHDRAW DESTINATION INPUT (WITH EDITABLE AMOUNT OPTION)
+  // C. WITHDRAW DESTINATION INPUT (ACCURATE AMOUNT DETECTION & EDITABLE FOR ZERO-AMOUNT INVOICES)
   if (session.step === "awaiting_withdraw_dest") {
     await ctx.replyWithChatAction("typing");
 
@@ -1282,6 +1283,7 @@ bot.on("text", async (ctx) => {
       }
     }
 
+    // Decode BOLT-11: Only detects amount if digits exist before the '1' separator
     if (!detectedAmount && (text.toLowerCase().startsWith("lnbc") || text.toLowerCase().startsWith("lightning:lnbc"))) {
       detectedAmount = decodeBolt11Sats(text);
       if (detectedAmount) {
@@ -1290,6 +1292,7 @@ bot.on("text", async (ctx) => {
       }
     }
 
+    // If an amount is detected from a fixed invoice
     if (detectedAmount && detectedAmount > 0) {
       const bal = await getDirectBalance(userId, ctx.from.id);
 
@@ -1319,7 +1322,7 @@ bot.on("text", async (ctx) => {
         `💰 <b>Amount:</b> ${detectedAmount.toLocaleString()} ${detectedCurrency}\n` +
         `🌐 <b>Network:</b> ${detectedMethod.toUpperCase()}\n` +
         `🎯 <b>Recipient:</b> <code>${text.substring(0, 30)}...</code>\n\n` +
-        `Click <b>Send</b> below to proceed, or <b>Edit Amount</b> to change:`,
+        `Click <b>Send</b> below to confirm payment, or <b>Edit Amount</b> to customize:`,
         {
           parse_mode: "HTML",
           ...Markup.inlineKeyboard([
@@ -1331,13 +1334,19 @@ bot.on("text", async (ctx) => {
       );
     }
 
+    // Zero-amount invoice (lnbc1p...) or on-chain address: PROMPTS USER TO ENTER AMOUNT
     const currentBal = await getDirectBalance(userId, ctx.from.id);
     let availText = `${currentBal.sats.toLocaleString()} SATS`;
     if (detectedCurrency === "USDT") availText = `${currentBal.usdt.toFixed(2)} USDT`;
     if (detectedCurrency === "USDC") availText = `${currentBal.usdc.toFixed(2)} USDC`;
 
     await setSession(ctx.from.id, { step: "awaiting_withdraw_amount", destination: text, currency: detectedCurrency });
-    return ctx.reply(`📍 <b>Destination Address:</b>\n<code>${text}</code>\n\nAvailable: <b>${availText}</b>\nEnter the <b>amount in ${detectedCurrency} to send</b>:`, { parse_mode: "HTML" });
+    return ctx.reply(
+      `📍 <b>Destination:</b>\n<code>${text.substring(0, 30)}...</code>\n\n` +
+      `Available: <b>${availText}</b>\n\n` +
+      `✏️ <b>Enter the amount in ${detectedCurrency} you want to send:</b>`,
+      { parse_mode: "HTML" }
+    );
   }
 
   // D. WITHDRAW AMOUNT INPUT
@@ -1446,7 +1455,7 @@ bot.action("confirm_send", async (ctx) => {
 
     await ctx.editMessageText(
       `✅ <b>Payment Successful!</b>\n\n` +
-      `💸 <b>Amount Sent:</b> ${amount} ${currency || "SATS"}\n` +
+      `💸 <b>Amount Sent:</b> ${amount.toLocaleString()} ${currency || "SATS"}\n` +
       `🎯 <b>Recipient:</b> <code>${displayRecipient}</code>\n` +
       `🆔 <b>TxID:</b> <code>${txId}</code>`,
       { parse_mode: "HTML" }
