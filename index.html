@@ -49,6 +49,7 @@
       border: 1px solid var(--border);
     }
 
+    /* Interactive Balance Card */
     .balance-header {
       display: flex;
       justify-content: space-between;
@@ -86,6 +87,7 @@
     .asset-pill-name { font-size: 10px; color: var(--muted); text-transform: uppercase; }
     .asset-pill-val { font-size: 12px; font-weight: 700; margin-top: 2px; font-family: monospace; color: #fff; }
 
+    /* Clean Navigation Tabs */
     .nav-tabs {
       display: flex;
       background: var(--card);
@@ -117,6 +119,7 @@
       border: 1px solid var(--border);
     }
 
+    /* Sliding Pill Container */
     .sliding-pill-container {
       display: flex;
       overflow-x: auto;
@@ -150,6 +153,7 @@
       color: #fff;
     }
 
+    /* QR Frame with Pheizu Logo */
     .receive-box {
       background: var(--card);
       border-radius: 20px;
@@ -286,6 +290,7 @@
     }
     .btn-action:active { transform: scale(0.98); }
 
+    /* Account Details Badge */
     .account-badge-box {
       background: var(--card-inner);
       border: 1px solid var(--border);
@@ -301,6 +306,7 @@
     }
     .account-row:last-child { border-bottom: none; }
 
+    /* Floating Toast */
     .toast {
       position: fixed;
       bottom: 24px;
@@ -317,6 +323,7 @@
       box-shadow: 0 4px 20px rgba(0,0,0,0.8);
     }
 
+    /* Modal */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -353,7 +360,6 @@
       </button>
     </div>
 
-    <!-- Tapping cycles through BTC -> SATS -> USDT -> USDC -->
     <div id="balanceDisplay" class="balance-amount" onclick="cycleBalanceMode()">0.00000000 BTC</div>
     <div id="totalUsdDisplay" class="balance-sub">≈ $0.00 USD</div>
 
@@ -448,7 +454,7 @@
     </div>
   </div>
 
-  <!-- 4. TAB: WITHDRAW -->
+  <!-- 4. TAB: WITHDRAW (Auto-Detects and Locks Encoded Amounts) -->
   <div id="panelWithdraw" class="card hidden">
     <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">Select Asset to Withdraw:</div>
     <div class="btn-grid">
@@ -463,8 +469,10 @@
     <label style="font-size:11px; color:var(--muted); margin-top:8px; display:block;">Recipient Destination Address or Invoice:</label>
     <input type="text" id="withDest" placeholder="Paste address or invoice" oninput="detectInvoiceAmount(this.value)" />
 
-    <!-- Label & Input Auto-Detected or Manually Filled -->
-    <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount to Send in SATS:</label>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <label id="withAmountLabel" style="font-size:11px; color:var(--muted);">Amount to Send in SATS:</label>
+      <span id="amountLockNotice" class="hidden" style="font-size:10px; color:var(--accent); font-weight:700;">🔒 Locked</span>
+    </div>
     <input type="number" id="withAmount" step="1" placeholder="e.g. 500" />
 
     <button id="btnSendFunds" class="btn-action" onclick="executeWithdrawal()">🚀 Send Payment</button>
@@ -565,7 +573,6 @@
   const currentUserId = username;
   const myLightningAddress = `${username}@${DOMAIN}`;
 
-  // Populate Account Details
   document.getElementById("accUsername").innerText = `@${username}`;
   document.getElementById("accTgId").innerText = tgNumericId || "N/A";
   document.getElementById("accLnAddress").innerText = myLightningAddress;
@@ -590,7 +597,6 @@
   function haptic(type = "light") { try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){} }
   function hapticNotification(type = "success") { try { tg?.HapticFeedback?.notificationOccurred(type); } catch(e){} }
 
-  // Balance Switcher (Cycle: BTC -> SATS -> USDT -> USDC)
   function cycleBalanceMode() {
     const modes = ['BTC', 'SATS', 'USDT', 'USDC'];
     let idx = (modes.indexOf(currentBalanceMode) + 1) % modes.length;
@@ -980,10 +986,9 @@
             creditedText = `$${receivedStable.toFixed(2)} ${currentDepositState.asset}`;
           }
 
-          // 🔥 Clear invoice cache so spent invoice is never shown again
+          // Clear cache so paid invoice is never reused
           btcInvoiceCache[currentDepositState.network] = null;
 
-          // Trigger celebration modal
           triggerSuccessPopup(creditedText);
           loadBalance();
         }
@@ -1018,7 +1023,6 @@
     } catch (e) {}
   }
 
-  // Closes modal and automatically generates a fresh invoice so you never see a spent one
   function closeSuccessModal() {
     const modal = document.getElementById("successModal");
     if (modal) {
@@ -1027,14 +1031,14 @@
     }
     loadBalance();
 
-    // Automatically generate a fresh new invoice for the current network
+    // Automatically generate fresh new invoice
     if (currentDepositState.asset === "BTC") {
       generateDepositRequest(currentDepositState.amount);
     }
   }
 
   // ==========================================
-  // WITHDRAWAL CONTROLLER (With BOLT11 Auto-Detection)
+  // WITHDRAWAL CONTROLLER (Amount Auto-Locking)
   // ==========================================
   let selectedWithAsset = "BTC";
   let selectedWithNetwork = "lightning";
@@ -1056,25 +1060,62 @@
     return null;
   }
 
-  // Auto-detects encoded amount when pasting invoices
+  // Auto-detects encoded invoice amounts & locks field
   function detectInvoiceAmount(dest) {
-    if (!dest) return;
+    const withAmtInput = document.getElementById("withAmount");
+    const lockNotice = document.getElementById("amountLockNotice");
+
+    if (!dest) {
+      unlockAmountInput();
+      return;
+    }
+
     const clean = dest.trim().toLowerCase();
 
     if (clean.startsWith("lnbc") || clean.startsWith("lightning:lnbc") || clean.startsWith("lntb")) {
       const sats = decodeBolt11Sats(clean);
       if (sats && sats > 0) {
-        const withAmtInput = document.getElementById("withAmount");
         if (selectedWithAsset === "BTC") {
           if (selectedWithNetwork === "lightning") {
             withAmtInput.value = sats;
+            lockAmountInput(`🔒 ${sats.toLocaleString()} SATS locked (encoded in invoice)`);
             showToast(`⚡ Auto-detected: ${sats.toLocaleString()} SATS`);
           } else {
-            withAmtInput.value = (sats / 100000000).toFixed(8);
-            showToast(`⚡ Auto-detected: ${(sats / 100000000).toFixed(8)} BTC`);
+            const btcVal = (sats / 100000000).toFixed(8);
+            withAmtInput.value = btcVal;
+            lockAmountInput(`🔒 ${btcVal} BTC locked (encoded in invoice)`);
+            showToast(`⚡ Auto-detected: ${btcVal} BTC`);
           }
         }
+        return;
       }
+    }
+
+    unlockAmountInput();
+  }
+
+  function lockAmountInput(text) {
+    const withAmtInput = document.getElementById("withAmount");
+    const lockNotice = document.getElementById("amountLockNotice");
+    withAmtInput.readOnly = true;
+    withAmtInput.style.opacity = "0.7";
+    withAmtInput.style.cursor = "not-allowed";
+    withAmtInput.style.borderColor = "var(--accent)";
+    if (lockNotice) {
+      lockNotice.innerText = text;
+      lockNotice.classList.remove("hidden");
+    }
+  }
+
+  function unlockAmountInput() {
+    const withAmtInput = document.getElementById("withAmount");
+    const lockNotice = document.getElementById("amountLockNotice");
+    withAmtInput.readOnly = false;
+    withAmtInput.style.opacity = "1";
+    withAmtInput.style.cursor = "text";
+    withAmtInput.style.borderColor = "var(--border)";
+    if (lockNotice) {
+      lockNotice.classList.add("hidden");
     }
   }
 
@@ -1083,6 +1124,7 @@
     ["Btc", "Usdt", "Usdc"].forEach(a => document.getElementById(`withAsset${a}`).classList.remove("selected"));
     document.getElementById(`withAsset${asset.charAt(0) + asset.slice(1).toLowerCase()}`).classList.add("selected");
 
+    unlockAmountInput();
     renderWithdrawSlider();
   }
 
@@ -1124,7 +1166,6 @@
     el.classList.add("active");
     updateWithdrawLabels();
 
-    // Re-trigger auto-detection with updated network
     detectInvoiceAmount(document.getElementById("withDest").value);
   }
 
@@ -1198,6 +1239,7 @@
 
       document.getElementById("withDest").value = "";
       document.getElementById("withAmount").value = "";
+      unlockAmountInput();
       loadBalance();
     } catch (err) {
       hapticNotification("error");
