@@ -84,134 +84,134 @@ async function getDirectBalance(userId, telegramId) {
   return { sats: 0, usdt: 0, usdc: 0 };
 }
 
-// Persistent Reply Keyboard (Colorful)
+// Persistent Reply Keyboard — Old labels with blue style
 async function getMainKeyboard(ctx) {
   const rows = [
-    ["💎 Balance", "💖 Deposit"],
-    ["🚀 Withdraw", "📊 History"]
+    [{ text: "💰 Balance", style: "primary" }, { text: "📥 Deposit", style: "primary" }],
+    [{ text: "📤 Withdraw", style: "primary" }, { text: "📜 History", style: "primary" }]
   ];
 
   if (await isAuthorizedAdmin(ctx)) {
-    rows.push(["👑 Admin Panel"]);
+    rows.push([{ text: "👑 Admin Panel", style: "primary" }]);
   }
 
   return Markup.keyboard(rows).resize();
 }
 
 // ----------------------------------------------------
-// KEYBOARDS: COLORFUL WITHDRAW, DEPOSIT & ADMIN
+// KEYBOARDS: WITHDRAW, DEPOSIT & ADMIN (BLUE STYLE)
 // ----------------------------------------------------
 function getWithdrawAssetKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("⚡ Bitcoin (SATS) ─── ₿", "with_asset_sats")],
+    [Markup.button.callback("⚡ Bitcoin (SATS)", "with_asset_sats", { style: "primary" })],
     [
-      Markup.button.callback("💵 USDT ─── 🌐", "with_asset_usdt"),
-      Markup.button.callback("💲 USDC ─── 🔷", "with_asset_usdc")
+      Markup.button.callback("💵 USDT", "with_asset_usdt", { style: "primary" }),
+      Markup.button.callback("💲 USDC", "with_asset_usdc", { style: "primary" })
     ],
-    [Markup.button.callback("◀️ Back to Main Menu ▶️", "gateway_back")]
+    [Markup.button.callback("🔙 Back to Main Menu", "gateway_back", { style: "primary" })]
   ]);
 }
 
 function getSatsWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning ─── ⚡", "with_net_sats_lightning"),
-      Markup.button.callback("₿ On-Chain ─── 🔗", "with_net_sats_onchain")
+      Markup.button.callback("⚡ Lightning", "with_net_sats_lightning", { style: "primary" }),
+      Markup.button.callback("₿ On-Chain", "with_net_sats_onchain", { style: "primary" })
     ],
-    [Markup.button.callback("◀️ Back to Assets ▶️", "with_back_to_assets")]
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getUsdtWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning ─── ⚡", "with_net_usdt_lightning"),
-      Markup.button.callback("⛓️ Ethereum ─── Ξ", "with_net_usdt_ethereum")
+      Markup.button.callback("⚡ Lightning", "with_net_usdt_lightning", { style: "primary" }),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdt_ethereum", { style: "primary" })
     ],
     [
-      Markup.button.callback("🔴 Tron (TRC-20) ─── ⚡", "with_net_usdt_tron"),
-      Markup.button.callback("🟣 Solana ─── ◎", "with_net_usdt_solana")
+      Markup.button.callback("🔴 Tron (TRC-20)", "with_net_usdt_tron", { style: "primary" }),
+      Markup.button.callback("🟣 Solana", "with_net_usdt_solana", { style: "primary" })
     ],
-    [Markup.button.callback("💎 TON ─── 💠", "with_net_usdt_ton")],
-    [Markup.button.callback("◀️ Back to Assets ▶️", "with_back_to_assets")]
+    [Markup.button.callback("💎 TON", "with_net_usdt_ton", { style: "primary" })],
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getUsdcWithdrawNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning ─── ⚡", "with_net_usdc_lightning"),
-      Markup.button.callback("⛓️ Ethereum ─── Ξ", "with_net_usdc_ethereum")
+      Markup.button.callback("⚡ Lightning", "with_net_usdc_lightning", { style: "primary" }),
+      Markup.button.callback("⛓️ Ethereum", "with_net_usdc_ethereum", { style: "primary" })
     ],
     [
-      Markup.button.callback("🟣 Solana ─── ◎", "with_net_usdc_solana")
+      Markup.button.callback("🟣 Solana", "with_net_usdc_solana", { style: "primary" })
     ],
-    [Markup.button.callback("◀️ Back to Assets ▶️", "with_back_to_assets")]
+    [Markup.button.callback("🔙 Back to Assets", "with_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getDepositAssetKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("⚡ Bitcoin (SATS) ─── ₿", "dep_asset_sats")],
+    [Markup.button.callback("⚡ Bitcoin (SATS)", "dep_asset_sats", { style: "primary" })],
     [
-      Markup.button.callback("💵 USDT ─── 🌐", "dep_asset_usdt"),
-      Markup.button.callback("💲 USDC ─── 🔷", "dep_asset_usdc")
+      Markup.button.callback("💵 USDT", "dep_asset_usdt", { style: "primary" }),
+      Markup.button.callback("💲 USDC", "dep_asset_usdc", { style: "primary" })
     ],
-    [Markup.button.callback("◀️ Back ▶️", "gateway_back")]
+    [Markup.button.callback("🔙 Back", "gateway_back", { style: "primary" })]
   ]);
 }
 
 function getUsdtDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning ─── ⚡", "dep_net_usdt_lightning"),
-      Markup.button.callback("⛓️ Ethereum ─── Ξ", "dep_net_usdt_ethereum")
+      Markup.button.callback("⚡ Lightning", "dep_net_usdt_lightning", { style: "primary" }),
+      Markup.button.callback("⛓️ Ethereum", "dep_net_usdt_ethereum", { style: "primary" })
     ],
     [
-      Markup.button.callback("🔴 Tron (TRC-20) ─── ⚡", "dep_net_usdt_tron"),
-      Markup.button.callback("🟣 Solana ─── ◎", "dep_net_usdt_solana")
+      Markup.button.callback("🔴 Tron (TRC-20)", "dep_net_usdt_tron", { style: "primary" }),
+      Markup.button.callback("🟣 Solana", "dep_net_usdt_solana", { style: "primary" })
     ],
-    [Markup.button.callback("💎 TON ─── 💠", "dep_net_usdt_ton")],
-    [Markup.button.callback("◀️ Back to Assets ▶️", "dep_back_to_assets")]
+    [Markup.button.callback("💎 TON", "dep_net_usdt_ton", { style: "primary" })],
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getUsdcDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning ─── ⚡", "dep_net_usdc_lightning"),
-      Markup.button.callback("⛓️ Ethereum ─── Ξ", "dep_net_usdc_ethereum")
+      Markup.button.callback("⚡ Lightning", "dep_net_usdc_lightning", { style: "primary" }),
+      Markup.button.callback("⛓️ Ethereum", "dep_net_usdc_ethereum", { style: "primary" })
     ],
     [
-      Markup.button.callback("🟣 Solana ─── ◎", "dep_net_usdc_solana")
+      Markup.button.callback("🟣 Solana", "dep_net_usdc_solana", { style: "primary" })
     ],
-    [Markup.button.callback("◀️ Back to Assets ▶️", "dep_back_to_assets")]
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getSatsDepositNetworks() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("⚡ Lightning ─── ⚡", "dep_net_sats_lightning"),
-      Markup.button.callback("₿ On-Chain ─── 🔗", "dep_net_sats_onchain")
+      Markup.button.callback("⚡ Lightning", "dep_net_sats_lightning", { style: "primary" }),
+      Markup.button.callback("₿ On-Chain", "dep_net_sats_onchain", { style: "primary" })
     ],
-    [Markup.button.callback("◀️ Back to Assets ▶️", "dep_back_to_assets")]
+    [Markup.button.callback("🔙 Back to Assets", "dep_back_to_assets", { style: "primary" })]
   ]);
 }
 
 function getAdminDashboardKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("👤 Manage Users ─── 👥", "admin_users_menu"),
-      Markup.button.callback("📢 Broadcast ─── 📡", "admin_broadcast_prompt")
+      Markup.button.callback("👤 Manage Users", "admin_users_menu", { style: "primary" }),
+      Markup.button.callback("📢 Broadcast", "admin_broadcast_prompt", { style: "primary" })
     ],
     [
-      Markup.button.callback("📋 Logs Channel ─── 📊", "admin_logs_prompt"),
-      Markup.button.callback("👑 Admins (Add/Del) ─── 🔐", "admin_admins_menu")
+      Markup.button.callback("📋 Logs Channel", "admin_logs_prompt", { style: "primary" }),
+      Markup.button.callback("👑 Admins (Add/Del)", "admin_admins_menu", { style: "primary" })
     ],
     [
-      Markup.button.callback("🔑 Set Speed Key ─── 🗝️", "admin_setkey_prompt"),
-      Markup.button.callback("❌ Close ─── 🚪", "admin_close")
+      Markup.button.callback("🔑 Set Speed Key", "admin_setkey_prompt", { style: "primary" }),
+      Markup.button.callback("❌ Close", "admin_close", { style: "primary" })
     ]
   ]);
 }
@@ -219,16 +219,16 @@ function getAdminDashboardKeyboard() {
 function getAdminUserManagementKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("🚫 Ban User ─── ⛔", "adm_ban_user"),
-      Markup.button.callback("✅ Unban User ─── 🔓", "adm_unban_user")
+      Markup.button.callback("🚫 Ban User", "adm_ban_user", { style: "primary" }),
+      Markup.button.callback("✅ Unban User", "adm_unban_user", { style: "primary" })
     ],
     [
-      Markup.button.callback("➕ Add Balance ─── 💰", "adm_add_bal"),
-      Markup.button.callback("➖ Deduct Balance ─── 📉", "adm_deduct_bal")
+      Markup.button.callback("➕ Add Balance", "adm_add_bal", { style: "primary" }),
+      Markup.button.callback("➖ Deduct Balance", "adm_deduct_bal", { style: "primary" })
     ],
     [
-      Markup.button.callback("🗑️ Delete User ─── ❌", "adm_del_user"),
-      Markup.button.callback("◀️ Back to Admin ▶️", "admin_main_dashboard")
+      Markup.button.callback("🗑️ Delete User", "adm_del_user", { style: "primary" }),
+      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard", { style: "primary" })
     ]
   ]);
 }
@@ -236,12 +236,12 @@ function getAdminUserManagementKeyboard() {
 function getAdminAdminsKeyboard() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("➕ Add Admin ─── 👑", "adm_add_admin"),
-      Markup.button.callback("➖ Delete Admin ─── 🗑️", "adm_del_admin")
+      Markup.button.callback("➕ Add Admin", "adm_add_admin", { style: "primary" }),
+      Markup.button.callback("➖ Delete Admin", "adm_del_admin", { style: "primary" })
     ],
     [
-      Markup.button.callback("📋 List Admins ─── 📜", "adm_list_admins"),
-      Markup.button.callback("◀️ Back to Admin ▶️", "admin_main_dashboard")
+      Markup.button.callback("📋 List Admins", "adm_list_admins", { style: "primary" }),
+      Markup.button.callback("🔙 Back to Admin", "admin_main_dashboard", { style: "primary" })
     ]
   ]);
 }
@@ -325,7 +325,7 @@ async function getWalletOverviewText(userId, telegramId, isAdm) {
   const usdc = bal.usdc.toFixed(2);
   const satsUsd = (sats * SAT_TO_USD).toFixed(2);
   const totalUsd = (Number(satsUsd) + Number(usdt) + Number(usdc)).toFixed(2);
-  const adminBadge = isAdm ? "👑 <b>Admin Mode:</b> ✨ Active\n" : "";
+  const adminBadge = isAdm ? "👑 <b>Admin Mode:</b> Active\n" : "";
 
   return (
     `💳 <b>My Wallet</b>\n\n` +
@@ -340,7 +340,7 @@ async function getWalletOverviewText(userId, telegramId, isAdm) {
   );
 }
 
-// Fixed BOLT-11 Decoder: Accurately detects zero-amount invoices (lnbc1p...) vs amount-encoded invoices
+// Fixed BOLT-11 Decoder
 function decodeBolt11Sats(invoice) {
   const clean = invoice.trim().toLowerCase().replace(/^lightning:/, "");
   const match = clean.match(/^ln(?:bc|tb|bcrt)([0-9]+)([munp]?)1/);
@@ -371,25 +371,23 @@ async function isUserBanned(userId, numericId) {
 }
 
 // ----------------------------------------------------
-// DEPOSIT CHOICE MENU (Colorful)
+// DEPOSIT CHOICE MENU
 // ----------------------------------------------------
 function showDepositChoiceMenu(ctx, { targetCurrency, paymentMethod, networkLabel }) {
   const isSats = targetCurrency === "SATS";
   const backAssetCallback = isSats ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
   let buttons = [
-    [Markup.button.callback("🔢 Enter Specific Amount ─── ✏️", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
-    [Markup.button.callback("⚡ Quick Invoice (Open) ─── 🎯", `dep_opt:open:${targetCurrency}:${paymentMethod}`)],
-    [Markup.button.callback("◀️ Back to Networks ▶️", backAssetCallback)]
+    [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`, { style: "primary" })],
+    [Markup.button.callback("⚡ Quick Invoice (Open Amount)", `dep_opt:open:${targetCurrency}:${paymentMethod}`, { style: "primary" })],
+    [Markup.button.callback("🔙 Back to Networks", backAssetCallback, { style: "primary" })]
   ];
 
   return ctx.editMessageText(
-    `💖 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
-    `✨ <b>Choose your deposit option:</b>\n\n` +
-    `1️⃣ <b>Enter Specific Amount</b>\n` +
-    `   Generate an invoice for your exact amount.\n\n` +
-    `2️⃣ <b>Quick Invoice (Open)</b>\n` +
-    `   Sender can type any amount they wish.\n\n` +
+    `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
+    `✨ <b>Choose your deposit option below:</b>\n\n` +
+    `1️⃣ <b>Enter Specific Amount:</b> Generate an invoice for your exact desired amount (e.g. 50, 500, 50,000 SATS).\n\n` +
+    `2️⃣ <b>Quick Invoice (Open Amount):</b> Generate an invoice where the sender can type any amount in their wallet.\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `💡 <i>Tip: Use Quick Invoice for flexible payments!</i>`,
     {
@@ -450,23 +448,23 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
         ? `💰 <b>Amount:</b> <code>${Number(amount).toLocaleString()} ${targetCurrency}</code>\n`
         : `💰 <b>Amount:</b> <i>Editable when sending</i>\n`;
 
-      caption = `⚡ <b>Lightning Deposit Invoice</b> ⚡\n\n` +
+      caption = `⚡ <b>Lightning Deposit Invoice</b>\n\n` +
         amtLine +
         `🌐 <b>Network:</b> Lightning Network (${targetCurrency})\n\n` +
         `<b>Invoice (tap to copy):</b>\n<code>${data.invoice}</code>\n\n` +
         `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
-        `<i>✨ Scan QR or copy invoice to pay. Waiting for payment...</i>`;
+        `<i>Scan QR or copy invoice to pay. Waiting for payment...</i>`;
     } else {
       const amtLine = isCustomAmount
         ? `💰 <b>Expected Amount:</b> <code>${amount} ${targetCurrency}</code>\n`
         : ``;
 
-      caption = `💖 <b>${targetCurrency} Deposit Address</b> 💖\n\n` +
+      caption = `📥 <b>${targetCurrency} Deposit Address</b>\n\n` +
         amtLine +
         `🌐 <b>Network:</b> ${networkLabel}\n\n` +
         `👉 <b>Deposit Address (tap to copy):</b>\n<code>${data.invoice}</code>\n\n` +
         `🆔 <b>TxID:</b> <code>${txId}</code>\n\n` +
-        `<i>✨ Scan QR or transfer funds to the address above.</i>`;
+        `<i>Scan QR or transfer funds to the address above.</i>`;
     }
 
     if (ctx.callbackQuery) {
@@ -479,7 +477,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       caption,
       parse_mode: "HTML",
       ...Markup.inlineKeyboard([
-        [Markup.button.callback("🔄 Check Status ─── ✅", `check_dep:${txId}`)]
+        [Markup.button.callback("🔄 Check Status", `check_dep:${txId}`, { style: "primary" })]
       ])
     });
 
@@ -491,8 +489,8 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback("🔢 Enter Specific Amount ─── ✏️", `dep_opt:amt:${targetCurrency}:${paymentMethod}`)],
-          [Markup.button.callback("◀️ Back to Networks ▶️", backCallback)]
+          [Markup.button.callback("🔢 Enter Specific Amount", `dep_opt:amt:${targetCurrency}:${paymentMethod}`, { style: "primary" })],
+          [Markup.button.callback("🔙 Back to Networks", backCallback, { style: "primary" })]
         ])
       }
     );
@@ -500,7 +498,7 @@ async function handleGenerateDeposit(ctx, { targetCurrency, paymentMethod, amoun
 }
 
 // ----------------------------------------------------
-// CALLBACK ACTION: CHECK DEPOSIT STATUS (IMPROVED)
+// CALLBACK ACTION: CHECK DEPOSIT STATUS
 // ----------------------------------------------------
 bot.action(/^check_dep:(.+)$/, async (ctx) => {
   const paymentId = ctx.match[1];
@@ -522,7 +520,7 @@ bot.action(/^check_dep:(.+)$/, async (ctx) => {
 
       await ctx.editMessageReplyMarkup(
         Markup.inlineKeyboard([
-          [Markup.button.callback("✅ Payment Confirmed ─── 🎉", "gateway_back")]
+          [Markup.button.callback("✅ Payment Confirmed", "gateway_back", { style: "primary" })]
         ]).reply_markup
       ).catch(() => {});
     } else {
@@ -634,7 +632,7 @@ bot.hears("💰 Balance", async (ctx) => {
   await ctx.reply(walletText, {
     parse_mode: "HTML",
     ...Markup.inlineKeyboard([
-      Markup.button.webApp("📱 Open WebApp ─── 🌐", APP_URL)
+      Markup.button.webApp("📱 Open WebApp", APP_URL, { style: "primary" })
     ])
   });
 });
@@ -651,7 +649,7 @@ bot.hears("📜 History", async (ctx) => {
     const data = await res.json();
 
     if (!data.success || !data.history || data.history.length === 0) {
-      return ctx.reply(`📜 <b>Transaction History</b>\n\n✨ No transactions found yet.`, { parse_mode: "HTML" });
+      return ctx.reply(`📜 <b>Transaction History</b>\n\nNo transactions found yet.`, { parse_mode: "HTML" });
     }
 
     let msg = `📜 <b>Recent Transactions:</b>\n\n`;
@@ -661,8 +659,8 @@ bot.hears("📜 History", async (ctx) => {
       const amt = tx.amount;
       const txId = tx.tx_id || tx.id || "N/A";
 
-      if (tx.type === "deposit") msg += `💖 <b>Deposit:</b> +${amt} ${curr}\n`;
-      else if (tx.type === "withdrawal" || tx.type === "instant_send") msg += `🚀 <b>Withdrawal:</b> -${amt} ${curr}\n`;
+      if (tx.type === "deposit") msg += `📥 <b>Deposit:</b> +${amt} ${curr}\n`;
+      else if (tx.type === "withdrawal" || tx.type === "instant_send") msg += `📤 <b>Withdrawal:</b> -${amt} ${curr}\n`;
       else if (tx.type === "transfer_sent") msg += `⚡ <b>Sent to:</b> @${tx.to || "user"} (-${amt} ${curr})\n`;
       else if (tx.type === "transfer_received") msg += `⚡ <b>Received from:</b> @${tx.from || "user"} (+${amt} ${curr})\n`;
       else msg += `🔄 <b>Transfer:</b> ${amt} ${curr}\n`;
@@ -704,7 +702,7 @@ bot.hears("📤 Withdraw", async (ctx) => {
   const bal = await getDirectBalance(userId, ctx.from.id);
 
   await ctx.reply(
-    `🚀 <b>Withdraw / Send Funds</b>\n\n` +
+    `📤 <b>Withdraw / Send Funds</b>\n` +
     `💰 <b>Available Balances:</b>\n` +
     `• ⚡ SATS: <b>${bal.sats.toLocaleString()} SATS</b>\n` +
     `• 💵 USDT: <b>${bal.usdt.toFixed(2)} USDT</b>\n` +
@@ -717,7 +715,6 @@ bot.hears("📤 Withdraw", async (ctx) => {
   );
 });
 
-// Admin Panel
 bot.hears("👑 Admin Panel", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) {
     return ctx.reply("⛔ Access denied: You are not authorized.");
@@ -727,7 +724,7 @@ bot.hears("👑 Admin Panel", async (ctx) => {
   await clearSession(ctx.from.id);
 
   await ctx.reply(
-    `👑 <b>Administrator Control Panel</b>\n\n✨ Select an administration module below:`,
+    `👑 <b>Administrator Control Panel</b>\n\nSelect an administration module below:`,
     {
       parse_mode: "HTML",
       ...getAdminDashboardKeyboard()
@@ -753,17 +750,17 @@ bot.action("dep_back_to_assets", async (ctx) => {
 
 bot.action("dep_asset_usdt", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`💚 <b>Select USDT Network:</b> 💚`, { parse_mode: "HTML", ...getUsdtDepositNetworks() });
+  await ctx.editMessageText(`🔥 <b>Select USDT Network:</b> 🔥`, { parse_mode: "HTML", ...getUsdtDepositNetworks() });
 });
 
 bot.action("dep_asset_usdc", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`💙 <b>Select USDC Network:</b> 💙`, { parse_mode: "HTML", ...getUsdcDepositNetworks() });
+  await ctx.editMessageText(`🔥 <b>Select USDC Network:</b> 🔥`, { parse_mode: "HTML", ...getUsdcDepositNetworks() });
 });
 
 bot.action("dep_asset_sats", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`💛 <b>Select Bitcoin Network:</b> 💛`, { parse_mode: "HTML", ...getSatsDepositNetworks() });
+  await ctx.editMessageText(`🔥 <b>Select Bitcoin Network:</b> 🔥`, { parse_mode: "HTML", ...getSatsDepositNetworks() });
 });
 
 // SATS Networks -> Choice Menu
@@ -849,13 +846,13 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
     const exampleAmt = isSats ? "50, 100, 1000" : "10, 25";
     const backCallback = isSats ? "dep_asset_sats" : (targetCurrency === "USDT" ? "dep_asset_usdt" : "dep_asset_usdc");
 
-    const promptText = `💖 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
-      `✏️ Please reply with the exact amount of <b>${targetCurrency}</b> you want to deposit:\n\n` +
+    const promptText = `📥 <b>Deposit ${targetCurrency} (${networkLabel})</b>\n\n` +
+      `Please reply with the exact amount of <b>${targetCurrency}</b> you want to deposit:\n\n` +
       `<i>Example: <code>${exampleAmt}</code></i>\n\n` +
       `<i>Type /cancel to abort at any time.</i>`;
 
     const promptKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback("◀️ Back to Networks ▶️", backCallback)]
+      [Markup.button.callback("🔙 Back to Networks", backCallback, { style: "primary" })]
     ]);
 
     try {
@@ -881,7 +878,7 @@ bot.action(/^dep_opt:(amt|open):([^:]+):([^:]+)$/, async (ctx) => {
 // ----------------------------------------------------
 bot.action("with_back_to_assets", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`🚀 <b>Select a Withdrawal Asset:</b> 🚀`, {
+  await ctx.editMessageText(`🔥 <b>Select a Withdrawal Asset:</b> 🔥`, {
     parse_mode: "HTML",
     ...getWithdrawAssetKeyboard()
   });
@@ -889,7 +886,7 @@ bot.action("with_back_to_assets", async (ctx) => {
 
 bot.action("with_asset_sats", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`💛 <b>Select Bitcoin (SATS) Withdrawal Network:</b> 💛`, {
+  await ctx.editMessageText(`🔥 <b>Select Bitcoin (SATS) Withdrawal Network:</b> 🔥`, {
     parse_mode: "HTML",
     ...getSatsWithdrawNetworks()
   });
@@ -897,7 +894,7 @@ bot.action("with_asset_sats", async (ctx) => {
 
 bot.action("with_asset_usdt", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`💚 <b>Select USDT Withdrawal Network:</b> 💚`, {
+  await ctx.editMessageText(`🔥 <b>Select USDT Withdrawal Network:</b> 🔥`, {
     parse_mode: "HTML",
     ...getUsdtWithdrawNetworks()
   });
@@ -905,7 +902,7 @@ bot.action("with_asset_usdt", async (ctx) => {
 
 bot.action("with_asset_usdc", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.editMessageText(`💙 <b>Select USDC Withdrawal Network:</b> 💙`, {
+  await ctx.editMessageText(`🔥 <b>Select USDC Withdrawal Network:</b> 🔥`, {
     parse_mode: "HTML",
     ...getUsdcWithdrawNetworks()
   });
@@ -924,9 +921,9 @@ bot.action("with_net_sats_lightning", async (ctx) => {
   });
 
   await ctx.editMessageText(
-    `⚡ <b>Withdraw SATS (Lightning Network)</b>\n\n` +
-    `💰 Available: <b>${bal.sats.toLocaleString()} SATS</b>\n\n` +
-    `📝 Paste recipient's <b>Lightning Invoice</b> (<code>lnbc...</code>) or <b>Lightning Address</b> (e.g. <code>name@speed.app</code>):`,
+    `⚡ <b>Withdraw SATS (Lightning Network)</b>\n` +
+    `Available: <b>${bal.sats.toLocaleString()} SATS</b>\n\n` +
+    `Paste recipient's <b>Lightning Invoice</b> (<code>lnbc...</code>) or <b>Lightning Address</b> (e.g. <code>name@speed.app</code>):`,
     { parse_mode: "HTML" }
   );
 });
@@ -944,9 +941,9 @@ bot.action("with_net_sats_onchain", async (ctx) => {
   });
 
   await ctx.editMessageText(
-    `₿ <b>Bitcoin On-Chain Withdrawal:</b>\n\n` +
-    `💰 Available: <b>${bal.sats.toLocaleString()} SATS</b>\n\n` +
-    `📝 Paste your Bitcoin On-Chain destination address (<code>bc1...</code> or <code>1...</code>):`,
+    `₿ <b>Bitcoin On-Chain Withdrawal:</b>\n` +
+    `Available: <b>${bal.sats.toLocaleString()} SATS</b>\n\n` +
+    `Paste your Bitcoin On-Chain destination address (<code>bc1...</code> or <code>1...</code>):`,
     { parse_mode: "HTML" }
   );
 });
@@ -957,7 +954,7 @@ bot.action("with_net_usdt_lightning", async (ctx) => {
   const bal = await getDirectBalance(userId, ctx.from.id);
 
   await setSession(ctx.from.id, { step: "awaiting_withdraw_dest", target_currency: "USDT", withdraw_method: "lightning" });
-  await ctx.editMessageText(`⚡ <b>USDT (Lightning) Withdrawal:</b>\n\n💰 Available: <b>${bal.usdt.toFixed(2)} USDT</b>\n\n📝 Paste recipient's Lightning Invoice or Address:`, { parse_mode: "HTML" });
+  await ctx.editMessageText(`⚡ <b>USDT (Lightning) Withdrawal:</b>\nAvailable: <b>${bal.usdt.toFixed(2)} USDT</b>\n\nPaste recipient's Lightning Invoice or Address:`, { parse_mode: "HTML" });
 });
 
 bot.action("with_net_usdt_ethereum", async (ctx) => {
@@ -966,7 +963,7 @@ bot.action("with_net_usdt_ethereum", async (ctx) => {
   const bal = await getDirectBalance(userId, ctx.from.id);
 
   await setSession(ctx.from.id, { step: "awaiting_withdraw_dest", target_currency: "USDT", withdraw_method: "ethereum" });
-  await ctx.editMessageText(`⛓️ <b>USDT (Ethereum - ERC20) Withdrawal:</b>\n\n💰 Available: <b>${bal.usdt.toFixed(2)} USDT</b>\n\n📝 Paste your Ethereum address (<code>0x...</code>):`, { parse_mode: "HTML" });
+  await ctx.editMessageText(`⛓️ <b>USDT (Ethereum - ERC20) Withdrawal:</b>\nAvailable: <b>${bal.usdt.toFixed(2)} USDT</b>\n\nPaste your Ethereum address (<code>0x...</code>):`, { parse_mode: "HTML" });
 });
 
 bot.action("with_net_usdt_tron", async (ctx) => {
@@ -975,7 +972,7 @@ bot.action("with_net_usdt_tron", async (ctx) => {
   const bal = await getDirectBalance(userId, ctx.from.id);
 
   await setSession(ctx.from.id, { step: "awaiting_withdraw_dest", target_currency: "USDT", withdraw_method: "tron" });
-  await ctx.editMessageText(`🔴 <b>USDT (Tron - TRC20) Withdrawal:</b>\n\n💰 Available: <b>${bal.usdt.toFixed(2)} USDT</b>\n\n📝 Paste your Tron destination address (<code>T...</code>):`, { parse_mode: "HTML" });
+  await ctx.editMessageText(`🔴 <b>USDT (Tron - TRC20) Withdrawal:</b>\nAvailable: <b>${bal.usdt.toFixed(2)} USDT</b>\n\nPaste your Tron destination address (<code>T...</code>):`, { parse_mode: "HTML" });
 });
 
 bot.action("with_net_usdt_solana", async (ctx) => {
@@ -984,7 +981,7 @@ bot.action("with_net_usdt_solana", async (ctx) => {
   const bal = await getDirectBalance(userId, ctx.from.id);
 
   await setSession(ctx.from.id, { step: "awaiting_withdraw_dest", target_currency: "USDT", withdraw_method: "solana" });
-  await ctx.editMessageText(`🟣 <b>USDT (Solana) Withdrawal:</b>\n\n💰 Available: <b>${bal.usdt.toFixed(2)} USDT</b>\n\n📝 Paste your Solana destination address:`, { parse_mode: "HTML" });
+  await ctx.editMessageText(`🟣 <b>USDT (Solana) Withdrawal:</b>\nAvailable: <b>${bal.usdt.toFixed(2)} USDT</b>\n\nPaste your Solana destination address:`, { parse_mode: "HTML" });
 });
 
 bot.action("with_net_usdt_ton", async (ctx) => {
@@ -993,7 +990,7 @@ bot.action("with_net_usdt_ton", async (ctx) => {
   const bal = await getDirectBalance(userId, ctx.from.id);
 
   await setSession(ctx.from.id, { step: "awaiting_withdraw_dest", target_currency: "USDT", withdraw_method: "ton" });
-  await ctx.editMessageText(`💎 <b>USDT (TON) Withdrawal:</b>\n\n💰 Available: <b>${bal.usdt.toFixed(2)} USDT</b>\n\n📝 Paste your TON destination address:`, { parse_mode: "HTML" });
+  await ctx.editMessageText(`💎 <b>USDT (TON) Withdrawal:</b>\nAvailable: <b>${bal.usdt.toFixed(2)} USDT</b>\n\nPaste your TON destination address:`, { parse_mode: "HTML" });
 });
 
 bot.action("with_net_usdc_lightning", async (ctx) => {
@@ -1002,7 +999,7 @@ bot.action("with_net_usdc_lightning", async (ctx) => {
   const bal = await getDirectBalance(userId, ctx.from.id);
 
   await setSession(ctx.from.id, { step: "awaiting_withdraw_dest", target_currency: "USDC", withdraw_method: "lightning" });
-  await ctx.editMessageText(`⚡ <b>USDC (Lightning) Withdrawal:</b>\n\n💰 Available: <b>${bal.usdc.toFixed(2)} USDC</b>\n\n📝 Paste recipient's Lightning Invoice or Address:`, { parse_mode: "HTML" });
+  await ctx.editMessageText(`⚡ <b>USDC (Lightning) Withdrawal:</b>\nAvailable: <b>${bal.usdc.toFixed(2)} USDC</b>\n\nPaste recipient's Lightning Invoice or Address:`, { parse_mode: "HTML" });
 });
 
 bot.action("with_net_usdc_ethereum", async (ctx) => {
@@ -1011,7 +1008,7 @@ bot.action("with_net_usdc_ethereum", async (ctx) => {
   const bal = await getDirectBalance(userId, ctx.from.id);
 
   await setSession(ctx.from.id, { step: "awaiting_withdraw_dest", target_currency: "USDC", withdraw_method: "ethereum" });
-  await ctx.editMessageText(`⛓️ <b>USDC (Ethereum) Withdrawal:</b>\n\n💰 Available: <b>${bal.usdc.toFixed(2)} USDC</b>\n\n📝 Paste your Ethereum address (<code>0x...</code>):`, { parse_mode: "HTML" });
+  await ctx.editMessageText(`⛓️ <b>USDC (Ethereum) Withdrawal:</b>\nAvailable: <b>${bal.usdc.toFixed(2)} USDC</b>\n\nPaste your Ethereum address (<code>0x...</code>):`, { parse_mode: "HTML" });
 });
 
 bot.action("with_net_usdc_solana", async (ctx) => {
@@ -1020,7 +1017,7 @@ bot.action("with_net_usdc_solana", async (ctx) => {
   const bal = await getDirectBalance(userId, ctx.from.id);
 
   await setSession(ctx.from.id, { step: "awaiting_withdraw_dest", target_currency: "USDC", withdraw_method: "solana" });
-  await ctx.editMessageText(`🟣 <b>USDC (Solana) Withdrawal:</b>\n\n💰 Available: <b>${bal.usdc.toFixed(2)} USDC</b>\n\n📝 Paste your Solana destination address:`, { parse_mode: "HTML" });
+  await ctx.editMessageText(`🟣 <b>USDC (Solana) Withdrawal:</b>\nAvailable: <b>${bal.usdc.toFixed(2)} USDC</b>\n\nPaste your Solana destination address:`, { parse_mode: "HTML" });
 });
 
 bot.action("gateway_back", async (ctx) => {
@@ -1029,7 +1026,7 @@ bot.action("gateway_back", async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   await ctx.deleteMessage().catch(() => {});
   const kb = await getMainKeyboard(ctx);
-  await ctx.reply("🏠 <b>Returned to main menu.</b>", { parse_mode: "HTML", ...kb });
+  await ctx.reply("🔙 <b>Returned to main menu.</b>", { parse_mode: "HTML", ...kb });
 });
 
 // Admin Callbacks
@@ -1061,63 +1058,63 @@ bot.action("adm_ban_user", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "adm_input_ban_user" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("🚫 <b>Ban User:</b>\n\nSend Username or Numeric ID to ban:", { parse_mode: "HTML" });
+  await ctx.reply("🚫 <b>Ban User:</b>\nSend Username or Numeric ID to ban:", { parse_mode: "HTML" });
 });
 
 bot.action("adm_unban_user", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "adm_input_unban_user" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("✅ <b>Unban User:</b>\n\nSend Username or Numeric ID to unban:", { parse_mode: "HTML" });
+  await ctx.reply("✅ <b>Unban User:</b>\nSend Username or Numeric ID to unban:", { parse_mode: "HTML" });
 });
 
 bot.action("adm_del_user", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "adm_input_del_user" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("🗑️ <b>Delete User:</b>\n\nSend Username or Numeric ID to delete permanently:", { parse_mode: "HTML" });
+  await ctx.reply("🗑️ <b>Delete User:</b>\nSend Username or Numeric ID to delete permanently:", { parse_mode: "HTML" });
 });
 
 bot.action("adm_add_bal", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "adm_input_add_bal_target" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("➕ <b>Add Balance:</b>\n\nSend Username or Numeric ID:", { parse_mode: "HTML" });
+  await ctx.reply("➕ <b>Add Balance:</b>\nSend Username or Numeric ID:", { parse_mode: "HTML" });
 });
 
 bot.action("adm_deduct_bal", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "adm_input_deduct_bal_target" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("➖ <b>Deduct Balance:</b>\n\nSend Username or Numeric ID:", { parse_mode: "HTML" });
+  await ctx.reply("➖ <b>Deduct Balance:</b>\nSend Username or Numeric ID:", { parse_mode: "HTML" });
 });
 
 bot.action("admin_broadcast_prompt", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "adm_input_broadcast" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("📢 <b>Broadcast:</b>\n\nSend the message to deliver to all bot users:", { parse_mode: "HTML" });
+  await ctx.reply("📢 <b>Broadcast:</b>\nSend the message to deliver to all bot users:", { parse_mode: "HTML" });
 });
 
 bot.action("admin_logs_prompt", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "adm_input_logs_channel" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("📋 <b>Set Logs Channel:</b>\n\nSend the Channel ID (e.g. <code>-1001234567890</code>):", { parse_mode: "HTML" });
+  await ctx.reply("📋 <b>Set Logs Channel:</b>\nSend the Channel ID (e.g. <code>-1001234567890</code>):", { parse_mode: "HTML" });
 });
 
 bot.action("adm_add_admin", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "adm_input_add_admin" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("➕ <b>Add Co-Admin:</b>\n\nSend the Numeric ID or @username:", { parse_mode: "HTML" });
+  await ctx.reply("➕ <b>Add Co-Admin:</b>\nSend the Numeric ID or @username:", { parse_mode: "HTML" });
 });
 
 bot.action("adm_del_admin", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "adm_input_del_admin" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("➖ <b>Remove Co-Admin:</b>\n\nSend the Numeric ID or @username to remove:", { parse_mode: "HTML" });
+  await ctx.reply("➖ <b>Remove Co-Admin:</b>\nSend the Numeric ID or @username to remove:", { parse_mode: "HTML" });
 });
 
 bot.action("adm_list_admins", async (ctx) => {
@@ -1139,7 +1136,7 @@ bot.action("admin_setkey_prompt", async (ctx) => {
   if (!(await isAuthorizedAdmin(ctx))) return ctx.answerCbQuery("Unauthorized");
   await setSession(ctx.from.id, { step: "awaiting_admin_key" });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply("🔑 <b>Set Speed Secret API Key:</b>\n\nPaste your key directly below:", { parse_mode: "HTML" });
+  await ctx.reply("🔑 <b>Set Speed Secret API Key:</b>\nPaste your key directly below:", { parse_mode: "HTML" });
 });
 
 // ----------------------------------------------------
@@ -1159,7 +1156,7 @@ bot.on("text", async (ctx) => {
     return ctx.reply(walletText, { parse_mode: "HTML", ...kb });
   }
 
-  if (text.startsWith("/") || ["💎 Balance", "💖 Deposit", "🚀 Withdraw", "📊 History", "👑 Admin Panel", "💰 Balance", "📥 Deposit", "📤 Withdraw", "📜 History"].includes(text)) {
+  if (text.startsWith("/") || ["💰 Balance", "📥 Deposit", "📤 Withdraw", "📜 History", "👑 Admin Panel"].includes(text)) {
     stopDepositWatcher(ctx.from.id);
     await clearSession(ctx.from.id);
     return;
@@ -1351,9 +1348,9 @@ bot.on("text", async (ctx) => {
         {
           parse_mode: "HTML",
           ...Markup.inlineKeyboard([
-            [Markup.button.callback(`🚀 Send ${detectedAmount.toLocaleString()} ${detectedCurrency} ─── ⚡`, "confirm_send")],
-            [Markup.button.callback("✏️ Edit Amount ─── 🎯", "edit_withdraw_amt")],
-            [Markup.button.callback("❌ Cancel ─── 🚫", "cancel_send")]
+            [Markup.button.callback(`🚀 Send ${detectedAmount.toLocaleString()} ${detectedCurrency}`, "confirm_send", { style: "primary" })],
+            [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt", { style: "primary" })],
+            [Markup.button.callback("❌ Cancel", "cancel_send", { style: "primary" })]
           ])
         }
       );
@@ -1367,7 +1364,7 @@ bot.on("text", async (ctx) => {
     await setSession(ctx.from.id, { step: "awaiting_withdraw_amount", destination: text, currency: detectedCurrency });
     return ctx.reply(
       `📍 <b>Destination:</b>\n<code>${text.substring(0, 30)}...</code>\n\n` +
-      `💰 Available: <b>${availText}</b>\n\n` +
+      `Available: <b>${availText}</b>\n\n` +
       `✏️ <b>Enter the amount in ${detectedCurrency} you want to send:</b>`,
       { parse_mode: "HTML" }
     );
@@ -1403,17 +1400,13 @@ bot.on("text", async (ctx) => {
     });
 
     return ctx.reply(
-      `⚡ <b>Payment Summary</b>\n\n` +
-      `💰 <b>Amount:</b> ${amount.toLocaleString()} ${curr}\n` +
-      `🎯 <b>Recipient:</b> <code>${destination}</code>\n` +
-      `🌐 <b>Method:</b> ${withdrawMethod.toUpperCase()}\n\n` +
-      `Click Send below:`,
+      `⚡ <b>Payment Summary</b>\n\n💰 <b>Amount:</b> ${amount.toLocaleString()} ${curr}\n🎯 <b>Recipient:</b> <code>${destination}</code>\n🌐 <b>Method:</b> ${withdrawMethod.toUpperCase()}\n\nClick Send below:`,
       {
         parse_mode: "HTML",
         ...Markup.inlineKeyboard([
-          [Markup.button.callback(`🚀 Send ${amount.toLocaleString()} ${curr} ─── ⚡`, "confirm_send")],
-          [Markup.button.callback("✏️ Edit Amount ─── 🎯", "edit_withdraw_amt")],
-          [Markup.button.callback("❌ Cancel ─── 🚫", "cancel_send")]
+          [Markup.button.callback(`🚀 Send ${amount.toLocaleString()} ${curr}`, "confirm_send", { style: "primary" })],
+          [Markup.button.callback("✏️ Edit Amount", "edit_withdraw_amt", { style: "primary" })],
+          [Markup.button.callback("❌ Cancel", "cancel_send", { style: "primary" })]
         ])
       }
     );
@@ -1436,8 +1429,8 @@ bot.action("edit_withdraw_amt", async (ctx) => {
 
   await ctx.editMessageText(
     `✏️ <b>Edit Send Amount</b>\n\n` +
-    `📍 Destination: <code>${destShort}</code>\n\n` +
-    `💬 Please reply with the exact <b>amount in ${curr}</b> you want to send:`,
+    `Destination: <code>${destShort}</code>\n\n` +
+    `Please reply with the exact <b>amount in ${curr}</b> you want to send:`,
     { parse_mode: "HTML" }
   );
 });
