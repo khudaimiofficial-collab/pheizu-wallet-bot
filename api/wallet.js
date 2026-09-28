@@ -217,22 +217,21 @@ function extractPaymentTarget(obj) {
   return null;
 }
 
-// Robust helper to extract real amount paid across all Speed API response formats
+// Robust amount extractor: checks all possible fields returned by Speed
 function extractPaidAmount(payment, invData) {
   if (!payment) return Number(invData?.amount || 0);
 
   const candidates = [
-    payment.total_amount_received,
     payment.amount_received,
-    payment.total_amount_paid,
+    payment.total_amount_received,
     payment.paid_amount,
     payment.amount_paid,
+    payment.total_amount_paid,
     payment.received_amount,
     payment.target_amount,
     payment.amount,
-    payment.total_amount,
-    payment.payments?.[0]?.amount,
     payment.payments?.[0]?.amount_received,
+    payment.payments?.[0]?.amount,
     payment.payments?.[0]?.target_amount,
     payment.charges?.data?.[0]?.amount,
     invData?.amount
@@ -242,7 +241,7 @@ function extractPaidAmount(payment, invData) {
     if (val !== undefined && val !== null) {
       const num = Number(val);
       if (!isNaN(num) && num > 0) {
-        // If represented in BTC decimal (< 0.01 BTC, e.g. 0.00000010 = 10 sats)
+        // If received in BTC decimal (< 0.01 BTC, e.g. 0.00000010 = 10 sats)
         if (num < 0.01 && (payment.currency === "BTC" || payment.target_currency === "BTC" || invData?.target_currency === "BTC")) {
           return Math.round(num * 100000000);
         }
@@ -374,7 +373,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, history: list.slice(0, 10) });
     }
 
-    // 3. CREATE DEPOSIT INVOICE
+    // 3. CREATE DEPOSIT INVOICE (Open Amount 0 Supported)
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
@@ -500,7 +499,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 4. CHECK DEPOSIT STATUS (ACCURATELY EXTRACTS INCOMING SATS)
+    // 4. CHECK DEPOSIT STATUS — NEVER HARDCODES OR ACCEPTS 0 SATS
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
       if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
@@ -517,7 +516,6 @@ module.exports = async function handler(req, res) {
       }
 
       const invData = invDoc.exists ? invDoc.data() : null;
-      let sats = Number(invData?.amount || 0);
       const curr = invData?.target_currency || "SATS";
       const creditTarget = invData?.user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
       const storedInvoice = invData?.invoice || "";
@@ -526,14 +524,14 @@ module.exports = async function handler(req, res) {
       const wallet = await findUserWallet([creditTarget, telegram_id, invData?.telegram_id, user_id]);
       const targetNumericChatId = await resolveNumericTelegramId(creditTarget, telegram_id || invData?.telegram_id || wallet?.data?.telegram_id);
 
-      // Only return early if already verified AND amount > 0
+      // Return early ONLY if already verified AND amount > 0
       if (invData && invData.is_paid && Number(invData.amount || 0) > 0 && invData.notified) {
         return res.status(200).json({
           success: true,
           is_paid: true,
           status: "paid",
           tx_id: payment_id,
-          amount: invData.amount,
+          amount: Number(invData.amount),
           balance: wallet ? wallet.balance : 0,
           currency: curr
         });
@@ -543,8 +541,9 @@ module.exports = async function handler(req, res) {
       const speedId = invData?.speed_payment_id || invData?.speed_payrequest_id || invData?.id || payment_id;
 
       let payment = null;
+      let detectedAmount = 0;
 
-      // STEP A: If PayRequest, fetch from /payrequests/:id/payments AND /payrequests/:id
+      // STEP A: If PayRequest, check /payrequests/:id/payments
       if (speedId.startsWith("pr_") || invData?.speed_source === "payrequests" || invData?.speed_payrequest_id) {
         const prId = invData?.speed_payrequest_id || speedId;
         
@@ -552,33 +551,42 @@ module.exports = async function handler(req, res) {
           const prPayRes = await speedRequest(`payrequests/${prId}/payments`, "GET", null, apiKey);
           if (prPayRes.ok && prPayRes.data) {
             const list = prPayRes.data.data || prPayRes.data.items || prPayRes.data.payments || (Array.isArray(prPayRes.data) ? prPayRes.data : []);
-            if (list.length > 0) payment = list[0];
+            if (list.length > 0) {
+              payment = list[0];
+              const pAmt = extractPaidAmount(list[0], invData);
+              if (pAmt > detectedAmount) detectedAmount = pAmt;
+            }
           }
         } catch (e) {}
 
-        // Also fetch the PayRequest object directly to check total_amount_received
+        // Check PayRequest direct object (safely, without overwriting payment)
         try {
           const prDirect = await speedRequest(`payrequests/${prId}`, "GET", null, apiKey);
           if (prDirect.ok && prDirect.data) {
+            const directAmt = extractPaidAmount(prDirect.data, invData);
+            if (directAmt > detectedAmount) detectedAmount = directAmt;
             if (!payment) payment = prDirect.data;
-            else Object.assign(payment, prDirect.data);
           }
         } catch (e) {}
       }
 
       // STEP B: If Payment Address, check /payment-addresses/:id/payments
-      if (!payment && (speedId.startsWith("pa_") || invData?.speed_source === "payment-addresses")) {
+      if ((!payment || detectedAmount <= 0) && (speedId.startsWith("pa_") || invData?.speed_source === "payment-addresses")) {
         try {
           const paRes = await speedRequest(`payment-addresses/${speedId}/payments`, "GET", null, apiKey);
           if (paRes.ok && paRes.data) {
             const list = paRes.data.data || paRes.data.items || (Array.isArray(paRes.data) ? paRes.data : []);
-            if (list.length > 0) payment = list[0];
+            if (list.length > 0) {
+              payment = list[0];
+              const paAmt = extractPaidAmount(list[0], invData);
+              if (paAmt > detectedAmount) detectedAmount = paAmt;
+            }
           }
         } catch (e) {}
       }
 
-      // STEP C: Check /payments/:id
-      if (!payment) {
+      // STEP C: Check standard payments endpoints
+      if (!payment || detectedAmount <= 0) {
         const endpointsToTry = [
           `payments/${speedId}`,
           `checkout/sessions/${speedId}`,
@@ -588,21 +596,31 @@ module.exports = async function handler(req, res) {
         for (const ep of endpointsToTry) {
           try {
             const r = await speedRequest(ep, "GET", null, apiKey);
-            if (r.ok && r.data && (r.data.id || r.data.status || r.data.state || r.data.paid_at)) {
-              payment = r.data;
-              break;
+            if (r.ok && r.data) {
+              const list = r.data.data || r.data.items || [];
+              const obj = list.length > 0 ? list[0] : r.data;
+              if (obj && (obj.id || obj.status || obj.state || obj.paid_at)) {
+                if (!payment) payment = obj;
+                const epAmt = extractPaidAmount(obj, invData);
+                if (epAmt > detectedAmount) detectedAmount = epAmt;
+                if (detectedAmount > 0) break;
+              }
             }
           } catch (e) {}
         }
       }
 
       // STEP D: Fallback search by invoice string
-      if (!payment && storedInvoice) {
+      if ((!payment || detectedAmount <= 0) && storedInvoice) {
         try {
           const search = await speedRequest(`payments?search=${encodeURIComponent(storedInvoice.substring(0, 60))}`, "GET", null, apiKey);
           if (search.ok && search.data) {
             const list = search.data.data || search.data.items || [];
-            if (list.length > 0) payment = list[0];
+            if (list.length > 0) {
+              if (!payment) payment = list[0];
+              const sAmt = extractPaidAmount(list[0], invData);
+              if (sAmt > detectedAmount) detectedAmount = sAmt;
+            }
           }
         } catch (e) {}
       }
@@ -619,11 +637,10 @@ module.exports = async function handler(req, res) {
       const alreadyLandedStatuses = ["confirming", "processing", "detected", "unconfirmed", "in_progress", "in-progress"];
       const isLightningPayment = payMethod === "lightning";
 
-      // Detect funds on PayRequests
       const hasPayrequestFunds = (
         Number(payment?.total_amount_received || 0) > 0 ||
         Number(payment?.payment_count || 0) > 0 ||
-        (Array.isArray(payment?.payments) && payment.payments.length > 0)
+        detectedAmount > 0
       );
 
       const hasPaidFlag =
@@ -639,20 +656,20 @@ module.exports = async function handler(req, res) {
         (isLightningPayment && alreadyLandedStatuses.includes(rawStatus)) ||
         hasPaidFlag;
 
-      // 🔥 Extract the real amount paid (e.g. 10 sats)
-      const realPaidAmount = extractPaidAmount(payment, invData);
+      // Extract the real incoming amount
+      const finalSats = detectedAmount > 0 ? detectedAmount : extractPaidAmount(payment, invData);
 
-      if (isPaid && realPaidAmount > 0) {
-        const finalSats = realPaidAmount;
+      // 🔥 NEVER finalize as paid if the amount is still 0 (wait for Speed to settle the amount!)
+      if (isPaid && finalSats > 0) {
         const finalCurr = curr || payment?.target_currency || "SATS";
 
         let updatedBal = 0;
         if (wallet) {
           const batch = db.batch();
 
-          // Calculate delta if it was previously credited with 0
-          const previouslyCredited = Number(invData?.amount || 0);
-          const delta = finalSats - previouslyCredited;
+          // Calculate difference if previously recorded as 0
+          const oldRecordedAmt = Number(invData?.amount || 0);
+          const delta = finalSats - oldRecordedAmt;
 
           if (invRef) {
             batch.set(invRef, {
@@ -697,7 +714,7 @@ module.exports = async function handler(req, res) {
           updatedBal = wallet.balance + (finalCurr === "SATS" ? delta : 0);
         }
 
-        // Send Telegram notification with the real amount
+        // Notify user via Telegram bot chat with real sats
         if (targetNumericChatId) {
           await notifyTelegramUser(
             targetNumericChatId,
@@ -727,12 +744,13 @@ module.exports = async function handler(req, res) {
         });
       }
 
+      // If Speed detected the payment but amount is still settling, return processing
       return res.status(200).json({
         success: true,
         is_paid: false,
-        status: rawStatus || "pending",
+        status: isPaid ? "processing" : (rawStatus || "pending"),
         tx_id: payment_id,
-        amount: sats,
+        amount: 0,
         balance: wallet ? wallet.balance : 0,
         currency: curr
       });
