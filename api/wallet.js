@@ -31,9 +31,10 @@ function getDb() {
 }
 
 const db = getDb();
-const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
-const WITHDRAWAL_FEE_PERCENT = 0.02; // 2% Platform Fee on Withdrawals
+const WITHDRAWAL_FEE_PERCENT = 0.02; // 2% Fee on Withdrawals
+const REFERRAL_QUALIFY_SPEND_SATS = 20; // 20 SATS minimum send to qualify
+const REFERRAL_REWARD_SATS = 5; // 5 SATS reward to referrer
 
 // Helper: Sanitize API Key
 function sanitizeApiKey(raw) {
@@ -222,7 +223,7 @@ function extractPaidAmount(payment, invData) {
   return 0;
 }
 
-// User Finder & Automatic Registration (Stores full Telegram profile data)
+// User Finder & Automatic Registration
 async function findOrRegisterUser(identifiers, meta = {}) {
   if (!db) return null;
   const rawList = [];
@@ -240,7 +241,6 @@ async function findOrRegisterUser(identifiers, meta = {}) {
     const doc = await db.collection("users").doc(docId).get();
     if (doc.exists) {
       const data = doc.data();
-      // Update missing names if available now
       if ((meta.first_name && !data.first_name) || (meta.username && !data.username)) {
         await doc.ref.set({
           first_name: meta.first_name || data.first_name || "",
@@ -270,6 +270,69 @@ async function findOrRegisterUser(identifiers, meta = {}) {
 
   await userRef.set(initialData, { merge: true });
   return { ref: userRef, id: primary, data: initialData, balance: 0 };
+}
+
+// Helper: Check and Award Pending Referral upon Qualified Spend
+async function checkAndAwardReferral(spendingUserId, satsSpent) {
+  if (!db || satsSpent < REFERRAL_QUALIFY_SPEND_SATS) return;
+
+  try {
+    const snap = await db.collection("referrals")
+      .where("referred_user_id", "==", String(spendingUserId))
+      .where("status", "==", "pending")
+      .limit(1)
+      .get();
+
+    if (snap.empty) return;
+
+    const refDoc = snap.docs[0];
+    const refData = refDoc.data();
+    const referrerId = refData.referrer_id;
+
+    const referrerRef = db.collection("users").doc(referrerId);
+    const referrerDoc = await referrerRef.get();
+
+    if (!referrerDoc.exists || referrerDoc.data().banned) return;
+
+    const batch = db.batch();
+
+    // 1. Mark referral as completed
+    batch.update(refDoc.ref, {
+      status: "completed",
+      qualified_at: new Date().toISOString(),
+      sats_spent_to_qualify: satsSpent
+    });
+
+    // 2. Credit 5 SATS to Referrer
+    batch.set(referrerRef, {
+      balance: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
+      sats: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
+      referral_count: admin.firestore.FieldValue.increment(1),
+      referral_earnings: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
+      updated_at: new Date().toISOString()
+    }, { merge: true });
+
+    await batch.commit();
+
+    // Notify Referrer
+    await notifyTelegramUser(
+      referrerId,
+      `🎉 <b>Referral Reward Verified & Credited!</b>\n\n` +
+      `Your referred user @${refData.referred_username || spendingUserId} sent $\\ge$ ${REFERRAL_QUALIFY_SPEND_SATS} SATS.\n` +
+      `💰 <b>+${REFERRAL_REWARD_SATS} SATS</b> added to your wallet balance!`
+    );
+
+    // Send Channel Log
+    await forwardToLogsChannel(
+      `🎁 <b>Referral Reward Verified (+${REFERRAL_REWARD_SATS} SATS)</b>\n\n` +
+      `• Referrer: <code>${referrerId}</code>\n` +
+      `• Qualified User: @${refData.referred_username || spendingUserId}\n` +
+      `• Initial Send: ${satsSpent} SATS\n` +
+      `• Status: Verified & Paid`
+    );
+  } catch (e) {
+    console.error("Referral Award Error:", e);
+  }
 }
 
 module.exports = async function handler(req, res) {
@@ -360,9 +423,6 @@ module.exports = async function handler(req, res) {
         target_currency: targetCurr,
         payment_method: payMethod,
         telegram_id: String(telegram_id || ""),
-        first_name: first_name || user.data.first_name || "",
-        last_name: last_name || user.data.last_name || "",
-        username: username || user.data.username || "",
         amount: isOpenAmount ? 0 : requestedAmount,
         is_paid: false,
         created_at: new Date().toISOString()
@@ -460,7 +520,6 @@ module.exports = async function handler(req, res) {
           await notifyTelegramUser(tChatId, `🎉 <b>Payment Received!</b>\n\n⚡ <b>+${finalSats} ${curr}</b> credited!\n🆔 <code>${payment_id}</code>`);
         }
 
-        // Detailed Channel Log Message with complete identity
         const userTag = formatUserIdentity(user);
         const displayAmt = curr === "SATS" ? `${finalSats.toLocaleString()} SATS` : `$${Number(finalSats).toFixed(2)} ${curr}`;
 
@@ -487,7 +546,7 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, is_paid: false, status: rawStatus || "unpaid", balance: user.balance });
     }
 
-    // 4. WITHDRAWAL (2.0% Platform Fee Collection)
+    // 4. WITHDRAWAL & REFERRAL QUALIFICATION CHECK (2.0% Platform Fee Collection)
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, first_name, last_name, withdraw_method, currency, target_currency } = req.body;
       const sendAmount = Number(amount);
@@ -561,7 +620,11 @@ module.exports = async function handler(req, res) {
 
       await batch.commit();
 
-      // Detailed Channel Log Message with complete identity
+      // Trigger Referral Qualification if SATS transfer >= 20
+      if (curr === "SATS" && sendAmount >= REFERRAL_QUALIFY_SPEND_SATS) {
+        await checkAndAwardReferral(user.id, sendAmount);
+      }
+
       const userTag = formatUserIdentity(user);
       const displaySent = curr === "SATS" ? `${netPayout.toLocaleString()} SATS` : `$${Number(netPayout).toFixed(2)} ${curr}`;
       const displayFee = curr === "SATS" ? `${fee.toLocaleString()} SATS` : `$${Number(fee).toFixed(2)} ${curr}`;
