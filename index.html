@@ -350,7 +350,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Header with Admin Button for Authorized Admins -->
   <div class="header-bar">
     <div class="wallet-title">
       <span>⚡</span>
@@ -416,7 +415,6 @@
       <button class="btn-action" onclick="generateStablecoinDeposit()">⚡ Generate Deposit QR</button>
     </div>
 
-    <!-- RECEIVE BOX -->
     <div id="receiveBox" class="receive-box">
       <div id="receiveTitle" class="receive-header">Receive BTC</div>
 
@@ -497,7 +495,7 @@
     <div id="withFeedback" style="font-size:12px; margin-top:8px; text-align:center;"></div>
   </div>
 
-  <!-- 5. TAB: ACCOUNT & INVITE FRIENDS DETAILS -->
+  <!-- 5. TAB: ACCOUNT & DYNAMIC INVITE FRIENDS DETAILS -->
   <div id="panelAccount" class="card hidden">
     <div style="font-size:13px; font-weight:700; color:var(--primary-light); margin-bottom:12px;">👤 Account Details</div>
     
@@ -608,7 +606,8 @@
     const uname = q.get("username");
     const fname = q.get("first_name");
     const lname = q.get("last_name");
-    if (id) return { id, username: uname, first_name: fname, last_name: lname };
+    const bname = q.get("bot_username");
+    if (id) return { id, username: uname, first_name: fname, last_name: lname, bot_username: bname };
     return null;
   }
 
@@ -624,12 +623,15 @@
   const username = rawUsername.toLowerCase().replace(/[^a-z0-9_]/g, "");
   localStorage.setItem("saved_user", username);
 
+  // Auto-detect bot username from URL query param, Telegram WebApp context, or current location
+  const detectedBotUsername = tgInfo?.bot_username || 
+                             new URLSearchParams(window.location.search).get("bot_username") || 
+                             tg?.initDataUnsafe?.bot_username || 
+                             "pheizu_wallet_bot";
+
   const currentUserId = username;
   const myLightningAddress = `${username}@${DOMAIN}`;
-
-  // Referral Link Setup
-  const botUsername = "pheizu_wallet_bot";
-  const myReferralLink = `https://t.me/${botUsername}?start=ref_${tgNumericId || username}`;
+  const myReferralLink = `https://t.me/${detectedBotUsername}?start=ref_${tgNumericId || username}`;
 
   document.getElementById("accFullName").innerText = fullName;
   document.getElementById("accUsername").innerText = tgInfo?.username ? `@${tgInfo.username}` : `@${username}`;
@@ -637,7 +639,6 @@
   document.getElementById("accLnAddress").innerText = myLightningAddress;
   document.getElementById("accReferralLinkInput").value = myReferralLink;
 
-  // Show Admin Buttons if authorized
   if (tgNumericId === MASTER_ADMIN_ID || username === "pheizu") {
     document.getElementById("adminHeaderBtnContainer")?.classList.remove("hidden");
     document.getElementById("adminAccountBox")?.classList.remove("hidden");
