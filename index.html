@@ -624,43 +624,45 @@
   const username = rawUsername.toLowerCase().replace(/[^a-z0-9_]/g, "");
   localStorage.setItem("saved_user", username);
 
-  const currentUserId = username;
-  const myLightningAddress = `${username}@${DOMAIN}`;
-
   // ==========================================
-  // DYNAMIC BOT USERNAME DETECTION
+  // DYNAMIC BOT USERNAME DETECTION (IDENTICAL TO BOT.JS)
   // ==========================================
   let detectedBotUsername = tgInfo?.bot_username || 
                              new URLSearchParams(window.location.search).get("bot_username") || 
                              tg?.initDataUnsafe?.bot_username || 
                              localStorage.getItem("saved_bot_username") || "";
 
-  let myReferralLink = detectedBotUsername 
-    ? `https://t.me/${detectedBotUsername}?start=ref_${tgNumericId || username}` 
-    : `https://t.me/share/url?url=${encodeURIComponent(`ref_${tgNumericId || username}`)}`;
+  function formatReferralLink(botName, targetId) {
+    const cleanBot = (botName || "").replace(/^@/, "").trim();
+    if (!cleanBot) return "";
+    return `https://t.me/${cleanBot}?start=ref_${targetId}`;
+  }
+
+  let myReferralLink = formatReferralLink(detectedBotUsername, tgNumericId || username);
 
   document.getElementById("accFullName").innerText = fullName;
   document.getElementById("accUsername").innerText = tgInfo?.username ? `@${tgInfo.username}` : `@${username}`;
   document.getElementById("accTgId").innerText = tgNumericId || "N/A";
   document.getElementById("accLnAddress").innerText = myLightningAddress;
-  document.getElementById("accReferralLinkInput").value = myReferralLink;
+  document.getElementById("accReferralLinkInput").value = myReferralLink || "Generating invite link...";
 
-  // Fallback: If not detected from params, resolve bot username from server API
+  // Dynamic Bot Username Resolution via Backend API
+  function resolveBotUsername() {
+    fetch("/api/wallet?action=get-bot-info")
+      .then(res => res.json())
+      .then(data => {
+        if (data.bot_username) {
+          detectedBotUsername = data.bot_username.replace(/^@/, "").trim();
+          localStorage.setItem("saved_bot_username", detectedBotUsername);
+          myReferralLink = formatReferralLink(detectedBotUsername, tgNumericId || username);
+          document.getElementById("accReferralLinkInput").value = myReferralLink;
+        }
+      })
+      .catch(() => {});
+  }
+
   if (!detectedBotUsername) {
-    fetch("/api/bot")
-      .catch(() => {})
-      .finally(async () => {
-        try {
-          const res = await fetch("/api/wallet?action=get-bot-info");
-          const data = await res.json();
-          if (data.bot_username) {
-            detectedBotUsername = data.bot_username;
-            localStorage.setItem("saved_bot_username", detectedBotUsername);
-            myReferralLink = `https://t.me/${detectedBotUsername}?start=ref_${tgNumericId || username}`;
-            document.getElementById("accReferralLinkInput").value = myReferralLink;
-          }
-        } catch(e) {}
-      });
+    resolveBotUsername();
   }
 
   if (tgNumericId === MASTER_ADMIN_ID || username === "pheizu") {
@@ -673,12 +675,20 @@
   }
 
   function copyReferralLink() {
+    if (!myReferralLink) {
+      resolveBotUsername();
+      return showToast("⚠️ Generating link, please wait...");
+    }
     navigator.clipboard.writeText(myReferralLink);
     haptic("light");
     showToast("✓ Referral link copied!");
   }
 
   function shareReferralLinkTelegram() {
+    if (!myReferralLink) {
+      resolveBotUsername();
+      return showToast("⚠️ Generating link, please wait...");
+    }
     const text = encodeURIComponent(`⚡ Join Pheizu Lightning Wallet on Telegram and get your personal Lightning Address!`);
     const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(myReferralLink)}&text=${text}`;
     if (tg?.openTelegramLink) {
