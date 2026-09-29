@@ -36,7 +36,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL || "https://pheizu-wallet-bot.vercel.app";
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const MASTER_ADMIN_ID = "8960497898";
-const REQUIRED_CHANNEL = process.env.REQUIRED_CHANNEL || process.env.LOG_CHANNEL_ID || "-1001234567890"; // Channel to join
+const REQUIRED_CHANNEL = process.env.REQUIRED_CHANNEL || process.env.LOG_CHANNEL_ID || "";
 const REFERRAL_REWARD_SATS = 5; // 5 SATS reward upon 20 sats spend
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -85,12 +85,11 @@ async function getConfiguredChannel() {
 async function checkChannelMembership(ctx, userId) {
   try {
     const channelId = formatChannelId(await getConfiguredChannel());
-    if (!channelId || channelId === "-1001234567890") return true; // Skip if dummy default
+    if (!channelId) return true;
 
     const member = await ctx.telegram.getChatMember(channelId, Number(userId));
     return ["creator", "administrator", "member", "restricted"].includes(member.status);
   } catch (err) {
-    // If chat not found or bot lacks permission, bypass to prevent blocking user
     console.warn("Membership check warning:", err.message);
     return true;
   }
@@ -119,7 +118,7 @@ function formatUserLink(user) {
 }
 
 // ==========================================
-// 1. /START COMMAND (WITH CHANNEL VERIFICATION & REFERRAL REGISTRATION)
+// 1. /START COMMAND
 // ==========================================
 bot.start(async (ctx) => {
   try {
@@ -128,6 +127,10 @@ bot.start(async (ctx) => {
     const username = (from.username || `user${userId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
     const firstName = from.first_name || "";
     const lastName = from.last_name || "";
+
+    // ⚡ Dynamically detect bot username via Telegram API
+    const botInfo = await ctx.telegram.getMe();
+    const botUsername = botInfo.username || "";
 
     // Extract start payload (e.g. /start ref_123456789)
     const rawPayload = ctx.message?.text?.split(" ")[1] || "";
@@ -162,7 +165,6 @@ bot.start(async (ctx) => {
       const userDoc = await userRef.get();
       const isNewUser = !userDoc.exists;
 
-      // If new user and referred, register pending referral
       if (isNewUser && referrerId && referrerId !== userId) {
         const referrerDoc = await db.collection("users").doc(referrerId).get();
         if (referrerDoc.exists) {
@@ -170,7 +172,7 @@ bot.start(async (ctx) => {
             referrer_id: referrerId,
             referred_user_id: userId,
             referred_username: username,
-            status: "pending", // Pending until user sends >= 20 sats
+            status: "pending",
             required_spend_sats: 20,
             reward_sats: REFERRAL_REWARD_SATS,
             channel_verified: true,
@@ -186,6 +188,7 @@ bot.start(async (ctx) => {
         first_name: firstName,
         last_name: lastName,
         channel_verified: true,
+        bot_username: botUsername,
         referred_by: (isNewUser && referrerId && referrerId !== userId) ? referrerId : (userDoc.data()?.referred_by || null),
         updated_at: new Date().toISOString(),
         ...(isNewUser ? {
@@ -197,9 +200,15 @@ bot.start(async (ctx) => {
           created_at: new Date().toISOString()
         } : {})
       }, { merge: true });
+
+      // Save global bot username in config
+      if (botUsername) {
+        await db.collection("settings").doc("config").set({ bot_username: botUsername }, { merge: true });
+      }
     }
 
-    const appUrl = `${WEBAPP_URL}/?telegram_id=${userId}&username=${encodeURIComponent(username)}&first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName)}`;
+    // Pass detected bot_username directly to MiniApp
+    const appUrl = `${WEBAPP_URL}/?telegram_id=${userId}&username=${encodeURIComponent(username)}&first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName)}&bot_username=${encodeURIComponent(botUsername)}`;
     const adminUrl = `${WEBAPP_URL}/admin.html?telegram_id=${userId}&username=${encodeURIComponent(username)}`;
     const isAdmin = await isAuthorizedAdmin(userId, username);
 
@@ -267,6 +276,9 @@ async function sendAccountDetails(ctx) {
     const userId = String(from.id);
     const username = (from.username || `user${userId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
 
+    const botInfo = await ctx.telegram.getMe();
+    const botUsername = botInfo.username || "";
+
     let sats = 0;
     let usdt = 0;
     let usdc = 0;
@@ -281,7 +293,7 @@ async function sendAccountDetails(ctx) {
       }
     }
 
-    const appUrl = `${WEBAPP_URL}/?telegram_id=${userId}&username=${encodeURIComponent(username)}`;
+    const appUrl = `${WEBAPP_URL}/?telegram_id=${userId}&username=${encodeURIComponent(username)}&bot_username=${encodeURIComponent(botUsername)}`;
 
     const msg =
       `👤 <b>Your Account Details:</b>\n\n` +
@@ -313,6 +325,7 @@ async function sendReferralDashboard(ctx) {
     const botInfo = await ctx.telegram.getMe();
     const botUsername = botInfo.username;
 
+    // Dynamically detected working referral link
     const referralLink = `https://t.me/${botUsername}?start=ref_${userId}`;
 
     let verifiedCount = 0;
@@ -350,6 +363,7 @@ async function sendReferralDashboard(ctx) {
       [Markup.button.callback("👤 View Account Details", "cmd_account")]
     ]));
   } catch (err) {
+    console.error("Referral Error:", err);
     return ctx.reply("Failed to generate referral link.");
   }
 }
