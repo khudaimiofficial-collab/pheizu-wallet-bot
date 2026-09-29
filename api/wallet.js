@@ -44,6 +44,7 @@ function getDb() {
 const db = getDb();
 const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
+const WITHDRAWAL_FEE_PERCENT = 0.02; // 2.0% Platform Fee on Withdrawals
 
 // Helper: Sanitize API Key
 function sanitizeApiKey(raw) {
@@ -171,6 +172,12 @@ async function getSpeedApiKey() {
       if (snap2.exists) {
         const data = snap2.data();
         const key = data.api_key || data.key || data.secret_key;
+        if (key && sanitizeApiKey(key)) return sanitizeApiKey(key);
+      }
+      const snap3 = await db.collection("settings").doc("config").get();
+      if (snap3.exists) {
+        const data = snap3.data();
+        const key = data.speed_key || data.api_key;
         if (key && sanitizeApiKey(key)) return sanitizeApiKey(key);
       }
     } catch (e) {}
@@ -390,8 +397,8 @@ module.exports = async function handler(req, res) {
         success: true,
         user_id: wallet ? wallet.id : uid,
         balance: wallet ? wallet.balance : 0,
-        usdt_balance: wallet ? (Number(wallet.data.usdt_balance) || 0) : 0,
-        usdc_balance: wallet ? (Number(wallet.data.usdc_balance) || 0) : 0
+        usdt_balance: wallet ? (Number(wallet.data.usdt_balance ?? wallet.data.usdt) || 0) : 0,
+        usdc_balance: wallet ? (Number(wallet.data.usdc_balance ?? wallet.data.usdc) || 0) : 0
       });
     }
 
@@ -545,7 +552,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 4. CHECK DEPOSIT STATUS (INTERNAL BOT-TO-BOT & EXTERNAL)
+    // 4. CHECK DEPOSIT STATUS (100% FREE CREDITING)
     // ========================================================
     if (action === "check-status" && req.method === "GET") {
       const { payment_id, user_id, telegram_id } = req.query;
@@ -567,12 +574,11 @@ module.exports = async function handler(req, res) {
       const creditTarget = invData?.user_id || user_id || (telegram_id ? `user${telegram_id}` : "");
       const storedInvoice = invData?.invoice || "";
       const cleanInvoice = storedInvoice.replace(/^lightning:/i, "").replace(/^bitcoin:/i, "").trim();
-      const payMethod = invData?.payment_method || "lightning";
 
       const wallet = await findUserWallet([creditTarget, telegram_id, invData?.telegram_id, user_id]);
       const targetNumericChatId = await resolveNumericTelegramId(creditTarget, telegram_id || invData?.telegram_id || wallet?.data?.telegram_id);
 
-      // Return immediately if already paid (Internal bot-to-bot or cached settled payment)
+      // Return immediately if already paid
       if (invData && invData.is_paid && Number(invData.amount || 0) > 0) {
         if (!invData.notified && targetNumericChatId) {
           const fromUser = invData.paid_by ? ` from @${invData.paid_by}` : '';
@@ -619,7 +625,7 @@ module.exports = async function handler(req, res) {
         } catch (e) {}
       }
 
-      // 🔍 DISCOVERY 2: Official Speed Search API (POST /search/payments)
+      // 🔍 DISCOVERY 2: Official Speed Search API
       if (!payment) {
         try {
           const searchRes = await speedRequest("search/payments", "POST", {
@@ -648,7 +654,7 @@ module.exports = async function handler(req, res) {
         } catch (e) {}
       }
 
-      // 🔍 DISCOVERY 3: Direct Payment check (/payments/:id)
+      // 🔍 DISCOVERY 3: Direct Payment check
       if (!payment) {
         try {
           const directPay = await speedRequest(`payments/${speedId}`, "GET", null, apiKey);
@@ -659,7 +665,7 @@ module.exports = async function handler(req, res) {
         } catch (e) {}
       }
 
-      // 🔍 DISCOVERY 4: Payment Address check (/payment-addresses/:id/payments)
+      // 🔍 DISCOVERY 4: Payment Address check
       if (!payment && (speedId.startsWith("pa_") || invData?.speed_source === "payment-addresses")) {
         try {
           const paRes = await speedRequest(`payment-addresses/${speedId}/payments`, "GET", null, apiKey);
@@ -682,7 +688,6 @@ module.exports = async function handler(req, res) {
         ""
       ).toLowerCase();
 
-      // Strict paid validation
       const isConfirmedPaidStatus = [
         "paid",
         "succeeded",
@@ -702,7 +707,6 @@ module.exports = async function handler(req, res) {
       const isPaid = (isConfirmedPaidStatus || hasPaidFlag || hasPayrequestFunds);
       const finalSats = detectedAmount > 0 ? detectedAmount : extractPaidAmount(payment, invData);
 
-      // Process and credit ONLY when Speed genuinely confirms payment
       if (isPaid && finalSats > 0) {
         const finalCurr = curr || payment?.target_currency || "SATS";
 
@@ -747,6 +751,8 @@ module.exports = async function handler(req, res) {
             type: "deposit",
             user_id: wallet.id,
             amount: finalSats,
+            gross_amount: finalSats,
+            fee: 0,
             currency: finalCurr,
             status: "completed",
             created_at: new Date().toISOString()
@@ -770,6 +776,7 @@ module.exports = async function handler(req, res) {
           `✅ <b>Deposit Successful</b>\n` +
           `• User: @${wallet ? wallet.id : creditTarget}\n` +
           `• Amount: +${finalSats} ${finalCurr}\n` +
+          `• Deposit Fee: 0% (FREE)\n` +
           `• New Balance: ${updatedBal.toLocaleString()} sats\n` +
           `• TxID: <code>${payment_id}</code>`
         );
@@ -797,7 +804,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 5. WITHDRAW / SEND (Prevents duplicate payout & supports internal transfer)
+    // 5. WITHDRAW / SEND (2.0% PLATFORM FEE DEDUCTION)
     // ========================================================
     if (action === "send" && req.method === "POST") {
       const { destination, amount, user_id, telegram_id, username, withdraw_method, network, currency, target_currency } = req.body;
@@ -882,6 +889,22 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ success: false, error: `Insufficient USDC! You have ${currentUsdc.toFixed(2)} USDC.` });
       }
 
+      // Calculate 2% Platform Fee & Net Payout Amount
+      let fee = 0;
+      let netPayout = 0;
+
+      if (curr === "SATS") {
+        fee = Math.max(1, Math.floor(sendAmount * WITHDRAWAL_FEE_PERCENT));
+        netPayout = sendAmount - fee;
+      } else {
+        fee = Number((sendAmount * WITHDRAWAL_FEE_PERCENT).toFixed(2));
+        netPayout = Number((sendAmount - fee).toFixed(2));
+      }
+
+      if (netPayout <= 0) {
+        return res.status(400).json({ success: false, error: "Amount too small after 2% withdrawal fee." });
+      }
+
       let recipientUserId = null;
       let internalInvoiceDoc = null;
 
@@ -919,14 +942,29 @@ module.exports = async function handler(req, res) {
 
         if (curr === "SATS") {
           batch.set(senderWallet.ref, { balance: admin.firestore.FieldValue.increment(-sendAmount), updated_at: new Date().toISOString() }, { merge: true });
-          batch.set(recipientWallet.ref, { balance: admin.firestore.FieldValue.increment(sendAmount), updated_at: new Date().toISOString() }, { merge: true });
+          batch.set(recipientWallet.ref, { balance: admin.firestore.FieldValue.increment(netPayout), updated_at: new Date().toISOString() }, { merge: true });
         } else if (curr === "USDT") {
           batch.set(senderWallet.ref, { usdt_balance: admin.firestore.FieldValue.increment(-sendAmount), updated_at: new Date().toISOString() }, { merge: true });
-          batch.set(recipientWallet.ref, { usdt_balance: admin.firestore.FieldValue.increment(sendAmount), updated_at: new Date().toISOString() }, { merge: true });
+          batch.set(recipientWallet.ref, { usdt_balance: admin.firestore.FieldValue.increment(netPayout), updated_at: new Date().toISOString() }, { merge: true });
         } else if (curr === "USDC") {
           batch.set(senderWallet.ref, { usdc_balance: admin.firestore.FieldValue.increment(-sendAmount), updated_at: new Date().toISOString() }, { merge: true });
-          batch.set(recipientWallet.ref, { usdc_balance: admin.firestore.FieldValue.increment(sendAmount), updated_at: new Date().toISOString() }, { merge: true });
+          batch.set(recipientWallet.ref, { usdc_balance: admin.firestore.FieldValue.increment(netPayout), updated_at: new Date().toISOString() }, { merge: true });
         }
+
+        // Add 2% Profit to Admin Treasury
+        const treasuryRef = db.collection("settings").doc("admin_treasury");
+        const treasuryDoc = await treasuryRef.get();
+        const treasuryData = treasuryDoc.exists ? treasuryDoc.data() : {};
+
+        let updatedTreasury = {};
+        if (curr === "SATS") {
+          updatedTreasury.earned_sats = (Number(treasuryData.earned_sats) || 0) + fee;
+        } else if (curr === "USDT") {
+          updatedTreasury.earned_usdt = Number(((Number(treasuryData.earned_usdt) || 0) + fee).toFixed(2));
+        } else if (curr === "USDC") {
+          updatedTreasury.earned_usdc = Number(((Number(treasuryData.earned_usdc) || 0) + fee).toFixed(2));
+        }
+        batch.set(treasuryRef, updatedTreasury, { merge: true });
 
         let recipientTgId = null;
 
@@ -934,14 +972,13 @@ module.exports = async function handler(req, res) {
           const invData = (await internalInvoiceDoc.get()).data();
           recipientTgId = invData?.telegram_id;
 
-          // Marks the invoice paid so the recipient's check-status triggers immediately
           batch.update(internalInvoiceDoc, {
             is_paid: true,
             notified: false,
             paid_at: new Date().toISOString(),
             paid_by: senderWallet.id,
             tx_id: txId,
-            amount: sendAmount
+            amount: netPayout
           });
         }
 
@@ -951,7 +988,10 @@ module.exports = async function handler(req, res) {
           type: "transfer_sent",
           user_id: senderWallet.id,
           to: recipientWallet.id,
+          gross_amount: sendAmount,
+          fee: fee,
           amount: sendAmount,
+          net_sent: netPayout,
           currency: curr,
           status: "completed",
           created_at: new Date().toISOString()
@@ -963,7 +1003,7 @@ module.exports = async function handler(req, res) {
           type: "transfer_received",
           user_id: recipientWallet.id,
           from: senderWallet.id,
-          amount: sendAmount,
+          amount: netPayout,
           currency: curr,
           status: "completed",
           created_at: new Date().toISOString()
@@ -976,7 +1016,7 @@ module.exports = async function handler(req, res) {
           await notifyTelegramUser(
             targetChatId,
             `🎉 <b>Payment Received!</b>\n\n` +
-            `💰 <b>+${sendAmount} ${curr}</b> received from @${senderWallet.id}!\n` +
+            `💰 <b>+${netPayout} ${curr}</b> received from @${senderWallet.id}!\n` +
             `🆔 <b>TxID:</b> <code>${txId}</code>`
           );
         }
@@ -985,7 +1025,8 @@ module.exports = async function handler(req, res) {
           `✅ <b>Internal Transfer Successful</b>\n` +
           `• From: @${senderWallet.id}\n` +
           `• To: @${recipientWallet.id}\n` +
-          `• Amount: ${sendAmount} ${curr}\n` +
+          `• Sent: ${netPayout} ${curr}\n` +
+          `• Fee (2%): ${fee} ${curr}\n` +
           `• TxID: <code>${txId}</code>`
         );
 
@@ -994,7 +1035,10 @@ module.exports = async function handler(req, res) {
           internal: true,
           tx_id: txId,
           recipient: recipientWallet.id,
-          message: `Internal transfer of ${sendAmount} ${curr} completed.`
+          sent_amount: netPayout,
+          fee: fee,
+          gross_deducted: sendAmount,
+          message: `Internal transfer of ${netPayout} ${curr} completed.`
         });
       }
 
@@ -1006,11 +1050,11 @@ module.exports = async function handler(req, res) {
 
       let finalDest = dest;
       if (method === "lightning" && dest.includes("@")) {
-        finalDest = await resolveLnAddress(dest, sendAmount);
+        finalDest = await resolveLnAddress(dest, netPayout);
       }
 
       let speedPayload = {
-        amount: sendAmount,
+        amount: netPayout,
         currency: "SATS",
         target_currency: targetCurr,
         withdraw_method: method,
@@ -1037,7 +1081,7 @@ module.exports = async function handler(req, res) {
 
       if (!ok && (status === 404 || status === 403)) {
         const retry = await speedRequest("instant_sends", "POST", {
-          amount: sendAmount,
+          amount: netPayout,
           currency: "SATS",
           target_currency: targetCurr,
           destination: finalDest,
@@ -1079,6 +1123,21 @@ module.exports = async function handler(req, res) {
       const batch = db.batch();
       batch.set(senderWallet.ref, updateData, { merge: true });
 
+      // Add 2% Profit to Admin Treasury
+      const treasuryRef = db.collection("settings").doc("admin_treasury");
+      const treasuryDoc = await treasuryRef.get();
+      const treasuryData = treasuryDoc.exists ? treasuryDoc.data() : {};
+
+      let updatedTreasury = {};
+      if (curr === "SATS") {
+        updatedTreasury.earned_sats = (Number(treasuryData.earned_sats) || 0) + fee;
+      } else if (curr === "USDT") {
+        updatedTreasury.earned_usdt = Number(((Number(treasuryData.earned_usdt) || 0) + fee).toFixed(2));
+      } else if (curr === "USDC") {
+        updatedTreasury.earned_usdc = Number(((Number(treasuryData.earned_usdc) || 0) + fee).toFixed(2));
+      }
+      batch.set(treasuryRef, updatedTreasury, { merge: true });
+
       batch.set(db.collection("transactions").doc(txId), {
         id: txId,
         tx_id: txId,
@@ -1086,7 +1145,10 @@ module.exports = async function handler(req, res) {
         user_id: senderWallet.id,
         destination: dest,
         withdraw_method: method,
+        gross_amount: sendAmount,
+        fee: fee,
         amount: sendAmount,
+        net_sent: netPayout,
         currency: curr,
         status: "completed",
         created_at: new Date().toISOString()
@@ -1097,7 +1159,9 @@ module.exports = async function handler(req, res) {
       await forwardToLogsChannel(
         `✅ <b>Withdrawal Successful</b>\n` +
         `• User: @${senderWallet.id}\n` +
-        `• Amount: -${sendAmount} ${curr}\n` +
+        `• Gross Deducted: -${sendAmount} ${curr}\n` +
+        `• Sent to Destination: ${netPayout} ${curr}\n` +
+        `• Fee Collected (2%): ${fee} ${curr}\n` +
         `• Network: ${method.toUpperCase()}\n` +
         `• Destination: <code>${dest}</code>\n` +
         `• Remaining Balance: ${remainingBal} ${curr}\n` +
@@ -1108,8 +1172,11 @@ module.exports = async function handler(req, res) {
         success: true,
         id: txId,
         tx_id: txId,
+        sent_amount: netPayout,
+        fee: fee,
+        gross_deducted: sendAmount,
         remaining_balance: remainingBal,
-        message: `Successfully sent ${sendAmount} ${curr}.`
+        message: `Successfully sent ${netPayout} ${curr} (Fee: ${fee} ${curr}).`
       });
     }
 
@@ -1126,6 +1193,7 @@ module.exports = async function handler(req, res) {
       const savedKey = await getSpeedApiKey();
       let logsChannel = "";
       let adminsList = [];
+      let treasuryData = { earned_sats: 0, earned_usdt: 0, earned_usdc: 0 };
 
       if (db) {
         try {
@@ -1137,6 +1205,11 @@ module.exports = async function handler(req, res) {
           const admSnap = await db.collection("settings").doc("admins").get();
           if (admSnap.exists && Array.isArray(admSnap.data().list)) adminsList = admSnap.data().list;
         } catch(e) {}
+
+        try {
+          const trSnap = await db.collection("settings").doc("admin_treasury").get();
+          if (trSnap.exists) treasuryData = trSnap.data();
+        } catch(e) {}
       }
 
       const usersList = [];
@@ -1145,16 +1218,16 @@ module.exports = async function handler(req, res) {
         for (const doc of uSnap.docs) {
           const d = doc.data();
           let sats = Number(d.balance ?? d.sats ?? d.amount ?? 0);
-          let usdt = Number(d.usdt_balance ?? 0);
-          let usdc = Number(d.usdc_balance ?? 0);
+          let usdt = Number(d.usdt_balance ?? d.usdt ?? 0);
+          let usdc = Number(d.usdc_balance ?? d.usdc ?? 0);
 
           try {
             const wDoc = await db.collection("wallets").doc(doc.id).get();
             if (wDoc.exists) {
               const wd = wDoc.data();
               sats = Math.max(sats, Number(wd.balance ?? wd.sats ?? wd.amount ?? 0));
-              usdt = Math.max(usdt, Number(wd.usdt_balance ?? 0));
-              usdc = Math.max(usdc, Number(wd.usdc_balance ?? 0));
+              usdt = Math.max(usdt, Number(wd.usdt_balance ?? wd.usdt ?? 0));
+              usdc = Math.max(usdc, Number(wd.usdc_balance ?? wd.usdc ?? 0));
             }
           } catch(e) {}
 
@@ -1176,6 +1249,7 @@ module.exports = async function handler(req, res) {
         speed_key: savedKey,
         logs_channel: logsChannel,
         admins_list: adminsList,
+        treasury: treasuryData,
         users: usersList
       });
     }
@@ -1249,6 +1323,7 @@ module.exports = async function handler(req, res) {
 
       if (db) {
         await db.collection("settings").doc("speed").set({ api_key: api_key.trim(), updated_at: new Date().toISOString() }, { merge: true });
+        await db.collection("settings").doc("config").set({ speed_key: api_key.trim(), updated_at: new Date().toISOString() }, { merge: true });
       }
       return res.status(200).json({ success: true });
     }
@@ -1263,6 +1338,7 @@ module.exports = async function handler(req, res) {
 
       if (db) {
         await db.collection("settings").doc("logs_channel").set({ channel_id: chId, updated_at: new Date().toISOString() }, { merge: true });
+        await db.collection("settings").doc("config").set({ logs_channel: chId, updated_at: new Date().toISOString() }, { merge: true });
       }
       return res.status(200).json({ success: true, channel_id: chId });
     }
