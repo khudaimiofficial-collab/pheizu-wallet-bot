@@ -7,18 +7,10 @@
     { "source": "/api/speed/:path*", "destination": "https://api.tryspeed.com/:path*" }
   ],
   "functions": {
-    "api/bot.js": {
-      "maxDuration": 10,
-      "memory": 512
-    },
-    "api/wallet.js": {
-      "maxDuration": 10,
-      "memory": 512
-    },
-    "api/lnurlp.js": {
-      "maxDuration": 10,
-      "memory": 512
-    }
+    "api/bot.js": { "maxDuration": 10, "memory": 512 },
+    "api/wallet.js": { "maxDuration": 10, "memory": 512 },
+    "api/admin.js": { "maxDuration": 10, "memory": 512 },
+    "api/lnurlp.js": { "maxDuration": 10, "memory": 512 }
   },
   "headers": [
     {
