@@ -148,7 +148,6 @@
     }
     .status-active { background: rgba(0, 230, 118, 0.15); color: var(--button); border: 1px solid var(--button); }
     .status-banned { background: rgba(239, 68, 68, 0.15); color: var(--danger); border: 1px solid var(--danger); }
-    .status-deleted { background: rgba(239, 68, 68, 0.25); color: #f87171; border: 1px dashed var(--danger); }
 
     .balance-chips {
       display: grid;
@@ -305,7 +304,7 @@
     </div>
   </div>
 
-  <!-- Treasury Profit Overview (2% Withdrawal Earnings) -->
+  <!-- Treasury Profit Overview -->
   <div class="card" style="border: 1px solid var(--accent); background: #0b1120;">
     <div class="card-title" style="color:var(--accent);">
       <span>💰 Platform Revenue (2.0% Withdrawal Fees Collected)</span>
@@ -374,7 +373,7 @@
     <div class="card">
       <div class="card-title">🔑 Speed API Secret Key</div>
       <p style="font-size:11px; color:var(--muted); margin-bottom:10px;">
-        Active key stored in Firestore database.
+        Active key stored in database.
       </p>
 
       <div style="position:relative;">
@@ -388,12 +387,12 @@
     </div>
   </div>
 
-  <!-- 4. TAB: LOGS CHANNEL (WITH VERIFICATION STATUS) -->
+  <!-- 4. TAB: LOGS CHANNEL -->
   <div id="panelChannel" class="hidden">
     <div class="card">
-      <div class="card-title">📋 Configured Logs & Receipts Channel</div>
+      <div class="card-title">📋 Logs & Receipts Channel</div>
       <p style="font-size:11px; color:var(--muted); margin-bottom:10px;">
-        All completed deposits and withdrawals are forwarded here. Enter the numeric Channel ID (e.g. <code>-1001234567890</code>).
+        All completed transactions are forwarded here. Enter the numeric Channel ID (e.g. <code>-1001234567890</code>).
       </p>
 
       <input type="text" id="logsChannelInput" placeholder="-1001234567890" />
@@ -500,9 +499,10 @@
 
   let allUsersData = [];
 
+  // Call dedicated /api/admin endpoint
   async function loadAdminData() {
     try {
-      const res = await fetch(`/api/wallet?action=admin-get-data&telegram_id=${currentTgId}&username=${encodeURIComponent(currentUsername)}`);
+      const res = await fetch(`/api/admin?action=get-data&telegram_id=${currentTgId}&username=${encodeURIComponent(currentUsername)}`);
       const data = await res.json();
 
       if (!data.success) {
@@ -510,7 +510,6 @@
         return;
       }
 
-      // Display Treasury Revenue (2% Withdrawal Profits)
       if (data.treasury) {
         document.getElementById("treasurySats").innerText = `${Number(data.treasury.earned_sats || 0).toLocaleString()} sats`;
         document.getElementById("treasuryUsdt").innerText = `$${Number(data.treasury.earned_usdt || 0).toFixed(2)}`;
@@ -538,19 +537,9 @@
 
     container.innerHTML = users.map(u => {
       const handle = u.username ? `@${u.username}` : (u.first_name || "Anonymous");
-      const isDeleted = Boolean(u.deleted);
       const isBanned = Boolean(u.banned);
-
-      let statusClass = "status-active";
-      let statusText = "Active";
-
-      if (isDeleted) {
-        statusClass = "status-deleted";
-        statusText = "Terminated";
-      } else if (isBanned) {
-        statusClass = "status-banned";
-        statusText = "Banned";
-      }
+      const statusClass = isBanned ? "status-banned" : "status-active";
+      const statusText = isBanned ? "Banned" : "Active";
 
       return `
         <div class="user-card" id="user_card_${u.user_id}">
@@ -570,10 +559,10 @@
 
           <div class="user-actions">
             <button class="btn-sm" style="background:#0284c7; color:#fff;" onclick="openBalanceModal('${u.user_id}', '${handle}')">⚡ Balance</button>
-            <button class="btn-sm" style="background:${isBanned || isDeleted ? '#10b981' : '#f59e0b'}; color:#000;" onclick="toggleUserBan('${u.user_id}', ${isBanned || isDeleted})">
-              ${isBanned || isDeleted ? '✅ Restore' : '🚫 Ban'}
+            <button class="btn-sm" style="background:${isBanned ? '#10b981' : '#f59e0b'}; color:#000;" onclick="toggleUserBan('${u.user_id}', ${isBanned})">
+              ${isBanned ? '✅ Unban' : '🚫 Ban'}
             </button>
-            <button class="btn-sm" style="background:var(--danger); color:#fff;" onclick="deleteUserRecord('${u.user_id}')">🗑️ Terminate</button>
+            <button class="btn-sm" style="background:var(--danger); color:#fff;" onclick="deleteUserRecord('${u.user_id}')">🗑️ Delete</button>
           </div>
         </div>
       `;
@@ -609,7 +598,7 @@
     if (!amount || amount <= 0) return showToast("⚠️ Enter valid amount");
 
     try {
-      const res = await fetch("/api/wallet?action=admin-adjust-balance", {
+      const res = await fetch("/api/admin?action=adjust-balance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -632,22 +621,22 @@
     }
   }
 
-  async function toggleUserBan(userId, currentBlocked) {
+  async function toggleUserBan(userId, currentBanned) {
     try {
-      const res = await fetch("/api/wallet?action=admin-manage-user", {
+      const res = await fetch("/api/admin?action=manage-user", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           telegram_id: currentTgId,
           username: currentUsername,
           target_user: userId,
-          task: currentBlocked ? "unban" : "ban"
+          task: currentBanned ? "unban" : "ban"
         })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      showToast(`✓ User ${currentBlocked ? 'restored' : 'banned'}!`);
+      showToast(`✓ User ${currentBanned ? 'unbanned' : 'banned'}!`);
       loadAdminData();
     } catch (e) {
       showToast("Error: " + e.message);
@@ -655,9 +644,9 @@
   }
 
   async function deleteUserRecord(userId) {
-    if (!confirm(`Permanently terminate user ${userId}? Their balance will be zeroed and they cannot recreate an account.`)) return;
+    if (!confirm(`Delete user ${userId} from database? If they return, they will start fresh with a zero balance.`)) return;
     try {
-      const res = await fetch("/api/wallet?action=admin-manage-user", {
+      const res = await fetch("/api/admin?action=manage-user", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -670,7 +659,7 @@
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      showToast("✓ User permanently terminated");
+      showToast("✓ User record deleted");
       loadAdminData();
     } catch (e) {
       showToast("Error: " + e.message);
@@ -689,7 +678,7 @@
     status.innerText = "Broadcasting to all registered Telegram users...";
 
     try {
-      const res = await fetch("/api/wallet?action=admin-broadcast", {
+      const res = await fetch("/api/admin?action=broadcast", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -723,7 +712,7 @@
     if (!key) return showToast("⚠️ Enter Speed Key");
 
     try {
-      const res = await fetch("/api/wallet?action=admin-save-key", {
+      const res = await fetch("/api/admin?action=save-key", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ telegram_id: currentTgId, username: currentUsername, api_key: key })
@@ -748,7 +737,7 @@
     msgEl.innerHTML = "<span style='color:var(--muted);'>Pinging Telegram Channel...</span>";
 
     try {
-      const res = await fetch("/api/wallet?action=admin-save-channel", {
+      const res = await fetch("/api/admin?action=save-channel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ telegram_id: currentTgId, username: currentUsername, channel_id: channelId })
@@ -756,8 +745,8 @@
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      showToast("✓ Channel connected & test message sent!");
-      msgEl.innerHTML = `<span style="color:var(--button);">✅ Successfully Connected & Verified (${data.channel_id})</span>`;
+      showToast("✓ Channel connected & verified!");
+      msgEl.innerHTML = `<span style="color:var(--button);">✅ Connected & Test Ping Sent (${data.channel_id})</span>`;
     } catch (e) {
       showToast("Error: " + e.message);
       msgEl.innerHTML = `<span style="color:var(--danger);">❌ Connection Failed: ${e.message}</span>`;
@@ -800,7 +789,7 @@
     if (!input) return showToast("⚠️ Enter username or ID");
 
     try {
-      const res = await fetch("/api/wallet?action=admin-manage-admin", {
+      const res = await fetch("/api/admin?action=manage-admin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ telegram_id: currentTgId, username: currentUsername, task: "add", target_admin: input })
@@ -817,7 +806,7 @@
 
   async function removeCoAdmin(adminHandle) {
     try {
-      const res = await fetch("/api/wallet?action=admin-manage-admin", {
+      const res = await fetch("/api/admin?action=manage-admin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ telegram_id: currentTgId, username: currentUsername, task: "remove", target_admin: adminHandle })
