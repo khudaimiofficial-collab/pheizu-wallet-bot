@@ -34,7 +34,9 @@ function getDb() {
 const db = getDb();
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 const WEBAPP_URL = process.env.WEBAPP_URL || "https://pheizu-wallet-bot.vercel.app";
-const REFERRAL_REWARD_SATS = 10; // Satoshis credited per valid referral
+const DOMAIN = "pheizu-wallet-bot.vercel.app";
+const MASTER_ADMIN_ID = "8960497898";
+const REFERRAL_REWARD_SATS = 1; // 1 SAT per valid referral
 
 const bot = new Telegraf(BOT_TOKEN);
 
@@ -45,6 +47,24 @@ function formatChannelId(raw) {
   if (/^\d{8,16}$/.test(clean)) return `-100${clean}`;
   if (/^-\d{8,16}$/.test(clean) && !clean.startsWith("-100")) return `-100${clean.replace(/^-/, "")}`;
   return clean;
+}
+
+// Helper: Check if user is an admin
+async function isAuthorizedAdmin(telegramId, username) {
+  const numId = String(telegramId || "").trim();
+  const uname = String(username || "").toLowerCase().replace(/^@/, "").trim();
+  if (numId === MASTER_ADMIN_ID || uname === "pheizu") return true;
+
+  if (db) {
+    try {
+      const snap = await db.collection("settings").doc("admins").get();
+      if (snap.exists) {
+        const list = (snap.data().list || []).map(a => String(a).toLowerCase().replace(/^@/, ""));
+        if (list.includes(numId) || (uname && list.includes(uname))) return true;
+      }
+    } catch (e) {}
+  }
+  return false;
 }
 
 // Helper: Forward Log Messages
@@ -78,7 +98,7 @@ function formatUserLink(user) {
 }
 
 // ==========================================
-// 1. /START COMMAND (WITH REFERRAL HANDLING)
+// 1. /START COMMAND (WITH ALL 3 BUTTONS)
 // ==========================================
 bot.start(async (ctx) => {
   try {
@@ -88,7 +108,7 @@ bot.start(async (ctx) => {
     const firstName = from.first_name || "";
     const lastName = from.last_name || "";
 
-    // Extract start payload (e.g. /start ref_123456789 or /start 123456789)
+    // Extract start payload (e.g. /start ref_123456789)
     const rawPayload = ctx.message?.text?.split(" ")[1] || "";
     let referrerId = "";
     if (rawPayload.startsWith("ref_")) {
@@ -97,112 +117,166 @@ bot.start(async (ctx) => {
       referrerId = rawPayload.trim();
     }
 
-    if (!db) {
-      return ctx.reply("⚡ Welcome to Pheizu Lightning Wallet!", Markup.inlineKeyboard([
-        [Markup.button.webApp("⚡ Open Wallet", `${WEBAPP_URL}/?telegram_id=${userId}&username=${username}`)]
-      ]));
-    }
+    let isNewUser = true;
+    if (db) {
+      const userRef = db.collection("users").doc(userId);
+      const userDoc = await userRef.get();
+      isNewUser = !userDoc.exists;
 
-    const userRef = db.collection("users").doc(userId);
-    const userDoc = await userRef.get();
-    let isNewUser = !userDoc.exists;
+      // Handle referral bonus if newly joining
+      if (isNewUser && referrerId && referrerId !== userId) {
+        try {
+          const referrerRef = db.collection("users").doc(referrerId);
+          const referrerDoc = await referrerRef.get();
 
-    // Process Referral if new user and referrer is valid
-    if (isNewUser && referrerId && referrerId !== userId) {
-      try {
-        const referrerRef = db.collection("users").doc(referrerId);
-        const referrerDoc = await referrerRef.get();
+          if (referrerDoc.exists && !referrerDoc.data().banned) {
+            const batch = db.batch();
 
-        if (referrerDoc.exists && !referrerDoc.data().banned) {
-          const batch = db.batch();
+            // 1. Credit 1 SAT to referrer
+            batch.set(referrerRef, {
+              balance: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
+              sats: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
+              referral_count: admin.firestore.FieldValue.increment(1),
+              referral_earnings: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
+              updated_at: new Date().toISOString()
+            }, { merge: true });
 
-          // 1. Reward the Referrer
-          batch.set(referrerRef, {
-            balance: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
-            sats: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
-            referral_count: admin.firestore.FieldValue.increment(1),
-            referral_earnings: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
-            updated_at: new Date().toISOString()
-          }, { merge: true });
+            // 2. Record referral event
+            const refLogRef = db.collection("referrals").doc(`${referrerId}_${userId}`);
+            batch.set(refLogRef, {
+              referrer_id: referrerId,
+              referred_user_id: userId,
+              referred_username: username,
+              reward_sats: REFERRAL_REWARD_SATS,
+              created_at: new Date().toISOString()
+            });
 
-          // 2. Record Referral Log
-          const refLogRef = db.collection("referrals").doc(`${referrerId}_${userId}`);
-          batch.set(refLogRef, {
-            referrer_id: referrerId,
-            referred_user_id: userId,
-            referred_username: username,
-            reward_sats: REFERRAL_REWARD_SATS,
-            created_at: new Date().toISOString()
-          });
+            await batch.commit();
 
-          await batch.commit();
+            // Notify Referrer
+            await ctx.telegram.sendMessage(
+              referrerId,
+              `🎉 <b>New Referral Joined!</b>\n\n` +
+              `👤 User ${formatUserLink(from)} joined via your link.\n` +
+              `💰 <b>+${REFERRAL_REWARD_SATS} SAT</b> credited to your wallet balance!`,
+              { parse_mode: "HTML" }
+            ).catch(() => {});
 
-          // Notify Referrer via Telegram
-          await ctx.telegram.sendMessage(
-            referrerId,
-            `🎉 <b>New Referral Joined!</b>\n\n` +
-            `👤 User ${formatUserLink(from)} joined using your link.\n` +
-            `💰 <b>+${REFERRAL_REWARD_SATS} SATS</b> credited to your balance!`,
-            { parse_mode: "HTML" }
-          ).catch(() => {});
-
-          // Send to Channel Logs
-          await forwardToLogsChannel(
-            `👥 <b>New Referral Registered</b>\n\n` +
-            `• Referrer: <code>${referrerId}</code>\n` +
-            `• New User: ${formatUserLink(from)}\n` +
-            `• Reward: +${REFERRAL_REWARD_SATS} SATS`
-          );
+            // Send Log
+            await forwardToLogsChannel(
+              `👥 <b>Referral Registered</b>\n\n` +
+              `• Referrer: <code>${referrerId}</code>\n` +
+              `• New User: ${formatUserLink(from)}\n` +
+              `• Reward: +${REFERRAL_REWARD_SATS} SAT`
+            );
+          }
+        } catch (err) {
+          console.error("Referral process error:", err);
         }
-      } catch (err) {
-        console.error("Referral process error:", err);
       }
+
+      // Save User Data
+      await userRef.set({
+        user_id: userId,
+        telegram_id: userId,
+        username: username,
+        first_name: firstName,
+        last_name: lastName,
+        referred_by: (isNewUser && referrerId && referrerId !== userId) ? referrerId : (userDoc.data()?.referred_by || null),
+        updated_at: new Date().toISOString(),
+        ...(isNewUser ? {
+          balance: 0,
+          sats: 0,
+          usdt_balance: 0,
+          usdc_balance: 0,
+          banned: false,
+          created_at: new Date().toISOString()
+        } : {})
+      }, { merge: true });
     }
 
-    // Save/Update User Profile
-    await userRef.set({
-      user_id: userId,
-      telegram_id: userId,
-      username: username,
-      first_name: firstName,
-      last_name: lastName,
-      referred_by: (isNewUser && referrerId && referrerId !== userId) ? referrerId : (userDoc.data()?.referred_by || null),
-      updated_at: new Date().toISOString(),
-      ...(isNewUser ? {
-        balance: 0,
-        sats: 0,
-        usdt_balance: 0,
-        usdc_balance: 0,
-        banned: false,
-        created_at: new Date().toISOString()
-      } : {})
-    }, { merge: true });
-
-    // Open WebApp URL
     const appUrl = `${WEBAPP_URL}/?telegram_id=${userId}&username=${encodeURIComponent(username)}&first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName)}`;
+    const adminUrl = `${WEBAPP_URL}/admin.html?telegram_id=${userId}&username=${encodeURIComponent(username)}`;
+    const isAdmin = await isAuthorizedAdmin(userId, username);
+
+    // Build Action Keyboard
+    const keyboardRows = [
+      [Markup.button.webApp("⚡ Open Lightning Wallet", appUrl)],
+      [
+        Markup.button.callback("👤 Account Details", "cmd_account"),
+        Markup.button.callback("🎁 Invite Friends (+1 SAT)", "cmd_referral")
+      ]
+    ];
+
+    // Conditionally attach Admin Button only to authorized users
+    if (isAdmin) {
+      keyboardRows.push([Markup.button.webApp("👑 Admin Console", adminUrl)]);
+    }
 
     const welcomeText = 
       `⚡ <b>Welcome to Pheizu Lightning Wallet!</b>\n\n` +
       `Instant Bitcoin Lightning & Multi-Chain Stablecoin Wallet built for Telegram.\n\n` +
       `• ⚡ Zero-Fee Lightning Deposits\n` +
       `• 💎 Instant USDT & USDC Settlements\n` +
-      `• 🔗 Your Lightning Address: <code>${username}@${DOMAIN}</code>\n\n` +
-      `Tap below to open your wallet:`;
+      `• 🔗 Your Lightning Address:\n<code>${username}@${DOMAIN}</code>\n\n` +
+      `Choose an option below:`;
 
-    return ctx.replyWithHTML(welcomeText, Markup.inlineKeyboard([
-      [Markup.button.webApp("⚡ Launch Wallet", appUrl)],
-      [Markup.button.callback("🎁 Invite Friends & Earn", "cmd_referral")]
-    ]));
+    return ctx.replyWithHTML(welcomeText, Markup.inlineKeyboard(keyboardRows));
   } catch (e) {
     console.error("Bot Start Error:", e);
-    return ctx.reply("⚡ Welcome to Pheizu Wallet! Please tap below to open:", Markup.inlineKeyboard([
+    return ctx.reply("⚡ Welcome to Pheizu Wallet! Tap below to open:", Markup.inlineKeyboard([
       [Markup.button.webApp("⚡ Open Wallet", `${WEBAPP_URL}/?telegram_id=${ctx.from.id}`)]
     ]));
   }
 });
 
 // ==========================================
-// 2. REFERRAL SYSTEM & INVITE LINK COMMAND
+// 2. ACCOUNT DETAILS BUTTON HANDLER
+// ==========================================
+async function sendAccountDetails(ctx) {
+  try {
+    const from = ctx.from;
+    const userId = String(from.id);
+    const username = (from.username || `user${userId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
+
+    let sats = 0;
+    let usdt = 0;
+    let usdc = 0;
+
+    if (db) {
+      const uDoc = await db.collection("users").doc(userId).get();
+      if (uDoc.exists) {
+        const d = uDoc.data();
+        sats = Number(d.balance ?? d.sats ?? 0);
+        usdt = Number(d.usdt_balance ?? d.usdt ?? 0);
+        usdc = Number(d.usdc_balance ?? d.usdc ?? 0);
+      }
+    }
+
+    const appUrl = `${WEBAPP_URL}/?telegram_id=${userId}&username=${encodeURIComponent(username)}`;
+
+    const msg =
+      `👤 <b>Your Account Details:</b>\n\n` +
+      `• <b>Name:</b> ${from.first_name || ""} ${from.last_name || ""}\n` +
+      `• <b>Username:</b> ${from.username ? `@${from.username}` : "Not Set"}\n` +
+      `• <b>Telegram ID:</b> <code>${userId}</code>\n` +
+      `• <b>Lightning Address:</b>\n<code>${username}@${DOMAIN}</code>\n\n` +
+      `💰 <b>Current Balances:</b>\n` +
+      `• <b>Bitcoin:</b> ${sats.toLocaleString()} SATS (${(sats / 100000000).toFixed(8)} BTC)\n` +
+      `• <b>USDT:</b> $${usdt.toFixed(2)}\n` +
+      `• <b>USDC:</b> $${usdc.toFixed(2)}`;
+
+    return ctx.replyWithHTML(msg, Markup.inlineKeyboard([
+      [Markup.button.webApp("⚡ Open Wallet", appUrl)],
+      [Markup.button.callback("🎁 Invite Friends (+1 SAT)", "cmd_referral")]
+    ]));
+  } catch (err) {
+    return ctx.reply("Failed to load account details.");
+  }
+}
+
+// ==========================================
+// 3. INVITE FRIENDS (+1 SAT) BUTTON HANDLER
 // ==========================================
 async function sendReferralDashboard(ctx) {
   try {
@@ -211,7 +285,6 @@ async function sendReferralDashboard(ctx) {
     const botInfo = await ctx.telegram.getMe();
     const botUsername = botInfo.username;
 
-    // Correct Working Telegram Referral Link
     const referralLink = `https://t.me/${botUsername}?start=ref_${userId}`;
 
     let refCount = 0;
@@ -226,11 +299,11 @@ async function sendReferralDashboard(ctx) {
     }
 
     const refMessage =
-      `🎁 <b>Invite Friends & Earn Free SATS!</b>\n\n` +
-      `Share your personal referral link with friends. For every friend who joins, you receive <b>${REFERRAL_REWARD_SATS} Satoshis</b> instantly.\n\n` +
-      `📊 <b>Your Referral Stats:</b>\n` +
-      `• Total Friends Invited: <b>${refCount}</b>\n` +
-      `• Total SATS Earned: <b>${refEarnings.toLocaleString()} SATS</b>\n\n` +
+      `🎁 <b>Invite Friends & Earn Free Bitcoin!</b>\n\n` +
+      `Share your personal referral link with friends. For every friend who joins, you receive <b>${REFERRAL_REWARD_SATS} SAT</b> credited to your balance instantly.\n\n` +
+      `📊 <b>Your Referral Statistics:</b>\n` +
+      `• Friends Invited: <b>${refCount}</b>\n` +
+      `• Total Earned: <b>${refEarnings.toLocaleString()} SATS</b>\n\n` +
       `🔗 <b>Your Exclusive Invite Link:</b>\n` +
       `<code>${referralLink}</code>`;
 
@@ -238,34 +311,34 @@ async function sendReferralDashboard(ctx) {
     const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${shareText}`;
 
     return ctx.replyWithHTML(refMessage, Markup.inlineKeyboard([
-      [Markup.button.url("🚀 Share Link with Friends", shareUrl)],
-      [Markup.button.webApp("⚡ Open Wallet", `${WEBAPP_URL}/?telegram_id=${userId}`)]
+      [Markup.button.url("🚀 Share Link on Telegram", shareUrl)],
+      [Markup.button.callback("👤 View Account Details", "cmd_account")]
     ]));
   } catch (err) {
-    console.error("Referral Command Error:", err);
-    return ctx.reply("Failed to generate referral link. Please try again.");
+    return ctx.reply("Failed to generate referral link.");
   }
 }
 
-// Commands & Action Handlers
+// Callback queries and commands
+bot.action("cmd_account", sendAccountDetails);
+bot.action("cmd_referral", sendReferralDashboard);
+bot.command("account", sendAccountDetails);
 bot.command("invite", sendReferralDashboard);
 bot.command("referral", sendReferralDashboard);
 bot.command("ref", sendReferralDashboard);
-bot.action("cmd_referral", sendReferralDashboard);
 
 // Help Command
 bot.command("help", (ctx) => {
   return ctx.replyWithHTML(
     `📖 <b>Pheizu Wallet Commands:</b>\n\n` +
-    `/start - Open Wallet & Menu\n` +
-    `/invite - Get your Referral Link & Stats\n` +
-    `/help - View this help guide`
+    `/start - Main Wallet Menu\n` +
+    `/account - View Account Details & Balances\n` +
+    `/invite - Invite Friends & Earn 1 SAT\n` +
+    `/help - View this guide`
   );
 });
 
-// ==========================================
-// VERCEL SERVERLESS HANDLER
-// ==========================================
+// Vercel Serverless Handler
 module.exports = async (req, res) => {
   try {
     if (req.method === "POST") {
