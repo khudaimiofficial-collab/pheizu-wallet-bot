@@ -350,6 +350,7 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <!-- Header with Dynamic Admin Button -->
   <div class="header-bar">
     <div class="wallet-title">
       <span>⚡</span>
@@ -623,21 +624,44 @@
   const username = rawUsername.toLowerCase().replace(/[^a-z0-9_]/g, "");
   localStorage.setItem("saved_user", username);
 
-  // Auto-detect bot username from URL query param, Telegram WebApp context, or current location
-  const detectedBotUsername = tgInfo?.bot_username || 
-                             new URLSearchParams(window.location.search).get("bot_username") || 
-                             tg?.initDataUnsafe?.bot_username || 
-                             "pheizu_wallet_bot";
-
   const currentUserId = username;
   const myLightningAddress = `${username}@${DOMAIN}`;
-  const myReferralLink = `https://t.me/${detectedBotUsername}?start=ref_${tgNumericId || username}`;
+
+  // ==========================================
+  // DYNAMIC BOT USERNAME DETECTION
+  // ==========================================
+  let detectedBotUsername = tgInfo?.bot_username || 
+                             new URLSearchParams(window.location.search).get("bot_username") || 
+                             tg?.initDataUnsafe?.bot_username || 
+                             localStorage.getItem("saved_bot_username") || "";
+
+  let myReferralLink = detectedBotUsername 
+    ? `https://t.me/${detectedBotUsername}?start=ref_${tgNumericId || username}` 
+    : `https://t.me/share/url?url=${encodeURIComponent(`ref_${tgNumericId || username}`)}`;
 
   document.getElementById("accFullName").innerText = fullName;
   document.getElementById("accUsername").innerText = tgInfo?.username ? `@${tgInfo.username}` : `@${username}`;
   document.getElementById("accTgId").innerText = tgNumericId || "N/A";
   document.getElementById("accLnAddress").innerText = myLightningAddress;
   document.getElementById("accReferralLinkInput").value = myReferralLink;
+
+  // Fallback: If not detected from params, resolve bot username from server API
+  if (!detectedBotUsername) {
+    fetch("/api/bot")
+      .catch(() => {})
+      .finally(async () => {
+        try {
+          const res = await fetch("/api/wallet?action=get-bot-info");
+          const data = await res.json();
+          if (data.bot_username) {
+            detectedBotUsername = data.bot_username;
+            localStorage.setItem("saved_bot_username", detectedBotUsername);
+            myReferralLink = `https://t.me/${detectedBotUsername}?start=ref_${tgNumericId || username}`;
+            document.getElementById("accReferralLinkInput").value = myReferralLink;
+          }
+        } catch(e) {}
+      });
+  }
 
   if (tgNumericId === MASTER_ADMIN_ID || username === "pheizu") {
     document.getElementById("adminHeaderBtnContainer")?.classList.remove("hidden");
