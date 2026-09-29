@@ -278,7 +278,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Access Denied Screen -->
   <div id="accessDeniedScreen" class="access-denied hidden">
     <div style="font-size: 54px; margin-bottom: 12px;">⛔</div>
     <h2 style="color: var(--danger); margin-bottom: 8px;">Access Denied</h2>
@@ -290,7 +289,6 @@
     </button>
   </div>
 
-  <!-- Header -->
   <div class="header-bar">
     <div class="header-title">
       <span>👑</span>
@@ -304,7 +302,6 @@
     </div>
   </div>
 
-  <!-- Treasury Profit Overview -->
   <div class="card" style="border: 1px solid var(--accent); background: #0b1120;">
     <div class="card-title" style="color:var(--accent);">
       <span>💰 Platform Revenue (2.0% Withdrawal Fees Collected)</span>
@@ -325,7 +322,6 @@
     </div>
   </div>
 
-  <!-- Navigation Tabs -->
   <div class="admin-nav">
     <button id="tabBtnUsers" class="admin-tab-btn active" onclick="switchAdminTab('users')">👥 All Users</button>
     <button id="tabBtnBroadcast" class="admin-tab-btn" onclick="switchAdminTab('broadcast')">📢 Broadcast</button>
@@ -419,7 +415,6 @@
     </div>
   </div>
 
-  <!-- Balance Adjustment Modal -->
   <div id="balanceModal" class="modal-overlay hidden">
     <div class="modal-card">
       <h3 style="font-size:15px; margin-bottom:8px; color:#fff;">Adjust Balance</h3>
@@ -499,7 +494,6 @@
 
   let allUsersData = [];
 
-  // Call dedicated /api/admin endpoint
   async function loadAdminData() {
     try {
       const res = await fetch(`/api/admin?action=get-data&telegram_id=${currentTgId}&username=${encodeURIComponent(currentUsername)}`);
