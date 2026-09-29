@@ -57,6 +57,18 @@ function sanitizeApiKey(raw) {
     .trim();
 }
 
+// Helper: Format Telegram Channel ID with mandatory -100 prefix for supergroups/channels
+function formatChannelId(raw) {
+  if (!raw) return "";
+  let clean = String(raw).trim();
+  if (/^\d{8,16}$/.test(clean)) {
+    clean = `-100${clean}`;
+  } else if (/^-\d{8,16}$/.test(clean) && !clean.startsWith("-100")) {
+    clean = `-100${clean.replace(/^-/, "")}`;
+  }
+  return clean;
+}
+
 // Helper: Resolve Numeric Telegram ID
 async function resolveNumericTelegramId(userId, candidateTgId) {
   if (candidateTgId && /^\d{6,14}$/.test(String(candidateTgId).trim())) {
@@ -130,23 +142,28 @@ async function notifyTelegramUser(telegramId, message) {
   }
 }
 
-// Helper: Forward success receipts to Telegram log channel
-async function forwardToLogsChannel(text) {
-  if (!BOT_TOKEN) return;
+// Helper: Forward success receipts to Telegram log channel with detailed verification
+async function forwardToLogsChannel(text, customChannelId = null) {
+  if (!BOT_TOKEN) return { ok: false, error: "BOT_TOKEN is not configured on server" };
   try {
-    let channelId = null;
-    if (db) {
+    let channelId = customChannelId;
+    if (!channelId && db) {
       try {
         const snap = await db.collection("settings").doc("logs_channel").get();
         if (snap.exists && snap.data().channel_id) channelId = snap.data().channel_id;
+        if (!channelId) {
+          const cfgSnap = await db.collection("settings").doc("config").get();
+          if (cfgSnap.exists && cfgSnap.data().logs_channel) channelId = cfgSnap.data().logs_channel;
+        }
       } catch (err) {}
     }
-    if (!channelId) channelId = process.env.LOG_CHANNEL_ID || process.env.ADMIN_CHAT_ID;
-    if (!channelId) return;
-    channelId = String(channelId).trim();
-    if (/^\d{8,14}$/.test(channelId)) channelId = `-100${channelId}`;
 
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    if (!channelId) channelId = process.env.LOG_CHANNEL_ID || process.env.ADMIN_CHAT_ID;
+    if (!channelId) return { ok: false, error: "No logs channel configured in settings or environment" };
+
+    channelId = formatChannelId(channelId);
+
+    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -155,7 +172,15 @@ async function forwardToLogsChannel(text) {
         parse_mode: "HTML"
       })
     });
-  } catch (e) {}
+
+    const data = await res.json();
+    if (!data.ok) {
+      return { ok: false, error: data.description || "Telegram API rejected delivery" };
+    }
+    return { ok: true, channel_id: channelId };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 
 // Helper: Get active Speed API key
@@ -204,7 +229,7 @@ async function resolveLnAddress(dest, amountSats) {
   return dest;
 }
 
-// Helper: Extract payment targets (invoice or crypto address)
+// Helper: Extract payment targets
 function extractPaymentTarget(obj) {
   if (!obj) return null;
 
@@ -258,7 +283,6 @@ function extractPaymentTarget(obj) {
   return null;
 }
 
-// Helper: Extract real amount received across all Speed API response formats
 function extractPaidAmount(payment, invData) {
   if (!payment) return 0;
 
@@ -293,7 +317,6 @@ function extractPaidAmount(payment, invData) {
   return 0;
 }
 
-// Speed Client Request
 async function speedRequest(path, method, body, apiKey) {
   const cleanKey = sanitizeApiKey(apiKey);
   const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
@@ -314,7 +337,6 @@ async function speedRequest(path, method, body, apiKey) {
   return { ok: res.ok, status: res.status, data };
 }
 
-// Error extractor
 function extractErrorMessage(data, status) {
   if (!data) return `Speed API returned HTTP ${status}`;
   if (typeof data === "string") return data;
@@ -327,7 +349,7 @@ function extractErrorMessage(data, status) {
   return `Speed API error (HTTP ${status})`;
 }
 
-// User wallet resolver
+// User wallet resolver with Banned / Terminated Check
 async function findUserWallet(identifiers) {
   if (!db) return null;
 
@@ -349,22 +371,20 @@ async function findUserWallet(identifiers) {
       if (doc.exists) {
         const data = doc.data();
         const bal = data.balance ?? data.sats ?? data.amount;
-        if (bal !== undefined && bal !== null) {
-          return { ref: doc.ref, id: doc.id, data, balance: Number(bal) || 0, collection: col };
-        }
+        return {
+          ref: doc.ref,
+          id: doc.id,
+          data,
+          balance: Number(bal) || 0,
+          collection: col,
+          banned: Boolean(data.banned || data.deleted)
+        };
       }
     }
   }
 
-  for (const col of collectionsToCheck) {
-    for (const docId of candidateIds) {
-      const doc = await db.collection(col).doc(docId).get();
-      if (doc.exists) return { ref: doc.ref, id: doc.id, data: doc.data(), balance: 0, collection: col };
-    }
-  }
-
   const primary = candidateIds.find(c => !c.startsWith("user") && /^\d+$/.test(c)) || candidateIds[0] || "unknown";
-  return { ref: db.collection("users").doc(primary), id: primary, data: {}, balance: 0, collection: "users" };
+  return { ref: db.collection("users").doc(primary), id: primary, data: {}, balance: 0, collection: "users", banned: false };
 }
 
 // Main Request Handler
@@ -393,12 +413,21 @@ module.exports = async function handler(req, res) {
       const candidates = [uid, uname, tid, tid ? `user${tid}` : null];
       const wallet = await findUserWallet(candidates);
 
+      if (wallet && wallet.banned) {
+        return res.status(403).json({
+          success: false,
+          banned: true,
+          error: "This account has been terminated by the administrator."
+        });
+      }
+
       return res.status(200).json({
         success: true,
         user_id: wallet ? wallet.id : uid,
         balance: wallet ? wallet.balance : 0,
         usdt_balance: wallet ? (Number(wallet.data.usdt_balance ?? wallet.data.usdt) || 0) : 0,
-        usdc_balance: wallet ? (Number(wallet.data.usdc_balance ?? wallet.data.usdc) || 0) : 0
+        usdc_balance: wallet ? (Number(wallet.data.usdc_balance ?? wallet.data.usdc) || 0) : 0,
+        banned: false
       });
     }
 
@@ -422,13 +451,18 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 3. CREATE DEPOSIT INVOICE (Speed ID and TxID are identical)
+    // 3. CREATE DEPOSIT INVOICE
     // ========================================================
     if (action === "create-payment" && req.method === "POST") {
       const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
       const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
 
       if (!uid) return res.status(400).json({ success: false, error: "Missing user identification." });
+
+      const wallet = await findUserWallet([uid, telegram_id]);
+      if (wallet && wallet.banned) {
+        return res.status(403).json({ success: false, error: "Account terminated by administrator." });
+      }
 
       const apiKey = await getSpeedApiKey();
       if (!apiKey) return res.status(500).json({ success: false, error: "Speed API key is not configured." });
@@ -448,7 +482,6 @@ module.exports = async function handler(req, res) {
       let status = 400;
       let sourceEndpoint = "payments";
 
-      // Open Amount Lightning -> Create Payrequest
       if (isOpenAmount && payMethod === "lightning") {
         const prRes = await speedRequest("payrequests", "POST", {
           currency: baseCurr,
@@ -464,7 +497,6 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Open Amount On-chain -> Create Payment Address
       if (isOpenAmount && payMethod === "onchain") {
         const addrRes = await speedRequest("payment-addresses", "POST", {
           currency: baseCurr,
@@ -481,7 +513,6 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Specific Amount or Fallback
       if (!ok) {
         const speedBody = {
           currency: baseCurr,
@@ -578,7 +609,6 @@ module.exports = async function handler(req, res) {
       const wallet = await findUserWallet([creditTarget, telegram_id, invData?.telegram_id, user_id]);
       const targetNumericChatId = await resolveNumericTelegramId(creditTarget, telegram_id || invData?.telegram_id || wallet?.data?.telegram_id);
 
-      // Return immediately if already paid
       if (invData && invData.is_paid && Number(invData.amount || 0) > 0) {
         if (!invData.notified && targetNumericChatId) {
           const fromUser = invData.paid_by ? ` from @${invData.paid_by}` : '';
@@ -609,7 +639,6 @@ module.exports = async function handler(req, res) {
       let payment = null;
       let detectedAmount = 0;
 
-      // 🔍 DISCOVERY 1: Check PayRequest payments
       if (speedId.startsWith("pr_") || invData?.speed_source === "payrequests" || invData?.speed_payrequest_id) {
         const prId = invData?.speed_payrequest_id || speedId;
         try {
@@ -625,7 +654,6 @@ module.exports = async function handler(req, res) {
         } catch (e) {}
       }
 
-      // 🔍 DISCOVERY 2: Official Speed Search API
       if (!payment) {
         try {
           const searchRes = await speedRequest("search/payments", "POST", {
@@ -654,7 +682,6 @@ module.exports = async function handler(req, res) {
         } catch (e) {}
       }
 
-      // 🔍 DISCOVERY 3: Direct Payment check
       if (!payment) {
         try {
           const directPay = await speedRequest(`payments/${speedId}`, "GET", null, apiKey);
@@ -665,7 +692,6 @@ module.exports = async function handler(req, res) {
         } catch (e) {}
       }
 
-      // 🔍 DISCOVERY 4: Payment Address check
       if (!payment && (speedId.startsWith("pa_") || invData?.speed_source === "payment-addresses")) {
         try {
           const paRes = await speedRequest(`payment-addresses/${speedId}/payments`, "GET", null, apiKey);
@@ -817,7 +843,6 @@ module.exports = async function handler(req, res) {
 
       const cleanDest = dest.replace(/^lightning:/i, "").replace(/^bitcoin:/i, "").trim();
 
-      // Check if invoice has already been paid
       if (dest.toLowerCase().startsWith("lnbc") || dest.toLowerCase().startsWith("lightning:lnbc") || dest.startsWith("bc1")) {
         const paidInvCheck = await db.collection("invoices")
           .where("invoice", "in", [dest, cleanDest, `lightning:${cleanDest}`])
@@ -849,8 +874,8 @@ module.exports = async function handler(req, res) {
       const senderCandidates = [user_id, username, telegram_id, telegram_id ? `user${telegram_id}` : null];
       const senderWallet = await findUserWallet(senderCandidates);
 
-      if (!senderWallet) {
-        return res.status(400).json({ success: false, error: "Wallet not found." });
+      if (!senderWallet || senderWallet.banned) {
+        return res.status(403).json({ success: false, error: "Account suspended from withdrawals." });
       }
 
       let method = (withdraw_method || network || "").toLowerCase();
@@ -889,7 +914,7 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ success: false, error: `Insufficient USDC! You have ${currentUsdc.toFixed(2)} USDC.` });
       }
 
-      // Calculate 2% Platform Fee & Net Payout Amount
+      // 2% Platform Fee Calculation
       let fee = 0;
       let netPayout = 0;
 
@@ -908,12 +933,10 @@ module.exports = async function handler(req, res) {
       let recipientUserId = null;
       let internalInvoiceDoc = null;
 
-      // 1. Check if recipient is a Lightning Address on this domain
       if (dest.includes("@") && dest.toLowerCase().includes(DOMAIN.toLowerCase())) {
         recipientUserId = dest.split("@")[0].toLowerCase().trim();
       }
 
-      // 2. Check if invoice belongs to an internal user in our system
       if (!recipientUserId) {
         const candidates = [dest, cleanDest, `lightning:${cleanDest}`];
         const invSnap = await db.collection("invoices")
@@ -951,7 +974,6 @@ module.exports = async function handler(req, res) {
           batch.set(recipientWallet.ref, { usdc_balance: admin.firestore.FieldValue.increment(netPayout), updated_at: new Date().toISOString() }, { merge: true });
         }
 
-        // Add 2% Profit to Admin Treasury
         const treasuryRef = db.collection("settings").doc("admin_treasury");
         const treasuryDoc = await treasuryRef.get();
         const treasuryData = treasuryDoc.exists ? treasuryDoc.data() : {};
@@ -1123,7 +1145,6 @@ module.exports = async function handler(req, res) {
       const batch = db.batch();
       batch.set(senderWallet.ref, updateData, { merge: true });
 
-      // Add 2% Profit to Admin Treasury
       const treasuryRef = db.collection("settings").doc("admin_treasury");
       const treasuryDoc = await treasuryRef.get();
       const treasuryData = treasuryDoc.exists ? treasuryDoc.data() : {};
@@ -1199,6 +1220,10 @@ module.exports = async function handler(req, res) {
         try {
           const chSnap = await db.collection("settings").doc("logs_channel").get();
           if (chSnap.exists && chSnap.data().channel_id) logsChannel = chSnap.data().channel_id;
+          if (!logsChannel) {
+            const cfgSnap = await db.collection("settings").doc("config").get();
+            if (cfgSnap.exists && cfgSnap.data().logs_channel) logsChannel = cfgSnap.data().logs_channel;
+          }
         } catch(e) {}
 
         try {
@@ -1236,7 +1261,8 @@ module.exports = async function handler(req, res) {
             username: d.username || "",
             telegram_id: d.telegram_id || "",
             first_name: d.first_name || "",
-            banned: Boolean(d.banned),
+            banned: Boolean(d.banned || d.deleted),
+            deleted: Boolean(d.deleted),
             sats,
             usdt,
             usdc
@@ -1255,7 +1281,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 7. ADMIN: BROADCAST TO ALL USERS
+    // 7. ADMIN: BROADCAST
     // ========================================================
     if (action === "admin-broadcast" && req.method === "POST") {
       const { text, telegram_id, username } = req.body;
@@ -1278,7 +1304,7 @@ module.exports = async function handler(req, res) {
 
         usersSnap.forEach(doc => {
           const d = doc.data();
-          if (d.telegram_id && /^\d+$/.test(String(d.telegram_id))) {
+          if (!d.banned && !d.deleted && d.telegram_id && /^\d+$/.test(String(d.telegram_id))) {
             recipientIds.add(String(d.telegram_id));
           }
         });
@@ -1312,7 +1338,7 @@ module.exports = async function handler(req, res) {
     }
 
     // ========================================================
-    // 8. ADMIN: CONFIGURATION SETTINGS
+    // 8. ADMIN: CONFIGURATION SETTINGS & LIVE CHANNEL TEST
     // ========================================================
     if (action === "admin-save-key" && req.method === "POST") {
       const { api_key, telegram_id, username } = req.body;
@@ -1333,8 +1359,25 @@ module.exports = async function handler(req, res) {
       if (!(await isAuthorizedAdminById(telegram_id, username))) {
         return res.status(403).json({ success: false, error: "Unauthorized" });
       }
-      let chId = String(channel_id).trim();
-      if (/^\d{8,14}$/.test(chId)) chId = `-100${chId}`;
+      if (!channel_id) return res.status(400).json({ success: false, error: "Channel ID is required" });
+
+      const chId = formatChannelId(channel_id);
+
+      // Perform real-time verification ping
+      const pingResult = await forwardToLogsChannel(
+        `⚡ <b>Pheizu Logs Channel Connected Successfully!</b>\n` +
+        `• Connected By: @${username || telegram_id}\n` +
+        `• Channel ID: <code>${chId}</code>\n` +
+        `• Timestamp: ${new Date().toUTCString()}`,
+        chId
+      );
+
+      if (!pingResult.ok) {
+        return res.status(400).json({
+          success: false,
+          error: `Telegram Error: ${pingResult.error}. Make sure your bot is an Administrator with Post Messages permission in ${chId}.`
+        });
+      }
 
       if (db) {
         await db.collection("settings").doc("logs_channel").set({ channel_id: chId, updated_at: new Date().toISOString() }, { merge: true });
@@ -1379,6 +1422,9 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ success: true, credited: delta });
     }
 
+    // ========================================================
+    // 9. ADMIN: MANAGE USER (PERMANENT DELETE & BAN BLACKLIST)
+    // ========================================================
     if (action === "admin-manage-user" && req.method === "POST") {
       const { target_user, task, telegram_id, username } = req.body;
       if (!(await isAuthorizedAdminById(telegram_id, username))) {
@@ -1389,11 +1435,23 @@ module.exports = async function handler(req, res) {
       if (db) {
         if (task === "ban") {
           await db.collection("users").doc(target).set({ banned: true }, { merge: true });
+          await db.collection("wallets").doc(target).set({ banned: true }, { merge: true });
         } else if (task === "unban") {
-          await db.collection("users").doc(target).set({ banned: false }, { merge: true });
+          await db.collection("users").doc(target).set({ banned: false, deleted: false }, { merge: true });
+          await db.collection("wallets").doc(target).set({ banned: false, deleted: false }, { merge: true });
         } else if (task === "delete") {
-          await db.collection("users").doc(target).delete();
-          await db.collection("wallets").doc(target).delete();
+          // Permanently blacklist and wipe balances to prevent re-entry restart
+          const deleteRecord = {
+            deleted: true,
+            banned: true,
+            balance: 0,
+            sats: 0,
+            usdt_balance: 0,
+            usdc_balance: 0,
+            deleted_at: new Date().toISOString()
+          };
+          await db.collection("users").doc(target).set(deleteRecord, { merge: true });
+          await db.collection("wallets").doc(target).set(deleteRecord, { merge: true });
         }
       }
       return res.status(200).json({ success: true });
