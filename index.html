@@ -315,6 +315,8 @@
       font-weight: 600;
       z-index: 10000;
       box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+      max-width: 90%;
+      text-align: center;
     }
 
     .modal-overlay {
@@ -490,6 +492,10 @@
     
     <div class="account-badge-box">
       <div class="account-row">
+        <span style="color:var(--muted);">Name:</span>
+        <b id="accFullName" style="color:#fff;">...</b>
+      </div>
+      <div class="account-row">
         <span style="color:var(--muted);">Username:</span>
         <b id="accUsername" style="color:#fff;">...</b>
       </div>
@@ -563,13 +569,19 @@
     const q = new URLSearchParams(window.location.search);
     const id = q.get("telegram_id") || q.get("id");
     const uname = q.get("username");
-    if (id) return { id, username: uname };
+    const fname = q.get("first_name");
+    const lname = q.get("last_name");
+    if (id) return { id, username: uname, first_name: fname, last_name: lname };
     return null;
   }
 
   const tgInfo = getTelegramUserInfo();
   let tgNumericId = tgInfo?.id ? String(tgInfo.id) : (localStorage.getItem("saved_tg_id") || "");
   if (tgInfo?.id) localStorage.setItem("saved_tg_id", tgNumericId);
+
+  const userFirstName = tgInfo?.first_name || "";
+  const userLastName = tgInfo?.last_name || "";
+  const fullName = `${userFirstName} ${userLastName}`.trim() || "Pheizu User";
 
   const rawUsername = tgInfo?.username || (tgNumericId ? `user${tgNumericId}` : localStorage.getItem("saved_user") || "guest");
   const username = rawUsername.toLowerCase().replace(/[^a-z0-9_]/g, "");
@@ -578,7 +590,8 @@
   const currentUserId = username;
   const myLightningAddress = `${username}@${DOMAIN}`;
 
-  document.getElementById("accUsername").innerText = `@${username}`;
+  document.getElementById("accFullName").innerText = fullName;
+  document.getElementById("accUsername").innerText = tgInfo?.username ? `@${tgInfo.username}` : `@${username}`;
   document.getElementById("accTgId").innerText = tgNumericId || "N/A";
   document.getElementById("accLnAddress").innerText = myLightningAddress;
 
@@ -596,7 +609,7 @@
     toast.innerText = msg;
     toast.classList.remove("hidden");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toast.classList.add("hidden"), 2400);
+    toastTimer = setTimeout(() => toast.classList.add("hidden"), 3000);
   }
 
   function haptic(type = "light") { try { tg?.HapticFeedback?.impactOccurred(type); } catch(e){} }
@@ -638,7 +651,7 @@
 
   async function loadBalance() {
     try {
-      const res = await fetch(`/api/wallet?action=balance&user_id=${encodeURIComponent(currentUserId)}&username=${encodeURIComponent(username)}&telegram_id=${encodeURIComponent(tgNumericId)}`);
+      const res = await fetch(`/api/wallet?action=balance&user_id=${encodeURIComponent(currentUserId)}&username=${encodeURIComponent(username)}&telegram_id=${encodeURIComponent(tgNumericId)}&first_name=${encodeURIComponent(userFirstName)}&last_name=${encodeURIComponent(userLastName)}`);
       const data = await res.json();
       if (data.success) {
         liveBalances.sats = Number(data.balance || 0);
@@ -794,6 +807,8 @@
           payment_method: currentDepositState.network,
           user_id: currentUserId,
           username: username,
+          first_name: userFirstName,
+          last_name: userLastName,
           telegram_id: tgNumericId,
           note: currentDepositState.note || undefined
         })
@@ -1210,6 +1225,8 @@
           target_currency: targetCurr,
           user_id: currentUserId,
           username: username,
+          first_name: userFirstName,
+          last_name: userLastName,
           telegram_id: tgNumericId
         })
       });
