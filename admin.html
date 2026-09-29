@@ -64,7 +64,6 @@
       font-weight: 700;
     }
 
-    /* Admin Navigation Tabs */
     .admin-nav {
       display: flex;
       background: var(--card);
@@ -117,7 +116,6 @@
       justify-content: space-between;
     }
 
-    /* User Cards List */
     .user-card {
       background: var(--card-inner);
       border: 1px solid var(--border);
@@ -184,7 +182,6 @@
     }
     .btn-sm:active { transform: scale(0.96); }
 
-    /* Admin list items */
     .admin-item {
       display: flex;
       justify-content: space-between;
@@ -240,7 +237,6 @@
       box-shadow: 0 4px 25px rgba(0,0,0,0.8);
     }
 
-    /* Modal for Adjusting Balance */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -280,7 +276,7 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Access Denied Screen (Non-Admins) -->
+  <!-- Access Denied Screen -->
   <div id="accessDeniedScreen" class="access-denied hidden">
     <div style="font-size: 54px; margin-bottom: 12px;">⛔</div>
     <h2 style="color: var(--danger); margin-bottom: 8px;">Access Denied</h2>
@@ -306,6 +302,27 @@
     </div>
   </div>
 
+  <!-- Treasury Profit Overview (2% Withdrawal Earnings) -->
+  <div class="card" style="border: 1px solid var(--accent); background: #0b1120;">
+    <div class="card-title" style="color:var(--accent);">
+      <span>💰 Platform Revenue (2.0% Withdrawal Fees Collected)</span>
+    </div>
+    <div class="balance-chips" style="grid-template-columns: 1fr 1fr 1fr; margin-top: 8px;">
+      <div class="chip">
+        <span>EARNED SATS</span>
+        <b id="treasurySats" style="color:#f59e0b; font-size:12px;">0 sats</b>
+      </div>
+      <div class="chip">
+        <span>EARNED USDT</span>
+        <b id="treasuryUsdt" style="color:#38bdf8; font-size:12px;">$0.00</b>
+      </div>
+      <div class="chip">
+        <span>EARNED USDC</span>
+        <b id="treasuryUsdc" style="color:#38bdf8; font-size:12px;">$0.00</b>
+      </div>
+    </div>
+  </div>
+
   <!-- Navigation Tabs -->
   <div class="admin-nav">
     <button id="tabBtnUsers" class="admin-tab-btn active" onclick="switchAdminTab('users')">👥 All Users</button>
@@ -315,7 +332,7 @@
     <button id="tabBtnAdmins" class="admin-tab-btn" onclick="switchAdminTab('admins')">👑 Admin List</button>
   </div>
 
-  <!-- 1. TAB: ALL REGISTERED USERS -->
+  <!-- 1. TAB: ALL USERS -->
   <div id="panelUsers">
     <div class="card">
       <div class="card-title">
@@ -332,15 +349,15 @@
     </div>
   </div>
 
-  <!-- 2. TAB: BROADCAST (FIXED & FULLY WORKING) -->
+  <!-- 2. TAB: BROADCAST -->
   <div id="panelBroadcast" class="hidden">
     <div class="card">
       <div class="card-title">📢 Broadcast Announcement to All Users</div>
       <p style="font-size:11px; color:var(--muted); line-height:1.5; margin-bottom:10px;">
-        This delivers a direct Telegram message to every registered bot user. HTML formatting tags (<code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;code&gt;</code>) are supported.
+        Delivers a direct Telegram message to every registered bot user.
       </p>
 
-      <textarea id="broadcastInput" rows="5" placeholder="⚡ Announcement: We have upgraded our Lightning Network nodes for zero-fee routing!"></textarea>
+      <textarea id="broadcastInput" rows="5" placeholder="⚡ Announcement: Zero fees on all deposits!"></textarea>
       
       <button id="btnSendBroadcast" class="btn-action" style="background:#2563eb;" onclick="executeBroadcast()">
         🚀 Send Broadcast Now
@@ -352,9 +369,9 @@
   <!-- 3. TAB: SPEED API KEY -->
   <div id="panelSpeed" class="hidden">
     <div class="card">
-      <div class="card-title">🔑 Saved Speed API Key</div>
+      <div class="card-title">🔑 Speed API Secret Key</div>
       <p style="font-size:11px; color:var(--muted); margin-bottom:10px;">
-        Active key currently saved in the database.
+        Active key stored in Firestore database.
       </p>
 
       <div style="position:relative;">
@@ -371,9 +388,9 @@
   <!-- 4. TAB: LOGS CHANNEL -->
   <div id="panelChannel" class="hidden">
     <div class="card">
-      <div class="card-title">📋 Configured Logs & Receipts Channel</div>
+      <div class="card-title">📋 Logs & Receipts Channel</div>
       <p style="font-size:11px; color:var(--muted); margin-bottom:10px;">
-        All completed deposits and withdrawals are forwarded here. New users are also verified against this channel.
+        All completed transactions are forwarded to this channel.
       </p>
 
       <input type="text" id="logsChannelInput" placeholder="-1001234567890" />
@@ -384,9 +401,9 @@
   <!-- 5. TAB: ADMIN LIST -->
   <div id="panelAdmins" class="hidden">
     <div class="card">
-      <div class="card-title">👑 Active Administrators List</div>
+      <div class="card-title">👑 Administrator Access List</div>
       <p style="font-size:11px; color:var(--muted); margin-bottom:10px;">
-        Users with full administrative rights to this console.
+        Authorized administrators for this console.
       </p>
 
       <div id="adminsListContainer"></div>
@@ -399,7 +416,7 @@
     </div>
   </div>
 
-  <!-- Quick Balance Adjustment Modal -->
+  <!-- Balance Adjustment Modal -->
   <div id="balanceModal" class="modal-overlay hidden">
     <div class="modal-card">
       <h3 style="font-size:15px; margin-bottom:8px; color:#fff;">Adjust Balance</h3>
@@ -451,7 +468,6 @@
   const currentTgId = currentUser?.id ? String(currentUser.id) : (localStorage.getItem("saved_tg_id") || "");
   const currentUsername = (currentUser?.username || localStorage.getItem("saved_user") || "").toLowerCase().replace(/[^a-z0-9_]/g, "");
 
-  // Verify Admin Access
   if (currentTgId !== MASTER_ADMIN_ID && currentUsername !== "pheizu") {
     document.getElementById("accessDeniedScreen").classList.remove("hidden");
   }
@@ -480,9 +496,6 @@
 
   let allUsersData = [];
 
-  // ==========================================
-  // 1. LOAD ALL ADMIN DATA ON STARTUP
-  // ==========================================
   async function loadAdminData() {
     try {
       const res = await fetch(`/api/wallet?action=admin-get-data&telegram_id=${currentTgId}&username=${encodeURIComponent(currentUsername)}`);
@@ -493,16 +506,17 @@
         return;
       }
 
-      // 1. Show Saved Speed Key
+      // Display Treasury Revenue (2% Withdrawal Profits)
+      if (data.treasury) {
+        document.getElementById("treasurySats").innerText = `${Number(data.treasury.earned_sats || 0).toLocaleString()} sats`;
+        document.getElementById("treasuryUsdt").innerText = `$${Number(data.treasury.earned_usdt || 0).toFixed(2)}`;
+        document.getElementById("treasuryUsdc").innerText = `$${Number(data.treasury.earned_usdc || 0).toFixed(2)}`;
+      }
+
       document.getElementById("speedKeyInput").value = data.speed_key || "";
-
-      // 2. Show Saved Channel
       document.getElementById("logsChannelInput").value = data.logs_channel || "";
-
-      // 3. Render Admins List
       renderAdminsList(data.admins_list || []);
 
-      // 4. Render All Registered Users
       allUsersData = data.users || [];
       document.getElementById("userCountDisplay").innerText = allUsersData.length;
       renderUsersList(allUsersData);
@@ -511,9 +525,6 @@
     }
   }
 
-  // ==========================================
-  // 2. RENDER USERS LIST
-  // ==========================================
   function renderUsersList(users) {
     const container = document.getElementById("usersContainer");
     if (!users || users.length === 0) {
@@ -566,11 +577,7 @@
     renderUsersList(filtered);
   }
 
-  // ==========================================
-  // 3. BALANCE MODAL & ACTIONS
-  // ==========================================
   let selectedTargetUser = "";
-
   function openBalanceModal(userId, handle) {
     selectedTargetUser = userId;
     document.getElementById("targetUserModalLabel").innerText = `Target: ${handle} (${userId})`;
@@ -597,7 +604,7 @@
           target_user: selectedTargetUser,
           asset: asset,
           amount: amount,
-          type: type // 'add' or 'deduct'
+          type: type
         })
       });
       const data = await res.json();
@@ -611,96 +618,6 @@
     }
   }
 
-  // ==========================================
-  // 4. USER BAN & DELETE ACTIONS
-  // ==========================================
-  async function toggleUserBan(userId, currentBanned) {
-    try {
-      const res = await fetch("/api/wallet?action=admin-manage-user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          telegram_id: currentTgId,
-          username: currentUsername,
-          target_user: userId,
-          task: currentBanned ? "unban" : "ban"
-        })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-
-      showToast(`✓ User ${currentBanned ? 'unbanned' : 'banned'}!`);
-      loadAdminData();
-    } catch (e) {
-      showToast("Error: " + e.message);
-    }
-  }
-
-  async function deleteUserRecord(userId) {
-    if (!confirm(`Delete user ${userId} permanently from the database?`)) return;
-    try {
-      const res = await fetch("/api/wallet?action=admin-manage-user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          telegram_id: currentTgId,
-          username: currentUsername,
-          target_user: userId,
-          task: "delete"
-        })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-
-      showToast("✓ User deleted");
-      loadAdminData();
-    } catch (e) {
-      showToast("Error: " + e.message);
-    }
-  }
-
-  // ==========================================
-  // 5. BROADCAST SYSTEM (REAL DELIVERY)
-  // ==========================================
-  async function executeBroadcast() {
-    const text = document.getElementById("broadcastInput").value.trim();
-    const btn = document.getElementById("btnSendBroadcast");
-    const status = document.getElementById("broadcastStatus");
-
-    if (!text) return showToast("⚠️ Enter announcement message");
-
-    btn.disabled = true;
-    btn.innerText = "⏳ Delivering broadcast...";
-    status.innerText = "Broadcasting to all registered Telegram users...";
-
-    try {
-      const res = await fetch("/api/wallet?action=admin-broadcast", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          telegram_id: currentTgId,
-          username: currentUsername,
-          text: text
-        })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-
-      showToast(`✓ Sent to ${data.sent} users!`);
-      status.innerHTML = `<span style="color:var(--button)">✓ Broadcast complete: Delivered to <b>${data.sent}</b> users (${data.failed} unreachable).</span>`;
-      document.getElementById("broadcastInput").value = "";
-    } catch (e) {
-      showToast("Broadcast failed: " + e.message);
-      status.innerHTML = `<span style="color:var(--danger)">Failed: ${e.message}</span>`;
-    } finally {
-      btn.disabled = false;
-      btn.innerText = "🚀 Send Broadcast Now";
-    }
-  }
-
-  // ==========================================
-  // 6. SPEED KEY & CHANNEL SETTINGS
-  // ==========================================
   function toggleKeyVisibility() {
     const el = document.getElementById("speedKeyInput");
     el.type = el.type === "password" ? "text" : "password";
@@ -742,9 +659,6 @@
     }
   }
 
-  // ==========================================
-  // 7. ADMIN LIST CONTROLLER
-  // ==========================================
   function renderAdminsList(admins) {
     const container = document.getElementById("adminsListContainer");
     let html = `
@@ -773,43 +687,6 @@
     container.innerHTML = html;
   }
 
-  async function addCoAdmin() {
-    const input = document.getElementById("newAdminInput").value.trim().replace(/^@/, "");
-    if (!input) return showToast("⚠️ Enter username or ID");
-
-    try {
-      const res = await fetch("/api/wallet?action=admin-manage-admin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ telegram_id: currentTgId, username: currentUsername, task: "add", target_admin: input })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      showToast("✓ Co-Admin added!");
-      document.getElementById("newAdminInput").value = "";
-      loadAdminData();
-    } catch (e) {
-      showToast("Error: " + e.message);
-    }
-  }
-
-  async function removeCoAdmin(adminHandle) {
-    try {
-      const res = await fetch("/api/wallet?action=admin-manage-admin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ telegram_id: currentTgId, username: currentUsername, task: "remove", target_admin: adminHandle })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      showToast("✓ Co-Admin removed");
-      loadAdminData();
-    } catch (e) {
-      showToast("Error: " + e.message);
-    }
-  }
-
-  // Load live data on boot
   loadAdminData();
 </script>
 </body>
