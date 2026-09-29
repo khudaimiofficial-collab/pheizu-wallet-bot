@@ -30,199 +30,35 @@ function getDb() {
 }
 
 const db = getDb();
-const DOMAIN = "pheizu-wallet-bot.vercel.app";
+const MASTER_ADMIN_ID = "8960497898";
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
-const WITHDRAWAL_FEE_PERCENT = 0.02; // 2% Fee on Withdrawals
-
-function sanitizeApiKey(raw) {
-  if (!raw) return "";
-  return String(raw).trim().replace(/^["']|["']$/g, "").replace(/^Bearer\s+/i, "").trim();
-}
 
 function formatChannelId(raw) {
   if (!raw) return "";
   let clean = String(raw).trim();
-  if (/^\d{8,16}$/.test(clean)) return `-100${clean}`;
-  if (/^-\d{8,16}$/.test(clean) && !clean.startsWith("-100")) return `-100${clean.replace(/^-/, "")}`;
+  if (/^\d{8,16}$/.test(clean)) {
+    clean = `-100${clean}`;
+  } else if (/^-\d{8,16}$/.test(clean) && !clean.startsWith("-100")) {
+    clean = `-100${clean.replace(/^-/, "")}`;
+  }
   return clean;
 }
 
-async function resolveNumericTelegramId(userId, candidateTgId) {
-  if (candidateTgId && /^\d{6,14}$/.test(String(candidateTgId).trim())) return String(candidateTgId).trim();
-  if (userId && /^\d{6,14}$/.test(String(userId).trim())) return String(userId).trim();
+async function isAuthorizedAdmin(telegramId, username) {
+  const numId = String(telegramId || "").trim();
+  const uname = String(username || "").toLowerCase().replace(/^@/, "").trim();
+  if (numId === MASTER_ADMIN_ID || uname === "pheizu") return true;
 
-  if (db) {
-    const ids = [userId, candidateTgId].filter(Boolean).map(s => String(s).toLowerCase().replace(/^@/, "").trim());
-    for (const id of ids) {
-      try {
-        const uDoc = await db.collection("users").doc(id).get();
-        if (uDoc.exists && uDoc.data().telegram_id && /^\d+$/.test(String(uDoc.data().telegram_id))) {
-          return String(uDoc.data().telegram_id);
-        }
-      } catch (e) {}
-    }
-  }
-  return null;
-}
-
-async function notifyTelegramUser(telegramId, message) {
-  if (!BOT_TOKEN || !telegramId) return;
-  try {
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: String(telegramId), text: message, parse_mode: "HTML" })
-    });
-  } catch (e) {}
-}
-
-async function forwardToLogsChannel(text) {
-  if (!BOT_TOKEN || !db) return;
-  try {
-    let channelId = null;
-    const cfgSnap = await db.collection("settings").doc("config").get();
-    if (cfgSnap.exists && cfgSnap.data().logs_channel) channelId = cfgSnap.data().logs_channel;
-    if (!channelId) {
-      const chSnap = await db.collection("settings").doc("logs_channel").get();
-      if (chSnap.exists && chSnap.data().channel_id) channelId = chSnap.data().channel_id;
-    }
-    if (!channelId) channelId = process.env.LOG_CHANNEL_ID;
-    if (!channelId) return;
-
-    channelId = formatChannelId(channelId);
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: channelId, text: text, parse_mode: "HTML" })
-    });
-  } catch (e) {}
-}
-
-async function getSpeedApiKey() {
   if (db) {
     try {
-      const cfgSnap = await db.collection("settings").doc("config").get();
-      if (cfgSnap.exists && cfgSnap.data().speed_key) return sanitizeApiKey(cfgSnap.data().speed_key);
-      const spSnap = await db.collection("settings").doc("speed").get();
-      if (spSnap.exists && spSnap.data().api_key) return sanitizeApiKey(spSnap.data().api_key);
-    } catch (e) {}
-  }
-  return sanitizeApiKey(process.env.SPEED_API_KEY || "");
-}
-
-async function speedRequest(path, method, body, apiKey) {
-  const cleanKey = sanitizeApiKey(apiKey);
-  const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
-  const url = `https://api.tryspeed.com/${path.replace(/^\//, "")}`;
-
-  const res = await fetch(url, {
-    method,
-    headers: {
-      "Accept": "application/json",
-      "Authorization": authHeader,
-      "Content-Type": "application/json",
-      "speed-version": "2022-10-15"
-    },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  const data = await res.json().catch(() => null);
-  return { ok: res.ok, status: res.status, data };
-}
-
-function extractPaymentTarget(obj) {
-  if (!obj) return null;
-  if (typeof obj === "string") {
-    const str = obj.trim();
-    if (str.toLowerCase().startsWith("lnbc") || str.toLowerCase().startsWith("lightning:lnbc")) return { type: "lightning", value: str };
-    if (str.startsWith("bc1") || str.startsWith("1") || str.startsWith("3")) return { type: "onchain", value: str.replace(/^bitcoin:/i, "") };
-    if (str.startsWith("T") && str.length >= 30) return { type: "tron", value: str };
-    if (str.startsWith("0x") && str.length === 42) return { type: "ethereum", value: str };
-    return null;
-  }
-  if (typeof obj !== "object") return null;
-  if (obj.payment_request) return { type: "lightning", value: obj.payment_request };
-  if (obj.invoice) return { type: "lightning", value: obj.invoice };
-  if (obj.address) return { type: "address", value: obj.address };
-  if (obj.uri) return { type: "uri", value: obj.uri };
-
-  if (Array.isArray(obj.payment_methods)) {
-    for (const pm of obj.payment_methods) {
-      for (const key of ["lightning", "onchain", "tron", "solana", "ethereum", "ton"]) {
-        if (pm[key]) {
-          if (pm[key].address) return { type: key, value: pm[key].address };
-          if (pm[key].payment_request) return { type: "lightning", value: pm[key].payment_request };
-        }
+      const snap = await db.collection("settings").doc("admins").get();
+      if (snap.exists) {
+        const list = (snap.data().list || []).map(a => String(a).toLowerCase().replace(/^@/, ""));
+        if (list.includes(numId) || (uname && list.includes(uname))) return true;
       }
-    }
+    } catch(e) {}
   }
-  return null;
-}
-
-function extractPaidAmount(payment, invData) {
-  if (!payment) return 0;
-  const candidates = [
-    payment.target_amount_paid,
-    payment.amount_received,
-    payment.total_amount_received,
-    payment.paid_amount,
-    payment.amount_paid,
-    invData?.amount > 0 ? invData.amount : null
-  ];
-  for (const val of candidates) {
-    if (val !== undefined && val !== null) {
-      const num = Number(val);
-      if (!isNaN(num) && num > 0) {
-        if (num < 0.01 && (payment.currency === "BTC" || payment.target_currency === "BTC")) {
-          return Math.round(num * 100000000);
-        }
-        return Math.round(num);
-      }
-    }
-  }
-  return 0;
-}
-
-// User Finder & Auto-Register
-async function findOrRegisterUser(identifiers, meta = {}) {
-  if (!db) return null;
-  const rawList = [];
-  for (const id of identifiers) {
-    if (!id) continue;
-    const s = String(id).trim().toLowerCase().replace(/^@/, "");
-    rawList.push(s);
-    if (s.startsWith("user") && /^\d+$/.test(s.slice(4))) rawList.push(s.slice(4));
-    if (/^\d+$/.test(s)) rawList.push(`user${s}`);
-  }
-
-  const candidateIds = Array.from(new Set(rawList));
-
-  // Check existing
-  for (const docId of candidateIds) {
-    const doc = await db.collection("users").doc(docId).get();
-    if (doc.exists) {
-      const data = doc.data();
-      return { ref: doc.ref, id: doc.id, data, balance: Number(data.balance ?? data.sats ?? 0) };
-    }
-  }
-
-  // Provision fresh user
-  const primary = candidateIds.find(c => !c.startsWith("user") && /^\d+$/.test(c)) || candidateIds[0] || "guest";
-  const userRef = db.collection("users").doc(primary);
-  const initialData = {
-    user_id: primary,
-    username: meta.username || primary,
-    telegram_id: meta.telegram_id || (primary.match(/^\d+$/) ? primary : ""),
-    first_name: meta.first_name || "",
-    balance: 0,
-    sats: 0,
-    usdt_balance: 0,
-    usdc_balance: 0,
-    banned: false,
-    created_at: new Date().toISOString()
-  };
-
-  await userRef.set(initialData, { merge: true });
-  return { ref: userRef, id: primary, data: initialData, balance: 0 };
+  return false;
 }
 
 module.exports = async function handler(req, res) {
@@ -231,289 +67,279 @@ module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (!db) return res.status(500).json({ success: false, error: "Database unavailable." });
+  if (!db) return res.status(500).json({ success: false, error: "Firebase unavailable." });
 
   const { action } = req.query;
 
   try {
-    // 1. BALANCE (Auto-registers user if fresh)
-    if (action === "balance" && req.method === "GET") {
-      const { user_id, username, telegram_id, first_name } = req.query;
-      const candidates = [user_id, username, telegram_id, telegram_id ? `user${telegram_id}` : null];
-      const user = await findOrRegisterUser(candidates, { username, telegram_id, first_name });
-
-      if (user.data.banned) {
-        return res.status(403).json({ success: false, error: "Account suspended by administrator." });
+    // 1. GET ALL DASHBOARD DATA (Users, Treasury, Config)
+    if (action === "get-data" && req.method === "GET") {
+      const { telegram_id, username } = req.query;
+      if (!(await isAuthorizedAdmin(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized access." });
       }
 
-      return res.status(200).json({
-        success: true,
-        user_id: user.id,
-        balance: user.balance,
-        usdt_balance: Number(user.data.usdt_balance ?? user.data.usdt ?? 0),
-        usdc_balance: Number(user.data.usdc_balance ?? user.data.usdc ?? 0)
-      });
-    }
-
-    // 2. CREATE DEPOSIT INVOICE (100% Free)
-    if (action === "create-payment" && req.method === "POST") {
-      const { amount, user_id, username, telegram_id, target_currency, payment_method, network } = req.body;
-      const uid = (user_id || username || (telegram_id ? `user${telegram_id}` : "")).toLowerCase().trim();
-
-      const user = await findOrRegisterUser([uid, telegram_id], { username, telegram_id });
-      if (user.data.banned) return res.status(403).json({ success: false, error: "Account suspended." });
-
-      const apiKey = await getSpeedApiKey();
-      if (!apiKey) return res.status(500).json({ success: false, error: "Speed API key not configured." });
-
-      const targetCurr = (target_currency || "SATS").toUpperCase();
-      let payMethod = (payment_method || network || "lightning").toLowerCase();
-      if (payMethod === "on-chain" || payMethod === "bitcoin") payMethod = "onchain";
-
-      const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
-      const requestedAmount = Number(amount);
-      const isOpenAmount = !requestedAmount || requestedAmount <= 0;
-
-      let paymentData = null;
-      let ok = false;
-
-      if (isOpenAmount && payMethod === "lightning") {
-        const prRes = await speedRequest("payrequests", "POST", {
-          currency: baseCurr,
-          target_currency: targetCurr,
-          description: `Pheizu deposit for ${user.id}`
-        }, apiKey);
-        if (prRes.ok) { ok = true; paymentData = prRes.data; }
-      }
-
-      if (!ok) {
-        const res1 = await speedRequest("payments", "POST", {
-          currency: baseCurr,
-          target_currency: targetCurr,
-          payment_methods: [payMethod],
-          amount: isOpenAmount ? 0 : requestedAmount,
-          metadata: { user_id: user.id, telegram_id: String(telegram_id || "") }
-        }, apiKey);
-        ok = res1.ok;
-        paymentData = res1.data;
-      }
-
-      const target = extractPaymentTarget(paymentData);
-      if (!target || !target.value) {
-        return res.status(500).json({ success: false, error: "Failed to generate payment address from Speed." });
-      }
-
-      const txId = paymentData.id || `TX_${Date.now()}`;
-      await db.collection("invoices").doc(txId).set({
-        id: txId,
-        tx_id: txId,
-        invoice: target.value,
-        payment_type: target.type,
-        user_id: user.id,
-        target_currency: targetCurr,
-        payment_method: payMethod,
-        telegram_id: String(telegram_id || ""),
-        amount: isOpenAmount ? 0 : requestedAmount,
-        is_paid: false,
-        created_at: new Date().toISOString()
-      }, { merge: true });
-
-      return res.status(200).json({
-        success: true,
-        id: txId,
-        tx_id: txId,
-        payment_type: target.type,
-        target_currency: targetCurr,
-        amount: isOpenAmount ? 0 : requestedAmount,
-        invoice: target.value
-      });
-    }
-
-    // 3. CHECK STATUS (0% Deposit Fee - 100% Full Crediting)
-    if (action === "check-status" && req.method === "GET") {
-      const { payment_id, user_id, telegram_id } = req.query;
-      if (!payment_id) return res.status(400).json({ success: false, error: "Missing payment_id" });
-
-      const invRef = db.collection("invoices").doc(payment_id);
-      const invDoc = await invRef.get();
-      const invData = invDoc.exists ? invDoc.data() : null;
-
-      const user = await findOrRegisterUser([invData?.user_id, user_id, telegram_id]);
-      const curr = invData?.target_currency || "SATS";
-
-      if (invData && invData.is_paid && Number(invData.amount || 0) > 0) {
-        return res.status(200).json({
-          success: true,
-          is_paid: true,
-          status: "paid",
-          tx_id: payment_id,
-          amount: Number(invData.amount),
-          balance: user.balance,
-          currency: curr
-        });
-      }
-
-      const apiKey = await getSpeedApiKey();
-      let payment = null;
+      let speedKey = "";
+      let logsChannel = "";
+      let adminsList = [];
+      let treasuryData = { earned_sats: 0, earned_usdt: 0, earned_usdc: 0 };
 
       try {
-        const directPay = await speedRequest(`payments/${payment_id}`, "GET", null, apiKey);
-        if (directPay.ok && directPay.data) payment = directPay.data;
+        const cfgSnap = await db.collection("settings").doc("config").get();
+        if (cfgSnap.exists) {
+          speedKey = cfgSnap.data().speed_key || "";
+          logsChannel = cfgSnap.data().logs_channel || "";
+        }
+        if (!speedKey) {
+          const spSnap = await db.collection("settings").doc("speed").get();
+          if (spSnap.exists) speedKey = spSnap.data().api_key || "";
+        }
+        if (!logsChannel) {
+          const chSnap = await db.collection("settings").doc("logs_channel").get();
+          if (chSnap.exists) logsChannel = chSnap.data().channel_id || "";
+        }
+        const admSnap = await db.collection("settings").doc("admins").get();
+        if (admSnap.exists && Array.isArray(admSnap.data().list)) adminsList = admSnap.data().list;
+
+        const trSnap = await db.collection("settings").doc("admin_treasury").get();
+        if (trSnap.exists) treasuryData = trSnap.data();
       } catch (e) {}
 
-      const rawStatus = String(payment?.status || "").toLowerCase();
-      const isPaid = ["paid", "succeeded", "completed", "confirmed"].includes(rawStatus);
-      const finalSats = extractPaidAmount(payment, invData);
+      const userMap = new Map();
 
-      if (isPaid && finalSats > 0) {
-        const batch = db.batch();
-        batch.set(invRef, { is_paid: true, paid_at: new Date().toISOString(), amount: finalSats }, { merge: true });
-
-        const field = curr === "USDT" ? "usdt_balance" : (curr === "USDC" ? "usdc_balance" : "balance");
-        const altField = curr === "USDT" ? "usdt" : (curr === "USDC" ? "usdc" : "sats");
-
-        batch.set(user.ref, {
-          [field]: admin.firestore.FieldValue.increment(finalSats),
-          [altField]: admin.firestore.FieldValue.increment(finalSats),
-          updated_at: new Date().toISOString()
-        }, { merge: true });
-
-        batch.set(db.collection("transactions").doc(payment_id), {
-          id: payment_id,
-          tx_id: payment_id,
-          type: "deposit",
-          user_id: user.id,
-          amount: finalSats,
-          fee: 0,
-          currency: curr,
-          status: "completed",
-          created_at: new Date().toISOString()
+      const usersSnap = await db.collection("users").get();
+      usersSnap.forEach(d => {
+        const u = d.data();
+        userMap.set(d.id, {
+          user_id: d.id,
+          username: u.username || "",
+          telegram_id: u.telegram_id || "",
+          first_name: u.first_name || "",
+          banned: Boolean(u.banned),
+          sats: Number(u.balance ?? u.sats ?? u.amount ?? 0),
+          usdt: Number(u.usdt_balance ?? u.usdt ?? 0),
+          usdc: Number(u.usdc_balance ?? u.usdc ?? 0),
+          created_at: u.created_at || ""
         });
-
-        await batch.commit();
-
-        const tChatId = await resolveNumericTelegramId(user.id, telegram_id || invData?.telegram_id);
-        if (tChatId) {
-          await notifyTelegramUser(tChatId, `🎉 <b>Payment Received!</b>\n\n⚡ <b>+${finalSats} ${curr}</b> credited!\n🆔 <code>${payment_id}</code>`);
-        }
-
-        await forwardToLogsChannel(`✅ <b>Deposit Received</b>\n• User: @${user.id}\n• Amount: +${finalSats} ${curr}\n• Fee: 0% (Free)\n• TxID: <code>${payment_id}</code>`);
-
-        return res.status(200).json({
-          success: true,
-          is_paid: true,
-          status: "paid",
-          tx_id: payment_id,
-          amount: finalSats,
-          balance: user.balance + finalSats,
-          currency: curr
-        });
-      }
-
-      return res.status(200).json({ success: true, is_paid: false, status: rawStatus || "unpaid", balance: user.balance });
-    }
-
-    // 4. WITHDRAWAL (2.0% Platform Fee Collection)
-    if (action === "send" && req.method === "POST") {
-      const { destination, amount, user_id, telegram_id, username, withdraw_method, currency, target_currency } = req.body;
-      const sendAmount = Number(amount);
-      const dest = (destination || "").trim();
-
-      if (!dest || isNaN(sendAmount) || sendAmount <= 0) {
-        return res.status(400).json({ success: false, error: "Invalid withdrawal parameters." });
-      }
-
-      const user = await findOrRegisterUser([user_id, username, telegram_id]);
-      if (user.data.banned) return res.status(403).json({ success: false, error: "Account suspended." });
-
-      const curr = (currency || target_currency || "SATS").toUpperCase();
-      const currentBal = curr === "USDT" ? Number(user.data.usdt_balance ?? user.data.usdt ?? 0) :
-                         curr === "USDC" ? Number(user.data.usdc_balance ?? user.data.usdc ?? 0) : user.balance;
-
-      if (sendAmount > currentBal) {
-        return res.status(400).json({ success: false, error: `Insufficient balance. Available: ${currentBal}` });
-      }
-
-      // 2% platform fee
-      let fee = curr === "SATS" ? Math.max(1, Math.floor(sendAmount * WITHDRAWAL_FEE_PERCENT)) : Number((sendAmount * WITHDRAWAL_FEE_PERCENT).toFixed(2));
-      let netPayout = curr === "SATS" ? sendAmount - fee : Number((sendAmount - fee).toFixed(2));
-
-      const apiKey = await getSpeedApiKey();
-      if (!apiKey) return res.status(500).json({ success: false, error: "Speed key not configured." });
-
-      const speedRes = await speedRequest("send", "POST", {
-        amount: netPayout,
-        currency: curr,
-        target_currency: curr,
-        withdraw_method: withdraw_method || "lightning",
-        withdraw_request: dest,
-        note: `Withdrawal by ${user.id}`
-      }, apiKey);
-
-      if (!speedRes.ok) {
-        return res.status(400).json({ success: false, error: speedRes.data?.error?.message || "Speed payout failed." });
-      }
-
-      const txId = speedRes.data?.id || `WD_${Date.now()}`;
-      const batch = db.batch();
-
-      const field = curr === "USDT" ? "usdt_balance" : (curr === "USDC" ? "usdc_balance" : "balance");
-      const altField = curr === "USDT" ? "usdt" : (curr === "USDC" ? "usdc" : "sats");
-
-      batch.set(user.ref, {
-        [field]: admin.firestore.FieldValue.increment(-sendAmount),
-        [altField]: admin.firestore.FieldValue.increment(-sendAmount),
-        updated_at: new Date().toISOString()
-      }, { merge: true });
-
-      // Add to treasury
-      const treasuryRef = db.collection("settings").doc("admin_treasury");
-      const trField = curr === "USDT" ? "earned_usdt" : (curr === "USDC" ? "earned_usdc" : "earned_sats");
-      batch.set(treasuryRef, { [trField]: admin.firestore.FieldValue.increment(fee) }, { merge: true });
-
-      batch.set(db.collection("transactions").doc(txId), {
-        id: txId,
-        tx_id: txId,
-        type: "withdrawal",
-        user_id: user.id,
-        destination: dest,
-        amount: sendAmount,
-        gross_amount: sendAmount,
-        fee: fee,
-        net_sent: netPayout,
-        currency: curr,
-        status: "completed",
-        created_at: new Date().toISOString()
       });
 
-      await batch.commit();
+      const walletsSnap = await db.collection("wallets").get();
+      walletsSnap.forEach(d => {
+        const w = d.data();
+        if (userMap.has(d.id)) {
+          const exist = userMap.get(d.id);
+          exist.sats = Math.max(exist.sats, Number(w.balance ?? w.sats ?? w.amount ?? 0));
+          exist.usdt = Math.max(exist.usdt, Number(w.usdt_balance ?? w.usdt ?? 0));
+          exist.usdc = Math.max(exist.usdc, Number(w.usdc_balance ?? w.usdc ?? 0));
+          exist.banned = exist.banned || Boolean(w.banned);
+        } else {
+          userMap.set(d.id, {
+            user_id: d.id,
+            username: w.username || d.id,
+            telegram_id: w.telegram_id || "",
+            first_name: w.first_name || "",
+            banned: Boolean(w.banned),
+            sats: Number(w.balance ?? w.sats ?? w.amount ?? 0),
+            usdt: Number(w.usdt_balance ?? w.usdt ?? 0),
+            usdc: Number(w.usdc_balance ?? w.usdc ?? 0),
+            created_at: w.created_at || ""
+          });
+        }
+      });
 
-      await forwardToLogsChannel(`📤 <b>Withdrawal Dispatched</b>\n• User: @${user.id}\n• Sent: ${netPayout} ${curr}\n• Fee (2%): ${fee} ${curr}\n• TxID: <code>${txId}</code>`);
+      const usersList = Array.from(userMap.values());
 
       return res.status(200).json({
         success: true,
-        tx_id: txId,
-        sent_amount: netPayout,
-        fee: fee,
-        gross_deducted: sendAmount
+        users: usersList,
+        speed_key: speedKey,
+        logs_channel: logsChannel,
+        admins_list: adminsList,
+        treasury: treasuryData
       });
     }
 
-    // 5. HISTORY
-    if (action === "history" && req.method === "GET") {
-      const { user_id, telegram_id } = req.query;
-      const user = await findOrRegisterUser([user_id, telegram_id]);
+    // 2. BROADCAST TO ALL USERS
+    if (action === "broadcast" && req.method === "POST") {
+      const { text, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdmin(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized." });
+      }
+      if (!text || !text.trim()) {
+        return res.status(400).json({ success: false, error: "Message text is required." });
+      }
+      if (!BOT_TOKEN) return res.status(500).json({ success: false, error: "BOT_TOKEN not configured." });
 
-      const snap = await db.collection("transactions").where("user_id", "==", user.id).limit(20).get();
-      const list = [];
-      snap.forEach(d => list.push(d.data()));
-      list.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-      return res.status(200).json({ success: true, history: list });
+      const recipientIds = new Set();
+      const uSnap = await db.collection("users").get();
+      uSnap.forEach(doc => {
+        const d = doc.data();
+        if (!d.banned && d.telegram_id && /^\d+$/.test(String(d.telegram_id))) {
+          recipientIds.add(String(d.telegram_id));
+        }
+      });
+
+      const wSnap = await db.collection("wallets").get();
+      wSnap.forEach(doc => {
+        const d = doc.data();
+        if (!d.banned && d.telegram_id && /^\d+$/.test(String(d.telegram_id))) {
+          recipientIds.add(String(d.telegram_id));
+        }
+      });
+
+      let sent = 0;
+      let failed = 0;
+
+      for (const tId of recipientIds) {
+        try {
+          const resp = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: tId, text: text, parse_mode: "HTML" })
+          });
+          const bData = await resp.json();
+          if (bData.ok) sent++;
+          else failed++;
+        } catch(e) {
+          failed++;
+        }
+      }
+
+      return res.status(200).json({ success: true, sent, failed, total: sent + failed });
     }
 
-    return res.status(400).json({ success: false, error: "Invalid action." });
+    // 3. SAVE SPEED API KEY
+    if (action === "save-key" && req.method === "POST") {
+      const { api_key, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdmin(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized." });
+      }
+      if (!api_key) return res.status(400).json({ success: false, error: "API key is required." });
+
+      const clean = api_key.trim();
+      await db.collection("settings").doc("config").set({ speed_key: clean }, { merge: true });
+      await db.collection("settings").doc("speed").set({ api_key: clean }, { merge: true });
+      return res.status(200).json({ success: true });
+    }
+
+    // 4. SAVE AND LIVE-PING LOGS CHANNEL
+    if (action === "save-channel" && req.method === "POST") {
+      const { channel_id, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdmin(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized." });
+      }
+      if (!channel_id) return res.status(400).json({ success: false, error: "Channel ID required." });
+
+      const chId = formatChannelId(channel_id);
+
+      if (!BOT_TOKEN) return res.status(500).json({ success: false, error: "BOT_TOKEN not set on server." });
+
+      const pingRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chId,
+          text: `⚡ <b>Pheizu Logs Channel Connected Successfully!</b>\n\n` +
+                `• Connected by: @${username || telegram_id}\n` +
+                `• Channel ID: <code>${chId}</code>\n` +
+                `• Time: ${new Date().toUTCString()}`,
+          parse_mode: "HTML"
+        })
+      });
+
+      const pingData = await pingRes.json();
+      if (!pingData.ok) {
+        return res.status(400).json({
+          success: false,
+          error: `Telegram Error: ${pingData.description}. Ensure the bot is an Administrator with "Post Messages" permission in ${chId}.`
+        });
+      }
+
+      await db.collection("settings").doc("config").set({ logs_channel: chId }, { merge: true });
+      await db.collection("settings").doc("logs_channel").set({ channel_id: chId }, { merge: true });
+      return res.status(200).json({ success: true, channel_id: chId });
+    }
+
+    // 5. MANAGE USER (BAN, UNBAN, CLEAN RESET DELETE)
+    if (action === "manage-user" && req.method === "POST") {
+      const { target_user, task, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdmin(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized." });
+      }
+      const target = String(target_user).toLowerCase().replace(/^@/, "");
+
+      if (task === "ban") {
+        await db.collection("users").doc(target).set({ banned: true }, { merge: true });
+        await db.collection("wallets").doc(target).set({ banned: true }, { merge: true });
+      } else if (task === "unban") {
+        await db.collection("users").doc(target).set({ banned: false }, { merge: true });
+        await db.collection("wallets").doc(target).set({ banned: false }, { merge: true });
+      } else if (task === "delete") {
+        await db.collection("users").doc(target).delete();
+        await db.collection("wallets").doc(target).delete();
+
+        const tgMatch = target.match(/\d+/);
+        if (tgMatch) {
+          await db.collection("users").doc(`user${tgMatch[0]}`).delete().catch(() => {});
+          await db.collection("wallets").doc(`user${tgMatch[0]}`).delete().catch(() => {});
+        }
+      }
+
+      return res.status(200).json({ success: true });
+    }
+
+    // 6. ADJUST BALANCE
+    if (action === "adjust-balance" && req.method === "POST") {
+      const { target_user, asset, amount, type, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdmin(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized." });
+      }
+      const numAmt = Number(amount);
+      if (!numAmt || numAmt <= 0) return res.status(400).json({ success: false, error: "Invalid amount." });
+
+      const delta = type === "deduct" ? -numAmt : numAmt;
+      const target = String(target_user).toLowerCase().replace(/^@/, "");
+
+      const field = asset === "USDT" ? "usdt_balance" : (asset === "USDC" ? "usdc_balance" : "balance");
+      const altField = asset === "USDT" ? "usdt" : (asset === "USDC" ? "usdc" : "sats");
+
+      await db.collection("users").doc(target).set({
+        [field]: admin.firestore.FieldValue.increment(delta),
+        [altField]: admin.firestore.FieldValue.increment(delta)
+      }, { merge: true });
+
+      await db.collection("wallets").doc(target).set({
+        [field]: admin.firestore.FieldValue.increment(delta),
+        [altField]: admin.firestore.FieldValue.increment(delta)
+      }, { merge: true });
+
+      return res.status(200).json({ success: true, delta });
+    }
+
+    // 7. MANAGE CO-ADMINS
+    if (action === "manage-admin" && req.method === "POST") {
+      const { task, target_admin, telegram_id, username } = req.body;
+      if (!(await isAuthorizedAdmin(telegram_id, username))) {
+        return res.status(403).json({ success: false, error: "Unauthorized." });
+      }
+      const cleanTarget = String(target_admin).trim().toLowerCase().replace(/^@/, "");
+
+      if (task === "add") {
+        await db.collection("settings").doc("admins").set({
+          list: admin.firestore.FieldValue.arrayUnion(cleanTarget)
+        }, { merge: true });
+      } else if (task === "remove") {
+        await db.collection("settings").doc("admins").set({
+          list: admin.firestore.FieldValue.arrayRemove(cleanTarget)
+        }, { merge: true });
+      }
+
+      return res.status(200).json({ success: true });
+    }
+
+    return res.status(400).json({ success: false, error: "Invalid admin action." });
   } catch (err) {
-    console.error("Wallet Handler Error:", err);
+    console.error("Admin API Error:", err);
     return res.status(500).json({ success: false, error: err.message });
   }
 };
