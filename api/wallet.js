@@ -1,5 +1,6 @@
 const admin = require("firebase-admin");
 
+// 1. Firebase Initialization
 function getDb() {
   if (admin.apps.length) return admin.firestore();
   try {
@@ -34,11 +35,18 @@ const DOMAIN = "pheizu-wallet-bot.vercel.app";
 const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 const WITHDRAWAL_FEE_PERCENT = 0.02; // 2% Fee on Withdrawals
 
+// Helper: Sanitize API Key
 function sanitizeApiKey(raw) {
   if (!raw) return "";
-  return String(raw).trim().replace(/^["']|["']$/g, "").replace(/^Bearer\s+/i, "").trim();
+  return String(raw)
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .replace(/^Bearer\s+/i, "")
+    .replace(/^Basic\s+/i, "")
+    .trim();
 }
 
+// Helper: Format Telegram Channel ID
 function formatChannelId(raw) {
   if (!raw) return "";
   let clean = String(raw).trim();
@@ -47,6 +55,7 @@ function formatChannelId(raw) {
   return clean;
 }
 
+// Helper: Resolve Telegram ID
 async function resolveNumericTelegramId(userId, candidateTgId) {
   if (candidateTgId && /^\d{6,14}$/.test(String(candidateTgId).trim())) return String(candidateTgId).trim();
   if (userId && /^\d{6,14}$/.test(String(userId).trim())) return String(userId).trim();
@@ -65,6 +74,7 @@ async function resolveNumericTelegramId(userId, candidateTgId) {
   return null;
 }
 
+// Helper: Send Telegram notification
 async function notifyTelegramUser(telegramId, message) {
   if (!BOT_TOKEN || !telegramId) return;
   try {
@@ -76,6 +86,7 @@ async function notifyTelegramUser(telegramId, message) {
   } catch (e) {}
 }
 
+// Helper: Forward receipt to logs channel
 async function forwardToLogsChannel(text) {
   if (!BOT_TOKEN || !db) return;
   try {
@@ -98,18 +109,28 @@ async function forwardToLogsChannel(text) {
   } catch (e) {}
 }
 
+// Helper: Retrieve Speed API key from settings or environment
 async function getSpeedApiKey() {
   if (db) {
     try {
       const cfgSnap = await db.collection("settings").doc("config").get();
-      if (cfgSnap.exists && cfgSnap.data().speed_key) return sanitizeApiKey(cfgSnap.data().speed_key);
+      if (cfgSnap.exists && cfgSnap.data().speed_key) {
+        return sanitizeApiKey(cfgSnap.data().speed_key);
+      }
       const spSnap = await db.collection("settings").doc("speed").get();
-      if (spSnap.exists && spSnap.data().api_key) return sanitizeApiKey(spSnap.data().api_key);
+      if (spSnap.exists && spSnap.data().api_key) {
+        return sanitizeApiKey(spSnap.data().api_key);
+      }
+      const spSnap2 = await db.collection("settings").doc("speed_key").get();
+      if (spSnap2.exists && spSnap2.data().api_key) {
+        return sanitizeApiKey(spSnap2.data().api_key);
+      }
     } catch (e) {}
   }
-  return sanitizeApiKey(process.env.SPEED_API_KEY || "");
+  return sanitizeApiKey(process.env.SPEED_API_KEY || process.env.SPEED_SECRET_KEY || "");
 }
 
+// Helper: Speed Request using Basic Auth
 async function speedRequest(path, method, body, apiKey) {
   const cleanKey = sanitizeApiKey(apiKey);
   const authHeader = `Basic ${Buffer.from(cleanKey + ":").toString("base64")}`;
@@ -129,8 +150,10 @@ async function speedRequest(path, method, body, apiKey) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// Helper: Universal Payment Target Extractor
 function extractPaymentTarget(obj) {
   if (!obj) return null;
+
   if (typeof obj === "string") {
     const str = obj.trim();
     if (str.toLowerCase().startsWith("lnbc") || str.toLowerCase().startsWith("lightning:lnbc")) return { type: "lightning", value: str };
@@ -139,25 +162,56 @@ function extractPaymentTarget(obj) {
     if (str.startsWith("0x") && str.length === 42) return { type: "ethereum", value: str };
     return null;
   }
+
   if (typeof obj !== "object") return null;
+
   if (obj.payment_request) return { type: "lightning", value: obj.payment_request };
   if (obj.invoice) return { type: "lightning", value: obj.invoice };
   if (obj.address) return { type: "address", value: obj.address };
   if (obj.uri) return { type: "uri", value: obj.uri };
 
+  if (obj.payment_method_options) {
+    if (obj.payment_method_options.lightning?.payment_request) {
+      return { type: "lightning", value: obj.payment_method_options.lightning.payment_request };
+    }
+    if (obj.payment_method_options.lightning?.invoice) {
+      return { type: "lightning", value: obj.payment_method_options.lightning.invoice };
+    }
+    if (obj.payment_method_options.on_chain?.address) {
+      return { type: "onchain", value: obj.payment_method_options.on_chain.address };
+    }
+    if (obj.payment_method_options.onchain?.address) {
+      return { type: "onchain", value: obj.payment_method_options.onchain.address };
+    }
+    for (const key of ["tron", "ton", "solana", "ethereum"]) {
+      if (obj.payment_method_options[key]?.address) {
+        return { type: key, value: obj.payment_method_options[key].address };
+      }
+    }
+  }
+
   if (Array.isArray(obj.payment_methods)) {
     for (const pm of obj.payment_methods) {
-      for (const key of ["lightning", "onchain", "tron", "solana", "ethereum", "ton"]) {
+      for (const key of ["lightning", "onchain", "on-chain", "tron", "solana", "ethereum", "ton"]) {
         if (pm[key]) {
           if (pm[key].address) return { type: key, value: pm[key].address };
           if (pm[key].payment_request) return { type: "lightning", value: pm[key].payment_request };
+          if (pm[key].invoice) return { type: "lightning", value: pm[key].invoice };
         }
       }
     }
   }
+
+  for (const key of Object.keys(obj)) {
+    const res = extractPaymentTarget(obj[key]);
+    if (res) return res;
+  }
+
+  if (obj.hosted_url || obj.url) return { type: "url", value: obj.hosted_url || obj.url };
   return null;
 }
 
+// Helper: Extract Paid Amount
 function extractPaidAmount(payment, invData) {
   if (!payment) return 0;
   const candidates = [
@@ -166,6 +220,7 @@ function extractPaidAmount(payment, invData) {
     payment.total_amount_received,
     payment.paid_amount,
     payment.amount_paid,
+    payment.amount,
     invData?.amount > 0 ? invData.amount : null
   ];
   for (const val of candidates) {
@@ -182,6 +237,7 @@ function extractPaidAmount(payment, invData) {
   return 0;
 }
 
+// Helper: User Finder & Auto-Registration
 async function findOrRegisterUser(identifiers, meta = {}) {
   if (!db) return null;
   const rawList = [];
@@ -222,6 +278,7 @@ async function findOrRegisterUser(identifiers, meta = {}) {
   return { ref: userRef, id: primary, data: initialData, balance: 0 };
 }
 
+// Main Request Handler
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -233,7 +290,7 @@ module.exports = async function handler(req, res) {
   const { action } = req.query;
 
   try {
-    // 1. BALANCE
+    // 1. BALANCE (Auto-registers user fresh upon entering)
     if (action === "balance" && req.method === "GET") {
       const { user_id, username, telegram_id, first_name } = req.query;
       const candidates = [user_id, username, telegram_id, telegram_id ? `user${telegram_id}` : null];
@@ -261,11 +318,13 @@ module.exports = async function handler(req, res) {
       if (user.data.banned) return res.status(403).json({ success: false, error: "Account suspended." });
 
       const apiKey = await getSpeedApiKey();
-      if (!apiKey) return res.status(500).json({ success: false, error: "Speed API key not configured." });
+      if (!apiKey) return res.status(500).json({ success: false, error: "Speed API key not configured. Set it in Admin Console." });
 
       const targetCurr = (target_currency || "SATS").toUpperCase();
       let payMethod = (payment_method || network || "lightning").toLowerCase();
-      if (payMethod === "on-chain" || payMethod === "bitcoin") payMethod = "onchain";
+      if (payMethod === "on-chain" || payMethod === "bitcoin" || payMethod === "onchain") {
+        payMethod = "onchain";
+      }
 
       const baseCurr = targetCurr === "SATS" ? "SATS" : "USD";
       const requestedAmount = Number(amount);
@@ -274,36 +333,70 @@ module.exports = async function handler(req, res) {
       let paymentData = null;
       let ok = false;
 
+      // Strategy 1: Open Amount Lightning -> Create Payrequest
       if (isOpenAmount && payMethod === "lightning") {
         const prRes = await speedRequest("payrequests", "POST", {
           currency: baseCurr,
           target_currency: targetCurr,
           description: `Pheizu deposit for ${user.id}`
         }, apiKey);
-        if (prRes.ok) { ok = true; paymentData = prRes.data; }
+
+        if (prRes.ok && prRes.data) {
+          ok = true;
+          paymentData = prRes.data;
+        }
       }
 
+      // Strategy 2: Open Amount On-chain -> Create Payment Address
+      if (isOpenAmount && payMethod === "onchain" && !ok) {
+        const addrRes = await speedRequest("payment-addresses", "POST", {
+          currency: baseCurr,
+          target_currency: targetCurr,
+          payment_method: "onchain",
+          metadata: { user_id: user.id, telegram_id: String(telegram_id || "") }
+        }, apiKey);
+
+        if (addrRes.ok && addrRes.data) {
+          ok = true;
+          paymentData = addrRes.data;
+        }
+      }
+
+      // Strategy 3: Specific Amount or Payments Fallback
       if (!ok) {
-        const res1 = await speedRequest("payments", "POST", {
+        const speedBody = {
           currency: baseCurr,
           target_currency: targetCurr,
           payment_methods: [payMethod],
           amount: isOpenAmount ? 0 : requestedAmount,
-          metadata: { user_id: user.id, telegram_id: String(telegram_id || "") }
-        }, apiKey);
-        ok = res1.ok;
-        paymentData = res1.data;
+          metadata: {
+            user_id: user.id,
+            telegram_id: String(telegram_id || "")
+          }
+        };
+
+        const res1 = await speedRequest("payments", "POST", speedBody, apiKey);
+        if (res1.ok && res1.data) {
+          ok = true;
+          paymentData = res1.data;
+        } else {
+          paymentData = res1.data;
+        }
       }
 
       const target = extractPaymentTarget(paymentData);
       if (!target || !target.value) {
-        return res.status(500).json({ success: false, error: "Failed to generate payment address from Speed." });
+        const errMsg = paymentData?.error?.message || (typeof paymentData?.error === "string" ? paymentData.error : "Failed to generate payment address from Speed.");
+        return res.status(500).json({ success: false, error: errMsg });
       }
 
-      const txId = paymentData.id || `TX_${Date.now()}`;
+      const speedId = paymentData?.id || paymentData?.payrequest_id || `TX_${Date.now()}`;
+      const txId = speedId;
+
       await db.collection("invoices").doc(txId).set({
         id: txId,
         tx_id: txId,
+        speed_payment_id: speedId,
         invoice: target.value,
         payment_type: target.type,
         user_id: user.id,
@@ -353,10 +446,23 @@ module.exports = async function handler(req, res) {
       const apiKey = await getSpeedApiKey();
       let payment = null;
 
-      try {
-        const directPay = await speedRequest(`payments/${payment_id}`, "GET", null, apiKey);
-        if (directPay.ok && directPay.data) payment = directPay.data;
-      } catch (e) {}
+      if (payment_id.startsWith("pr_")) {
+        try {
+          const prPayRes = await speedRequest(`payrequests/${payment_id}/payments`, "GET", null, apiKey);
+          if (prPayRes.ok && prPayRes.data) {
+            const list = prPayRes.data.data || prPayRes.data.items || [];
+            const paidItems = list.filter(p => ["paid", "succeeded", "completed", "confirmed"].includes(String(p.status).toLowerCase()));
+            if (paidItems.length > 0) payment = paidItems[0];
+          }
+        } catch (e) {}
+      }
+
+      if (!payment) {
+        try {
+          const directPay = await speedRequest(`payments/${payment_id}`, "GET", null, apiKey);
+          if (directPay.ok && directPay.data) payment = directPay.data;
+        } catch (e) {}
+      }
 
       const rawStatus = String(payment?.status || "").toLowerCase();
       const isPaid = ["paid", "succeeded", "completed", "confirmed"].includes(rawStatus);
@@ -381,6 +487,7 @@ module.exports = async function handler(req, res) {
           type: "deposit",
           user_id: user.id,
           amount: finalSats,
+          gross_amount: finalSats,
           fee: 0,
           currency: curr,
           status: "completed",
