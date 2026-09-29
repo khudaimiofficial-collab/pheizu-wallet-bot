@@ -1,24 +1,19 @@
 const { Telegraf, Markup } = require("telegraf");
 const admin = require("firebase-admin");
 
-// ----------------------------------------------------
-// 1. FIREBASE INITIALIZATION
-// ----------------------------------------------------
-if (!admin.apps.length) {
+// 1. Firebase Initialization
+function getDb() {
+  if (admin.apps.length) return admin.firestore();
   try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       let sa = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
-      if (!sa.startsWith("{")) {
-        sa = Buffer.from(sa, "base64").toString("utf8");
-      }
+      if (!sa.startsWith("{")) sa = Buffer.from(sa, "base64").toString("utf8");
       const parsed = typeof sa === "string" ? JSON.parse(sa) : sa;
-      if (parsed.private_key) {
-        parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
-      }
-      admin.initializeApp({
-        credential: admin.credential.cert(parsed)
-      });
-    } else if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+      if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+      admin.initializeApp({ credential: admin.credential.cert(parsed) });
+      return admin.firestore();
+    }
+    if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
       admin.initializeApp({
         credential: admin.credential.cert({
           projectId: process.env.FIREBASE_PROJECT_ID,
@@ -26,433 +21,260 @@ if (!admin.apps.length) {
           privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
         })
       });
-    } else {
-      admin.initializeApp();
+      return admin.firestore();
     }
-  } catch (e) {
-    console.error("Firebase init error in bot:", e.message);
+    admin.initializeApp();
+    return admin.firestore();
+  } catch (err) {
+    console.error("Firebase Init Error:", err);
+    return null;
   }
 }
 
-const db = admin.apps.length ? admin.firestore() : null;
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const db = getDb();
+const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
+const WEBAPP_URL = process.env.WEBAPP_URL || "https://pheizu-wallet-bot.vercel.app";
+const REFERRAL_REWARD_SATS = 10; // Satoshis credited per valid referral
 
-const DOMAIN = "pheizu-wallet-bot.vercel.app";
-const APP_URL = process.env.WEBAPP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `https://${DOMAIN}`);
-const MASTER_ADMIN_ID = "8960497898";
-const BOT_USERNAME = process.env.BOT_USERNAME || "pheizu_bot";
+const bot = new Telegraf(BOT_TOKEN);
 
-// ----------------------------------------------------
-// NATIVE TELEGRAM MENU & COMMAND CONFIGURATION
-// ----------------------------------------------------
+// Helper: Format Channel ID
+function formatChannelId(raw) {
+  if (!raw) return "";
+  let clean = String(raw).trim();
+  if (/^\d{8,16}$/.test(clean)) return `-100${clean}`;
+  if (/^-\d{8,16}$/.test(clean) && !clean.startsWith("-100")) return `-100${clean.replace(/^-/, "")}`;
+  return clean;
+}
 
-// 1. By default, ensure the global menu button is DEFAULT (no Open Wallet button for strangers)
-bot.telegram.callApi("setChatMenuButton", {
-  menu_button: { type: "default" }
-}).catch(() => {});
-
-// 2. Clear all slash commands from the "/" autocomplete menu
-bot.telegram.deleteMyCommands().catch(() => {});
-
-// Helper: Set or Remove the Telegram Chat Menu Button per-user
-async function setMenuButtonForUser(chatId, isVerified, walletUrl = "") {
+// Helper: Forward Log Messages
+async function forwardToLogsChannel(text) {
+  if (!BOT_TOKEN || !db) return;
   try {
-    if (!isVerified) {
-      // Hide the Open Wallet button from the bottom-left bar
-      await bot.telegram.callApi("setChatMenuButton", {
-        chat_id: chatId,
-        menu_button: { type: "default" }
-      });
-    } else {
-      // Show the Open Wallet button ONLY after verification
-      await bot.telegram.callApi("setChatMenuButton", {
-        chat_id: chatId,
-        menu_button: {
-          type: "web_app",
-          text: "⚡ Wallet",
-          web_app: { url: walletUrl }
-        }
-      });
+    let channelId = null;
+    const cfgSnap = await db.collection("settings").doc("config").get();
+    if (cfgSnap.exists && cfgSnap.data().logs_channel) channelId = cfgSnap.data().logs_channel;
+    if (!channelId) {
+      const chSnap = await db.collection("settings").doc("logs_channel").get();
+      if (chSnap.exists && chSnap.data().channel_id) channelId = chSnap.data().channel_id;
     }
-  } catch (e) {
-    console.warn("Could not set chat menu button:", e.message);
-  }
-}
+    if (!channelId) channelId = process.env.LOG_CHANNEL_ID;
+    if (!channelId) return;
 
-// ----------------------------------------------------
-// HELPERS: ADMIN, BALANCES & CHANNEL VERIFICATION
-// ----------------------------------------------------
-
-async function isAuthorizedAdmin(ctx) {
-  if (!ctx || !ctx.from) return false;
-  const numericId = String(ctx.from.id).trim();
-  const username = (ctx.from.username || "").toLowerCase().replace(/^@/, "").trim();
-
-  if (numericId === MASTER_ADMIN_ID || username === "pheizu") return true;
-
-  const rawAdmins = (process.env.ADMIN_IDS || process.env.ADMIN_ID || "");
-  const envAdmins = rawAdmins
-    .split(",")
-    .map(id => id.trim().toLowerCase().replace(/^@/, ""))
-    .filter(Boolean);
-
-  if (envAdmins.includes(numericId) || (username && envAdmins.includes(username))) {
-    return true;
-  }
-
-  if (db) {
-    try {
-      const doc = await db.collection("settings").doc("admins").get();
-      if (doc.exists) {
-        const list = (doc.data().list || []).map(a => String(a).toLowerCase().replace(/^@/, ""));
-        if (list.includes(numericId) || (username && list.includes(username))) {
-          return true;
-        }
-      }
-    } catch (e) {}
-  }
-
-  return false;
-}
-
-async function getUserBalances(userId, telegramId) {
-  if (!db) return { sats: 0, usdt: 0, usdc: 0 };
-  try {
-    const candidates = [userId, telegramId, telegramId ? `user${telegramId}` : null].filter(Boolean);
-    for (const col of ["users", "wallets"]) {
-      for (const id of candidates) {
-        const doc = await db.collection(col).doc(String(id).toLowerCase()).get();
-        if (doc.exists) {
-          const d = doc.data();
-          const sats = Number(d.balance ?? d.sats ?? d.amount ?? 0);
-          const usdt = Number(d.usdt_balance ?? 0);
-          const usdc = Number(d.usdc_balance ?? 0);
-          return { sats, usdt, usdc };
-        }
-      }
-    }
-  } catch (e) {}
-  return { sats: 0, usdt: 0, usdc: 0 };
-}
-
-async function getRequiredChannelId() {
-  if (db) {
-    try {
-      const snap = await db.collection("settings").doc("logs_channel").get();
-      if (snap.exists && snap.data().channel_id) {
-        return String(snap.data().channel_id).trim();
-      }
-    } catch (e) {}
-  }
-  return (process.env.LOG_CHANNEL_ID || process.env.REQUIRED_CHANNEL || process.env.CHANNEL_ID || "").trim();
-}
-
-async function getChannelInviteLink(channelId) {
-  if (!channelId) return "https://t.me";
-  try {
-    const chat = await bot.telegram.getChat(channelId);
-    if (chat.username) return `https://t.me/${chat.username}`;
-    if (chat.invite_link) return chat.invite_link;
-    const link = await bot.telegram.exportChatInviteLink(channelId);
-    return link;
-  } catch (e) {
-    if (String(channelId).startsWith("@")) {
-      return `https://t.me/${String(channelId).replace(/^@/, "")}`;
-    }
-    return process.env.CHANNEL_LINK || "https://t.me";
-  }
-}
-
-async function checkUserMembership(userId, channelId) {
-  if (!channelId) return true;
-  try {
-    const member = await bot.telegram.getChatMember(channelId, userId);
-    return ["creator", "administrator", "member", "restricted"].includes(member.status);
-  } catch (e) {
-    if (e.message.includes("user not found") || e.message.includes("PARTICIPANT_ID_INVALID")) {
-      return false;
-    }
-    return true;
-  }
-}
-
-async function saveUserRecord(ctx) {
-  if (!db || !ctx.from) return;
-  const user = ctx.from;
-  const userId = String(user.username || user.id).toLowerCase();
-  try {
-    await db.collection("users").doc(userId).set({
-      user_id: userId,
-      telegram_id: String(user.id),
-      username: user.username || null,
-      first_name: user.first_name || "",
-      last_active: new Date().toISOString()
-    }, { merge: true });
+    channelId = formatChannelId(channelId);
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: channelId, text: text, parse_mode: "HTML" })
+    });
   } catch (e) {}
 }
 
-// ----------------------------------------------------
-// UI SCREENS: CHANNEL PROMPT, MAIN MENU & ACCOUNT DETAILS
-// ----------------------------------------------------
-
-// 1. Channel Join Prompt (If Unverified)
-async function sendJoinPrompt(ctx, channelLink) {
-  const userId = ctx.from.id;
-  
-  // 🔥 Ensure Open Wallet is REMOVED from the chat menu bar
-  await setMenuButtonForUser(userId, false);
-
-  const text = [
-    `🔒 <b>Channel Verification Required</b>\n`,
-    `To access <b>Pheizu Lightning Wallet</b>, you must first join our official updates and transaction receipt channel.\n`,
-    `1️⃣ Click <b>📢 Join Channel</b> below.`,
-    `2️⃣ Return here and click <b>✅ Verify & Start</b>.`
-  ].join("\n");
-
-  const kb = Markup.inlineKeyboard([
-    [Markup.button.url("📢 Join Channel", channelLink)],
-    [Markup.button.callback("✅ Verify & Start", "verify_membership")]
-  ]);
-
-  if (ctx.callbackQuery) {
-    await ctx.editMessageText(text, { parse_mode: "HTML", ...kb }).catch(() => {});
-  } else {
-    await ctx.replyWithHTML(text, kb);
-  }
+// Helper: Format User Name & Link
+function formatUserLink(user) {
+  const name = `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.username || "User";
+  if (user.username) return `@${user.username}`;
+  return `<a href="tg://user?id=${user.id}">${name}</a> [<code>${user.id}</code>]`;
 }
 
-// 2. Main Menu: Wallet, Account, Share & Admin (If Admin)
-async function sendMainMenu(ctx) {
-  await saveUserRecord(ctx);
-
-  const user = ctx.from;
-  const tgId = String(user.id);
-  const username = (user.username || `user${tgId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
-  const isAdm = await isAuthorizedAdmin(ctx);
-
-  const walletUrl = `${APP_URL}/?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
-  const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
-
-  // 🔥 User is verified: Enable the Open Wallet menu button in bottom-left
-  await setMenuButtonForUser(tgId, true, walletUrl);
-
-  const shareText = encodeURIComponent("⚡ Pay & receive Bitcoin and Stablecoins instantly with zero fees on Pheizu Lightning Wallet!");
-  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(`https://t.me/${BOT_USERNAME}?start=ref_${username}`)}&text=${shareText}`;
-
-  const buttons = [
-    [Markup.button.webApp("⚡ Open Pheizu Wallet", walletUrl)],
-    [
-      Markup.button.callback("👤 Account Details", "menu_account_details"),
-      Markup.button.url("🔗 Invite Friends", shareUrl)
-    ]
-  ];
-
-  if (isAdm) {
-    buttons.push([Markup.button.webApp("👑 Open Admin Console", adminUrl)]);
-  }
-
-  const welcomeText = [
-    `⚡ <b>Pheizu Lightning Wallet</b>\n`,
-    `Your high-speed non-custodial crypto wallet built directly into Telegram.\n`,
-    `• <b>Assets:</b> Bitcoin (Lightning & On-Chain), USDT (TON, TRC-20, Solana, ERC-20), USDC`,
-    `• <b>Lightning Address:</b> <code>${username}@${DOMAIN}</code>\n`,
-    isAdm ? `👑 <b>Administrator Mode:</b> Active\n\n` : ``,
-    `Choose an option below to get started:`
-  ].join("\n");
-
-  const kb = Markup.inlineKeyboard(buttons);
-
-  if (ctx.callbackQuery) {
-    try {
-      await ctx.editMessageText(welcomeText, { parse_mode: "HTML", ...kb });
-    } catch (e) {
-      await ctx.deleteMessage().catch(() => {});
-      await ctx.replyWithHTML(welcomeText, kb);
-    }
-  } else {
-    await ctx.replyWithHTML(welcomeText, kb);
-  }
-}
-
-// 3. Account Details Screen
-async function sendAccountDetails(ctx) {
-  const user = ctx.from;
-  const tgId = String(user.id);
-  const username = (user.username || `user${tgId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
-  const isAdm = await isAuthorizedAdmin(ctx);
-
-  const bal = await getUserBalances(username, tgId);
-  const btcVal = (bal.sats / 100000000).toFixed(8);
-  const myLnAddress = `${username}@${DOMAIN}`;
-
-  const walletUrl = `${APP_URL}/?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
-  const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
-
-  const text = [
-    `👤 <b>Your Account Details</b>\n`,
-    `• <b>Username:</b> @${username}`,
-    `• <b>Telegram ID:</b> <code>${tgId}</code>`,
-    `• <b>Lightning Address:</b>\n<code>${myLnAddress}</code>\n`,
-    `💰 <b>Available Balances:</b>`,
-    `• ₿ <b>Bitcoin:</b> <code>${btcVal} BTC</code> (${bal.sats.toLocaleString()} SATS)`,
-    `• 💵 <b>USDT:</b> <code>$${bal.usdt.toFixed(2)}</code>`,
-    `• 💲 <b>USDC:</b> <code>$${bal.usdc.toFixed(2)}</code>\n`,
-    `⚡ <b>Settlement:</b> Pheizu Lightning Network Node`,
-    isAdm ? `👑 <b>Role:</b> Administrator` : `👤 <b>Role:</b> Standard User`
-  ].join("\n");
-
-  const buttons = [
-    [Markup.button.webApp("⚡ Launch Full Wallet", walletUrl)]
-  ];
-
-  if (isAdm) {
-    buttons.push([Markup.button.webApp("👑 Open Admin Console", adminUrl)]);
-  }
-
-  buttons.push([Markup.button.callback("🔙 Back to Main Menu", "menu_back_main")]);
-
-  const kb = Markup.inlineKeyboard(buttons);
-
-  try {
-    await ctx.editMessageText(text, { parse_mode: "HTML", ...kb });
-  } catch (e) {
-    await ctx.replyWithHTML(text, kb);
-  }
-}
-
-// ----------------------------------------------------
-// BOT CONTROLLER & CALLBACKS
-// ----------------------------------------------------
-
-// /start command
+// ==========================================
+// 1. /START COMMAND (WITH REFERRAL HANDLING)
+// ==========================================
 bot.start(async (ctx) => {
-  const userId = ctx.from.id;
-  const channelId = await getRequiredChannelId();
+  try {
+    const from = ctx.from;
+    const userId = String(from.id);
+    const username = (from.username || `user${userId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
+    const firstName = from.first_name || "";
+    const lastName = from.last_name || "";
 
-  if (channelId) {
-    const isMember = await checkUserMembership(userId, channelId);
-    if (!isMember) {
-      const inviteLink = await getChannelInviteLink(channelId);
-      return sendJoinPrompt(ctx, inviteLink);
+    // Extract start payload (e.g. /start ref_123456789 or /start 123456789)
+    const rawPayload = ctx.message?.text?.split(" ")[1] || "";
+    let referrerId = "";
+    if (rawPayload.startsWith("ref_")) {
+      referrerId = rawPayload.replace(/^ref_/, "").trim();
+    } else if (/^\d+$/.test(rawPayload)) {
+      referrerId = rawPayload.trim();
     }
-  }
 
-  return sendMainMenu(ctx);
+    if (!db) {
+      return ctx.reply("⚡ Welcome to Pheizu Lightning Wallet!", Markup.inlineKeyboard([
+        [Markup.button.webApp("⚡ Open Wallet", `${WEBAPP_URL}/?telegram_id=${userId}&username=${username}`)]
+      ]));
+    }
+
+    const userRef = db.collection("users").doc(userId);
+    const userDoc = await userRef.get();
+    let isNewUser = !userDoc.exists;
+
+    // Process Referral if new user and referrer is valid
+    if (isNewUser && referrerId && referrerId !== userId) {
+      try {
+        const referrerRef = db.collection("users").doc(referrerId);
+        const referrerDoc = await referrerRef.get();
+
+        if (referrerDoc.exists && !referrerDoc.data().banned) {
+          const batch = db.batch();
+
+          // 1. Reward the Referrer
+          batch.set(referrerRef, {
+            balance: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
+            sats: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
+            referral_count: admin.firestore.FieldValue.increment(1),
+            referral_earnings: admin.firestore.FieldValue.increment(REFERRAL_REWARD_SATS),
+            updated_at: new Date().toISOString()
+          }, { merge: true });
+
+          // 2. Record Referral Log
+          const refLogRef = db.collection("referrals").doc(`${referrerId}_${userId}`);
+          batch.set(refLogRef, {
+            referrer_id: referrerId,
+            referred_user_id: userId,
+            referred_username: username,
+            reward_sats: REFERRAL_REWARD_SATS,
+            created_at: new Date().toISOString()
+          });
+
+          await batch.commit();
+
+          // Notify Referrer via Telegram
+          await ctx.telegram.sendMessage(
+            referrerId,
+            `🎉 <b>New Referral Joined!</b>\n\n` +
+            `👤 User ${formatUserLink(from)} joined using your link.\n` +
+            `💰 <b>+${REFERRAL_REWARD_SATS} SATS</b> credited to your balance!`,
+            { parse_mode: "HTML" }
+          ).catch(() => {});
+
+          // Send to Channel Logs
+          await forwardToLogsChannel(
+            `👥 <b>New Referral Registered</b>\n\n` +
+            `• Referrer: <code>${referrerId}</code>\n` +
+            `• New User: ${formatUserLink(from)}\n` +
+            `• Reward: +${REFERRAL_REWARD_SATS} SATS`
+          );
+        }
+      } catch (err) {
+        console.error("Referral process error:", err);
+      }
+    }
+
+    // Save/Update User Profile
+    await userRef.set({
+      user_id: userId,
+      telegram_id: userId,
+      username: username,
+      first_name: firstName,
+      last_name: lastName,
+      referred_by: (isNewUser && referrerId && referrerId !== userId) ? referrerId : (userDoc.data()?.referred_by || null),
+      updated_at: new Date().toISOString(),
+      ...(isNewUser ? {
+        balance: 0,
+        sats: 0,
+        usdt_balance: 0,
+        usdc_balance: 0,
+        banned: false,
+        created_at: new Date().toISOString()
+      } : {})
+    }, { merge: true });
+
+    // Open WebApp URL
+    const appUrl = `${WEBAPP_URL}/?telegram_id=${userId}&username=${encodeURIComponent(username)}&first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName)}`;
+
+    const welcomeText = 
+      `⚡ <b>Welcome to Pheizu Lightning Wallet!</b>\n\n` +
+      `Instant Bitcoin Lightning & Multi-Chain Stablecoin Wallet built for Telegram.\n\n` +
+      `• ⚡ Zero-Fee Lightning Deposits\n` +
+      `• 💎 Instant USDT & USDC Settlements\n` +
+      `• 🔗 Your Lightning Address: <code>${username}@${DOMAIN}</code>\n\n` +
+      `Tap below to open your wallet:`;
+
+    return ctx.replyWithHTML(welcomeText, Markup.inlineKeyboard([
+      [Markup.button.webApp("⚡ Launch Wallet", appUrl)],
+      [Markup.button.callback("🎁 Invite Friends & Earn", "cmd_referral")]
+    ]));
+  } catch (e) {
+    console.error("Bot Start Error:", e);
+    return ctx.reply("⚡ Welcome to Pheizu Wallet! Please tap below to open:", Markup.inlineKeyboard([
+      [Markup.button.webApp("⚡ Open Wallet", `${WEBAPP_URL}/?telegram_id=${ctx.from.id}`)]
+    ]));
+  }
 });
 
-// /admin command
-bot.command("admin", async (ctx) => {
-  const isAdm = await isAuthorizedAdmin(ctx);
-  if (!isAdm) {
-    return ctx.reply("⛔ Access denied: You are not an authorized administrator.");
+// ==========================================
+// 2. REFERRAL SYSTEM & INVITE LINK COMMAND
+// ==========================================
+async function sendReferralDashboard(ctx) {
+  try {
+    const from = ctx.from;
+    const userId = String(from.id);
+    const botInfo = await ctx.telegram.getMe();
+    const botUsername = botInfo.username;
+
+    // Correct Working Telegram Referral Link
+    const referralLink = `https://t.me/${botUsername}?start=ref_${userId}`;
+
+    let refCount = 0;
+    let refEarnings = 0;
+
+    if (db) {
+      const uDoc = await db.collection("users").doc(userId).get();
+      if (uDoc.exists) {
+        refCount = Number(uDoc.data().referral_count || 0);
+        refEarnings = Number(uDoc.data().referral_earnings || 0);
+      }
+    }
+
+    const refMessage =
+      `🎁 <b>Invite Friends & Earn Free SATS!</b>\n\n` +
+      `Share your personal referral link with friends. For every friend who joins, you receive <b>${REFERRAL_REWARD_SATS} Satoshis</b> instantly.\n\n` +
+      `📊 <b>Your Referral Stats:</b>\n` +
+      `• Total Friends Invited: <b>${refCount}</b>\n` +
+      `• Total SATS Earned: <b>${refEarnings.toLocaleString()} SATS</b>\n\n` +
+      `🔗 <b>Your Exclusive Invite Link:</b>\n` +
+      `<code>${referralLink}</code>`;
+
+    const shareText = encodeURIComponent(`⚡ Join Pheizu Lightning Wallet on Telegram and get your personal Lightning Address!`);
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${shareText}`;
+
+    return ctx.replyWithHTML(refMessage, Markup.inlineKeyboard([
+      [Markup.button.url("🚀 Share Link with Friends", shareUrl)],
+      [Markup.button.webApp("⚡ Open Wallet", `${WEBAPP_URL}/?telegram_id=${userId}`)]
+    ]));
+  } catch (err) {
+    console.error("Referral Command Error:", err);
+    return ctx.reply("Failed to generate referral link. Please try again.");
   }
+}
 
-  const user = ctx.from;
-  const tgId = String(user.id);
-  const username = (user.username || `user${tgId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
-  const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
+// Commands & Action Handlers
+bot.command("invite", sendReferralDashboard);
+bot.command("referral", sendReferralDashboard);
+bot.command("ref", sendReferralDashboard);
+bot.action("cmd_referral", sendReferralDashboard);
 
-  await ctx.replyWithHTML(
-    `👑 <b>Pheizu Administrator Console</b>\n\nTap below to launch the admin management dashboard:`,
-    Markup.inlineKeyboard([
-      [Markup.button.webApp("👑 Open Admin Console", adminUrl)]
-    ])
+// Help Command
+bot.command("help", (ctx) => {
+  return ctx.replyWithHTML(
+    `📖 <b>Pheizu Wallet Commands:</b>\n\n` +
+    `/start - Open Wallet & Menu\n` +
+    `/invite - Get your Referral Link & Stats\n` +
+    `/help - View this help guide`
   );
 });
 
-// /id command
-bot.command("id", async (ctx) => {
-  const isAdm = await isAuthorizedAdmin(ctx);
-  const uid = ctx.from.id;
-  const uname = ctx.from.username ? `@${ctx.from.username}` : "none";
-
-  await ctx.replyWithHTML(
-    `🆔 <b>Your Account Info:</b>\n\n` +
-    `• <b>Numeric ID:</b> <code>${uid}</code>\n` +
-    `• <b>Username:</b> ${uname}\n` +
-    `• <b>Admin Status:</b> ${isAdm ? "✅ <b>Authorized Admin</b>" : "❌ Regular User"}`
-  );
-});
-
-// "✅ Verify & Start" Button Callback
-bot.action("verify_membership", async (ctx) => {
-  const userId = ctx.from.id;
-  const channelId = await getRequiredChannelId();
-
-  if (!channelId) {
-    await ctx.answerCbQuery("✅ Verified! Welcome.");
-    return sendMainMenu(ctx);
-  }
-
-  const isMember = await checkUserMembership(userId, channelId);
-
-  if (!isMember) {
-    await setMenuButtonForUser(userId, false);
-    return ctx.answerCbQuery(
-      "❌ You have not joined the channel yet!\n\nPlease join the channel first, then tap Verify.",
-      { show_alert: true }
-    );
-  }
-
-  await ctx.answerCbQuery("✅ Verification successful! Welcome.");
-  return sendMainMenu(ctx);
-});
-
-// "👤 Account Details" Callback
-bot.action("menu_account_details", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  return sendAccountDetails(ctx);
-});
-
-// "🔙 Back to Main Menu" Callback
-bot.action("menu_back_main", async (ctx) => {
-  await ctx.answerCbQuery().catch(() => {});
-  return sendMainMenu(ctx);
-});
-
-// Fallback message listener
-bot.on("message", async (ctx) => {
-  const text = (ctx.message?.text || "").toLowerCase().trim();
-
-  if (text === "/admin" || text === "admin") {
-    const isAdm = await isAuthorizedAdmin(ctx);
-    if (isAdm) {
-      const tgId = String(ctx.from.id);
-      const username = (ctx.from.username || `user${tgId}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
-      const adminUrl = `${APP_URL}/admin.html?telegram_id=${tgId}&username=${encodeURIComponent(username)}`;
-      return ctx.replyWithHTML(
-        `👑 <b>Pheizu Administrator Console</b>`,
-        Markup.inlineKeyboard([[Markup.button.webApp("👑 Open Admin Console", adminUrl)]])
-      );
-    }
-  }
-
-  const userId = ctx.from?.id;
-  if (!userId) return;
-
-  const channelId = await getRequiredChannelId();
-  if (channelId) {
-    const isMember = await checkUserMembership(userId, channelId);
-    if (!isMember) {
-      const inviteLink = await getChannelInviteLink(channelId);
-      return sendJoinPrompt(ctx, inviteLink);
-    }
-  }
-
-  return sendMainMenu(ctx);
-});
-
-// ----------------------------------------------------
-// VERCEL SERVERLESS EXPORT
-// ----------------------------------------------------
+// ==========================================
+// VERCEL SERVERLESS HANDLER
+// ==========================================
 module.exports = async (req, res) => {
   try {
     if (req.method === "POST") {
       await bot.handleUpdate(req.body);
+      return res.status(200).json({ ok: true });
     }
-    res.status(200).send("OK");
+    return res.status(200).send("Pheizu Telegram Bot Webhook Active.");
   } catch (err) {
-    console.error("Bot Handler Error:", err);
-    res.status(500).send("Internal Server Error");
+    console.error("Webhook processing error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 };
