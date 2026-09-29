@@ -625,7 +625,7 @@
   localStorage.setItem("saved_user", username);
 
   // ==========================================
-  // DYNAMIC BOT USERNAME DETECTION (IDENTICAL TO BOT.JS)
+  // DYNAMIC BOT USERNAME DETECTION & FORMATTER
   // ==========================================
   let detectedBotUsername = tgInfo?.bot_username || 
                              new URLSearchParams(window.location.search).get("bot_username") || 
